@@ -34,7 +34,11 @@ class SessionSpec:
     session_id: str | None = None
     name: str | None = None
     env: dict[str, str] = field(default_factory=dict)
-    label: str = "session"
+    scope: str = "session"  # <watch>/<source or group>, for the journal
+
+    @property
+    def label(self) -> str:
+        return f"{self.stage}-{self.scope.replace('/', '-')}"
 
 
 @dataclass
@@ -128,13 +132,13 @@ class Claude:
         result = self._invoke(spec, raw_dir, attempt=1)
         if result.ok or not result.schema_error:
             return result
-        log.warning("%s: answer did not match the schema (%s); asking again", spec.label, result.error)
+        log.warning("%s: Retrying: the answer did not match the schema (%s)", spec.scope, result.error)
         if spec.mode == "throwaway":
             retry = spec
         else:
             retry = SessionSpec(
                 stage=spec.stage, workdir=spec.workdir, settings=spec.settings, schema=spec.schema,
-                mode="resume", session_id=spec.session_id, env=spec.env, label=spec.label,
+                mode="resume", session_id=spec.session_id, env=spec.env, scope=spec.scope,
                 prompt=f"Your last answer did not match the required result schema: {result.error}\n"
                        "Do not redo the work. Answer again with the structured result only.",
             )

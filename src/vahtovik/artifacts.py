@@ -55,15 +55,16 @@ def register_agent_files(cfg: Config, state: State, watch: Watch, key: str) -> l
         except (json.JSONDecodeError, jsonschema.ValidationError) as exc:
             message = exc.message if isinstance(exc, jsonschema.ValidationError) else str(exc)
             path.rename(path.with_name(path.name + ".invalid"))
-            notes.append(f"{path.name}: invalid artifact file ({message}); renamed to .invalid")
+            notes.append(f"Rejected artifact file {path.name}: {message}; renamed to .invalid")
             continue
         path.unlink()
         target = group_key(data.get("group_key") or key)
         if register(cfg, state, watch, {**data, "group_key": target}, str(data.get("source_id") or "agent"),
                     origin="agent", status="processed" if target == key else "new"):
-            notes.append(f"registered {data['id']!r}" + (f" in group {target}" if target != key else ""))
+            notes.append(f"Registered artifact {data['id']!r} added by the agent"
+                         + (f", moved to group {target}" if target != key else ""))
         else:
-            notes.append(f"{data['id']!r} was already known; file removed")
+            notes.append(f"Removed artifact file for {data['id']!r}: already known")
     for note in notes:
         log.info("%s/%s: %s", watch.name, key, note)
     return notes

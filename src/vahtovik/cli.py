@@ -8,23 +8,25 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 
 from . import config as config_mod
-from . import delivery, group_session, skills
+from . import delivery, group_session, journal, skills
 from .claude_session import Claude
 from .config import Config, ConfigError
 from .stages import group_turn, monitor
 from .state import State
-from .util import LockBusy, file_lock, human, utc_iso
+from .util import LockBusy, duration, file_lock, human, plural, utc_iso
 
 log = logging.getLogger("vahtovik")
 
 
-def _load() -> tuple[Config, State]:
+def _load(who: str | None = None, echo: bool = False) -> tuple[Config, State]:
     root = config_mod.find_root()
     config_mod.load_env_file(root)
     cfg = config_mod.load(root)
+    journal.setup(cfg, who, echo)
     return cfg, State(cfg.db_path)
 
 
@@ -33,51 +35,68 @@ def _due(state: State, watch, now: datetime) -> bool:
     return last is None or datetime.fromisoformat(last) + watch.interval <= now
 
 
+def _describe(exc: BaseException) -> str:
+    return f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
+
+
 def cmd_run(args) -> int:
-    cfg, state = _load()
+    run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
+    cfg, state = _load(who=f"run {run_id}", echo=sys.stderr.isatty())
     if args.dry_run:
         os.environ["VAHTOVIK_DRY_RUN"] = "1"  # sessions inherit it, so `vahtovik report` dry-runs too
     try:
         with file_lock(cfg.data_dir / ".run.lock"):
-            return _run(cfg, state, args)
+            return _run(cfg, state, args, run_id)
     except LockBusy:
-        log.info("another vahtovik run is in progress; exiting")
+        log.warning("Skipped run: another run is in progress")
         return 0
 
 
-def _run(cfg: Config, state: State, args) -> int:
-    run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
-    raw_dir = cfg.runs_dir(run_id)
-    claude = Claude(cfg)
+def _run(cfg: Config, state: State, args, run_id: str) -> int:
     now = datetime.now(timezone.utc)
     watches = [cfg.watch(args.watch)] if args.watch else [w for w in cfg.watches.values() if w.enabled]
+    due = [w for w in watches if args.force or _due(state, w, now)] if args.stage != "deliver" else []
+    retry = args.stage in (None, "deliver") and bool(state.retryable_deliveries(delivery.MAX_ATTEMPTS))
+    if not due and not retry:
+        return 0  # nothing to do; a timer fires often, so stay out of the journal
+    flags = [name for name, on in (("forced", args.force), ("dry run", args.dry_run)) if on]
+    flags += [f"stage {args.stage}"] if args.stage else []
+    log.info("Started run: %s%s", ", ".join(w.name for w in due) or "retrying failed reports",
+             f" ({', '.join(flags)})" if flags else "")
+    started = time.monotonic()
+    raw_dir = cfg.runs_dir(run_id)
+    claude = Claude(cfg)
+    new = 0
     state.start_run(run_id)
     status = "ok"
     try:
-        for watch in watches:
-            if not args.force and not _due(state, watch, now):
-                log.info("%s: not due yet (interval %s)", watch.name, watch.interval)
-                continue
+        for watch in due:
             if args.stage in (None, "monitor"):
-                monitor.run(cfg, state, claude, watch, run_id, raw_dir)
+                new += monitor.run(cfg, state, claude, watch, run_id, raw_dir)
             if args.stage in (None, "group"):
                 group_turn.run(cfg, state, claude, watch, run_id, raw_dir)
             if args.stage is None:
                 state.set_last_run(watch.name)
         if args.stage in (None, "deliver"):
-            sent, failed = delivery.retry_failed(cfg, state, args.dry_run)
-            if sent or failed:
-                log.info("retried deliveries: %d sent, %d still failing", sent, failed)
-    except BaseException:
+            delivery.retry_failed(cfg, state, args.dry_run)
+    except BaseException as exc:
         status = "failed"
+        log.error("Failed run after %s: %s", duration(time.monotonic() - started), _describe(exc))
         raise
     finally:
         state.finish_run(run_id, status)
+    summary = state.run_summary(run_id)
+    turns = plural(summary["turns_ok"] + summary["turns_failed"], "group turn")
+    turns += f" ({summary['turns_failed']} failed)" if summary["turns_failed"] else ""
+    reports = plural(summary["reports_sent"], "report") + " sent"
+    reports += f", {summary['reports_failed']} not sent" if summary["reports_failed"] else ""
+    log.info("Finished run in %s: %s, %s, %s, $%.2f", duration(time.monotonic() - started),
+             plural(new, "new artifact"), turns, reports, summary["cost"])
     return 0
 
 
 def cmd_open(args) -> int:
-    cfg, state = _load()
+    cfg, state = _load(who="interactive")
     return group_session.open_session(cfg, state, args.ref, new_session=args.new_session)
 
 
@@ -185,8 +204,25 @@ def cmd_test_channel(args) -> int:
         raise ConfigError(f"unknown channel {args.name!r}")
     result = delivery.run_send_script(cfg, args.name, "vahtovik test",
                                       f"Test message from vahtovik, {human()}.", args.dry_run)
+    dry = " (dry run)" if args.dry_run else ""
+    if result.ok:
+        log.info("Sent test message to %s%s", args.name, dry)
+    else:
+        log.error("Failed test message to %s%s: %s", args.name, dry, result.detail)
     print(("sent" if result.ok else "failed") + (f": {result.detail}" if result.detail else ""))
     return 0 if result.ok else 1
+
+
+def cmd_log(args) -> int:
+    cfg = config_mod.load(config_mod.find_root())
+    try:
+        for line in journal.read(journal.path(cfg), args.lines, args.text, follow=args.follow):
+            print(line, flush=args.follow)
+    except KeyboardInterrupt:
+        pass
+    except BrokenPipeError:  # the reader quit early, for example `vahtovik log -n 0 | less`
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -216,6 +252,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--watch")
     p.set_defaults(func=cmd_status)
 
+    p = sub.add_parser("log", help="show the journal of what vahtovik did")
+    p.add_argument("text", nargs="?", default="",
+                   help="only lines that contain this text, for example a watch, a group, a run or a date")
+    p.add_argument("-n", "--lines", type=int, default=40, help="how many last lines to show; 0 shows all (default 40)")
+    p.add_argument("-f", "--follow", action="store_true", help="keep showing new lines as they are written")
+    p.set_defaults(func=cmd_log)
+
     p = sub.add_parser("check", help="validate config, skills and environment")
     p.set_defaults(func=cmd_check)
 
@@ -227,7 +270,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s", level=logging.INFO)
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 from contextlib import ExitStack
 
@@ -10,7 +11,7 @@ from . import artifacts, groups, skills
 from .claude_session import Claude, SessionSpec
 from .config import Config, ConfigError, Watch
 from .state import State
-from .util import LockBusy
+from .util import LockBusy, duration
 
 log = logging.getLogger(__name__)
 
@@ -35,7 +36,7 @@ def spec_for(cfg: Config, claude: Claude, state: State, watch: Watch, key: str,
         prompt="",
         settings=cfg.stage(watch, "group"),
         env={"VAHTOVIK_WATCH": watch.name, "VAHTOVIK_GROUP": key},
-        label=f"group-{watch.name}-{key}",
+        scope=f"{watch.name}/{key}",
     )
     if stored and not force_new and claude.session_exists(stored):
         spec.mode, spec.session_id = "resume", stored
@@ -44,6 +45,13 @@ def spec_for(cfg: Config, claude: Claude, state: State, watch: Watch, key: str,
     spec.name = f"vahtovik: {watch.name}/{key}"
     spec.system_prompt = skills.main_skill(cfg.skills_dir).body
     return spec, NEW_FOR_EXISTING if stored else None
+
+
+def describe(spec: SessionSpec, note: str | None) -> str:
+    """How the session starts, for the journal: "resumed session d097ae50" or "new session ..."."""
+    if spec.mode == "resume":
+        return f"resumed session {spec.session_id[:8]}"
+    return f"new session {spec.session_id[:8]}" + (" (the earlier one was lost or reset)" if note else "")
 
 
 def remember(claude: Claude, state: State, watch: Watch, key: str, spec: SessionSpec) -> None:
@@ -69,8 +77,12 @@ def open_session(cfg: Config, state: State, ref: str, new_session: bool = False)
         spec, note = spec_for(cfg, claude, state, watch, key, force_new=new_session)
         if spec.mode == "new":
             spec.prompt = f"{note}\n\n{OPEN_NEW_PROMPT}" if note else OPEN_NEW_PROMPT
+        log.info("%s: Started interactive session, %s", ref, describe(spec, note))
+        started = time.monotonic()
         code = claude.interactive(spec)
         remember(claude, state, watch, key, spec)
+        log.info("%s: Finished interactive session after %s%s", ref, duration(time.monotonic() - started),
+                 f" (exit code {code})" if code else "")
     for note in artifacts.register_agent_files(cfg, state, watch, key):
         print(note)
     return code

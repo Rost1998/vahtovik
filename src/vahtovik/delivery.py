@@ -60,7 +60,15 @@ def attempt(cfg: Config, state: State, delivery_id: int, dry_run: bool):
     context = cfg.group_dir(row["watch"], row["group_key"]) / "context.md"
     context_file.append(context, "Reports",
                         context_file.report_line(row["channel"], result.ok, result.detail, row["subject"], dry_run))
-    return state.delivery(delivery_id)
+    row = state.delivery(delivery_id)
+    what = f"report {delivery_id} to {row['channel']}" + (f' "{row["subject"]}"' if row["subject"] else "")
+    what += " (dry run)" if dry_run else ""
+    if result.ok:
+        log.info("%s/%s: Sent %s", row["watch"], row["group_key"], what)
+    else:
+        log.error("%s/%s: Failed %s (attempt %d of %d): %s", row["watch"], row["group_key"], what,
+                  row["attempts"], MAX_ATTEMPTS, result.detail)
+    return row
 
 
 def report(cfg: Config, state: State, watch_name: str, key: str, channel: str, subject: str, body: str,
@@ -82,10 +90,8 @@ def retry_failed(cfg: Config, state: State, dry_run: bool) -> tuple[int, int]:
     for row in state.retryable_deliveries(MAX_ATTEMPTS):
         if row["channel"] not in cfg.channels:
             continue
-        result = attempt(cfg, state, row["id"], dry_run)
-        if result["status"] == "sent":
+        if attempt(cfg, state, row["id"], dry_run)["status"] == "sent":
             sent += 1
         else:
             failed += 1
-            log.warning("delivery %s to %s failed again: %s", row["id"], row["channel"], result["last_error"])
     return sent, failed

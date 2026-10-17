@@ -23,6 +23,20 @@ def human(dt: datetime | None = None) -> str:
     return (dt or datetime.now()).astimezone().strftime("%Y-%m-%d %H:%M")
 
 
+def duration(seconds: float) -> str:
+    """Short duration for the journal: 28s, 1m30s, 2h05m."""
+    seconds = round(seconds)
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m{seconds % 60:02d}s"
+    return f"{seconds // 3600}h{seconds % 3600 // 60:02d}m"
+
+
+def plural(count: int, word: str) -> str:
+    return f"{count} {word}" + ("" if count == 1 else "s")
+
+
 def slugify(text: str, max_len: int = 64) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
     return slug[:max_len].strip("-")

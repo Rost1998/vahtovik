@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import yaml
 
-from . import context_file, skills
+from . import context_file, journal, skills
 from .config import Config, ConfigError, Watch
 from .state import State
 from .util import file_lock, render, schema_path
+
+log = logging.getLogger(__name__)
 
 LOCK_NAME = ".lock"
 
@@ -26,6 +29,7 @@ def ensure_group(cfg: Config, state: State, watch: Watch, key: str, title: str) 
     (group_dir / "artifacts").mkdir(parents=True, exist_ok=True)
     if state.group(watch.name, key) is None:
         state.add_group(watch.name, key, title)
+        log.info("%s/%s: Created group \"%s\"", watch.name, key, title)
     context_file.create(group_dir / "context.md", title, watch.name, key)
     if not (group_dir / "CLAUDE.md").exists():
         write_claude_md(cfg, state, watch, key)
@@ -70,5 +74,6 @@ def write_claude_md(cfg: Config, state: State, watch: Watch, key: str) -> None:
         sources=sources,
         channels=channels,
         artifact_schema=schema_path("artifact"),
+        journal=journal.path(cfg),
     )
     (cfg.group_dir(watch.name, key) / "CLAUDE.md").write_text(text)

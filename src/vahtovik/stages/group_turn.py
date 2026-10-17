@@ -10,7 +10,7 @@ from .. import artifacts, context_file, group_session, groups, skills
 from ..claude_session import Claude
 from ..config import Config, Watch
 from ..state import State
-from ..util import LockBusy, human, load_schema, render
+from ..util import LockBusy, duration, human, load_schema, plural, render
 
 log = logging.getLogger(__name__)
 
@@ -23,7 +23,8 @@ def run(cfg: Config, state: State, claude: Claude, watch: Watch, run_id: str, ra
             with groups.lock(cfg.group_dir(watch.name, key)):
                 turn(cfg, state, claude, watch, key, run_id, raw_dir)
         except LockBusy:
-            log.info("%s/%s: the session is open elsewhere; the next run will process it", watch.name, key)
+            log.warning("%s/%s: Skipped group turn: the session is open; the next run will process it",
+                        watch.name, key)
 
 
 def _read(path: Path) -> str:
@@ -77,7 +78,9 @@ def turn(cfg: Config, state: State, claude: Claude, watch: Watch, key: str, run_
         deliveries=_deliveries_text(state.deliveries_since(watch.name, key, last["started_at"] if last else None)),
     )
     spec.schema = load_schema("group_turn")
-    spec.env["VAHTOVIK_TURN"] = turn_id
+    spec.env.update(VAHTOVIK_TURN=turn_id, VAHTOVIK_RUN=run_id)
+    log.info("%s: Started group turn: %s, %s", spec.scope, plural(len(ids), "artifact"),
+             group_session.describe(spec, note))
     before = context_file.fingerprint(context)
     state.start_turn(turn_id, run_id, watch.name, key)
     result = claude.run(spec, raw_dir)
@@ -92,13 +95,16 @@ def turn(cfg: Config, state: State, claude: Claude, watch: Watch, key: str, run_
         claimed = {r["delivery_id"] for r in result.output["reports"]}
         recorded = {r["id"] for r in state.turn_deliveries(turn_id)}
         if claimed != recorded:
-            log.warning("%s/%s: reports in the answer %s differ from deliveries recorded %s",
-                        watch.name, key, sorted(claimed), sorted(recorded))
-        log.info("%s/%s: processed %d artifact(s), importance %s, %d report(s)",
-                 watch.name, key, len(ids), result.output["importance"], len(recorded))
+            log.warning("%s: Reports in the answer %s differ from recorded deliveries %s",
+                        spec.scope, sorted(claimed), sorted(recorded))
+        log.info("%s: Finished group turn in %s: importance %s, %s, $%.2f. %s", spec.scope,
+                 duration(result.duration_s), result.output["importance"], plural(len(recorded), "report"),
+                 result.cost_usd, result.output["summary"][:150])
     else:
         state.mark_attempt_failed(watch.name, ids, MAX_ATTEMPTS)
-        log.error("%s/%s: turn failed: %s", watch.name, key, error)
+        attempt = max(r["attempts"] for r in pending) + 1
+        log.error("%s: Failed group turn after %s (attempt %d of %d%s): %s", spec.scope, duration(result.duration_s),
+                  attempt, MAX_ATTEMPTS, ", giving up" if attempt >= MAX_ATTEMPTS else "", error)
     state.finish_turn(turn_id, ok, result.output, error)
     artifacts.register_agent_files(cfg, state, watch, key)
     return ok

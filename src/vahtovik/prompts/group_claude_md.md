@@ -18,6 +18,8 @@ Everything else, including the vahtovik project at `$root`, is read-only to you.
 - Reporting rules: `$report_md`
 - Watch config: `$watch_yaml`
 
+vahtovik's journal of events (runs, turns, reports) is `$journal`. `vahtovik log "$watch/$key:"` shows the lines about this group.
+
 ## Sources of this watch
 
 $sources

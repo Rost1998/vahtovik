@@ -13,7 +13,7 @@ from .. import artifacts, skills
 from ..claude_session import Claude, SessionSpec
 from ..config import Config, Watch
 from ..state import State
-from ..util import human, load_schema, render
+from ..util import duration, human, load_schema, render
 
 log = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ def run(cfg: Config, state: State, claude: Claude, watch: Watch, run_id: str, ra
         try:
             skill = skills.load(cfg.skills_dir, "sources", source.skill)
         except skills.SkillError as exc:
-            log.error("%s/%s: %s", watch.name, source.id, exc)
+            log.error("%s/%s: Failed monitoring: %s", watch.name, source.id, exc)
             state.source_failed(watch.name, source.id, str(exc))
             continue
         workdir = cfg.source_dir(watch.name, source.id)
@@ -51,9 +51,10 @@ def run(cfg: Config, state: State, claude: Claude, watch: Watch, run_id: str, ra
         spec = SessionSpec(
             stage="monitor", workdir=workdir, prompt=prompt, settings=cfg.stage(watch, "monitor"),
             schema=schema, system_prompt=main, mode="throwaway",
-            env={"VAHTOVIK_WATCH": watch.name, "VAHTOVIK_SOURCE": source.id},
-            label=f"monitor-{watch.name}-{source.id}",
+            env={"VAHTOVIK_WATCH": watch.name, "VAHTOVIK_SOURCE": source.id, "VAHTOVIK_RUN": run_id},
+            scope=f"{watch.name}/{source.id}",
         )
+        log.info("%s: Started monitoring (%s)", spec.scope, skill.name)
         # Source scripts move their "last seen" markers during the session.
         # If the session fails, put the state folder back so no item is lost.
         with tempfile.TemporaryDirectory() as tmp:
@@ -65,13 +66,14 @@ def run(cfg: Config, state: State, claude: Claude, watch: Watch, run_id: str, ra
                 shutil.rmtree(workdir)
                 shutil.copytree(backup, workdir)
         if not result.ok:
-            log.error("%s/%s: monitoring failed: %s", watch.name, source.id, result.error)
+            log.error("%s: Failed monitoring after %s: %s", spec.scope, duration(result.duration_s), result.error)
             state.source_failed(watch.name, source.id, result.error or "unknown error")
             continue
         found = result.output["artifacts"]
         new = sum(artifacts.register(cfg, state, watch, item, source.id) for item in found)
         state.source_ok(watch.name, source.id)
         notes = result.output.get("notes", "").strip()
-        log.info("%s/%s: %d found, %d new%s", watch.name, source.id, len(found), new, f" ({notes})" if notes else "")
+        log.info("%s: Finished monitoring in %s: %d found, %d new, $%.2f%s", spec.scope, duration(result.duration_s),
+                 len(found), new, result.cost_usd, f" ({notes[:100]})" if notes else "")
         total += new
     return total

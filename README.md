@@ -17,6 +17,7 @@ uv sync
 uv run vahtovik check                                # config, skills, environment
 uv run vahtovik run --watch example --force --dry-run
 uv run vahtovik status                               # groups and their sessions
+uv run vahtovik log                                  # what vahtovik did
 uv run vahtovik open example/uv-0-13                 # talk to a group's agent
 ```
 
@@ -40,6 +41,30 @@ Each group has one Claude Code session, created on its first turn and resumed on
 
 Sessions run with `bypassPermissions`. The main skill (`skills/vahtovik/SKILL.md`, part of every session's system prompt) tells agents that everything outside their working folder is read-only, except reporting through `vahtovik report`.
 
+## Journal
+
+vahtovik writes one short line per key event to `data/journal.log`: runs, monitoring, new groups, group turns, reports, interactive sessions and failures.
+
+```
+2026-10-17 14:03:12 run 20261017-140312 Started run: example
+2026-10-17 14:03:12 run 20261017-140312 example/uv-releases: Started monitoring (rss)
+2026-10-17 14:03:40 run 20261017-140312 example/uv-0-13: Created group "uv 0.13"
+2026-10-17 14:03:40 run 20261017-140312 example/uv-releases: Finished monitoring in 28s: 3 found, 2 new, $0.04
+2026-10-17 14:03:41 run 20261017-140312 example/uv-0-13: Started group turn: 2 artifacts, new session 1b2c3d4e
+2026-10-17 14:04:55 run 20261017-140312 example/uv-0-13: Sent report 1 to local-log "uv 0.13 released"
+2026-10-17 14:05:10 run 20261017-140312 example/uv-0-13: Finished group turn in 1m29s: importance high, 1 report, $0.31. uv 0.13 ...
+2026-10-17 14:05:10 run 20261017-140312 Finished run in 1m58s: 2 new artifacts, 1 group turn, 1 report sent, $0.35
+2026-10-17 15:20:01 interactive         example/uv-0-13: Started interactive session, resumed session 1b2c3d4e
+```
+
+The second column says who wrote the line: a timer run, an `interactive` session, or a `manual` command. Problems start with "Failed" or "Skipped". A run with nothing due writes nothing.
+
+- `vahtovik log -f`: watch what happens now.
+- `vahtovik log example/uv-0-13`: one group's history. Any text works as a filter: a watch, a run, a date.
+- `vahtovik log -n 0 | less`: the whole journal.
+
+`vahtovik run` in a terminal also prints the lines as it goes. Group agents know where the journal is, so you can ask them about it too.
+
 ## Configuration
 
 - `vahtovik.yaml`: Claude login mode (`subscription` or `api-key`), model, effort and dollar cap per stage, and channels. A watch can override stage settings.
@@ -56,13 +81,14 @@ vahtovik keeps your personal `~/.claude/CLAUDE.md` and parent-folder `CLAUDE.md`
 | `run [--watch W] [--stage monitor\|group\|deliver] [--force] [--dry-run]` | one cycle; `--force` ignores intervals; `--dry-run` makes channels print instead of send |
 | `open W/KEY [--new-session]` | open a group's session interactively |
 | `report --channel C [--subject S]` | send a report, body on stdin (inside a session, the group comes from the environment) |
+| `log [TEXT] [-n N] [-f]` | the last N journal lines (default 40, 0 for all) that contain TEXT; `-f` keeps showing new lines |
 | `status [--watch W]` | watches, sources, groups, sessions, undelivered reports, AI cost in the last 24 hours |
 | `check` | validate config, skills, environment variables and `claude` |
 | `test-channel C [--dry-run]` | send a test message, no AI |
 
 ## Scheduling
 
-`bin/vahtovik-cron` runs one cycle, never two at once, and logs to `data/logs/<date>.log`.
+`bin/vahtovik-cron` runs one cycle, never two at once. Events go to the journal; anything else the run prints, such as a crash trace, goes to `data/logs/<date>.log`.
 
 ```cron
 */15 * * * * /path/to/vahtovik/bin/vahtovik-cron
