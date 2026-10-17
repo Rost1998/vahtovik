@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Run one vahtovik cycle from cron or a systemd timer. Extra arguments go to `vahtovik run`.
+set -euo pipefail
+
+cd "$(dirname "$(readlink -f "$0")")/.."
+export PATH="$HOME/.local/bin:$PATH"     # uv and claude are usually installed here
+mkdir -p data/logs
+log="data/logs/$(date +%F).log"
+
+exec 9>data/.cron.lock
+if ! flock -n 9; then
+    echo "$(date -Is) another vahtovik run is in progress" >> "$log"
+    exit 0
+fi
+
+uv run --quiet vahtovik run "$@" >> "$log" 2>&1

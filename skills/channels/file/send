@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Channel contract: body on stdin, subject in VAHTOVIK_SUBJECT, exit 0 when delivered.
+set -euo pipefail
+
+path="${FILE_CHANNEL_PATH:?FILE_CHANNEL_PATH is not set}"
+body="$(cat)"
+block="## $(date '+%Y-%m-%d %H:%M') · ${VAHTOVIK_SUBJECT:-report}
+_${VAHTOVIK_WATCH:-?}/${VAHTOVIK_GROUP:-?}_
+
+${body}
+"
+
+if [[ "${VAHTOVIK_DRY_RUN:-}" == "1" ]]; then
+    printf 'dry run, would append to %s:\n%s\n' "$path" "$block" >&2
+    echo "dry-run"
+    exit 0
+fi
+
+mkdir -p "$(dirname "$path")"
+printf '%s\n' "$block" >> "$path"
+echo "$path:$(wc -l < "$path")"

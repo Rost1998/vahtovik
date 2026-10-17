@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Channel contract: body on stdin, subject in VAHTOVIK_SUBJECT, exit 0 when delivered.
+set -euo pipefail
+
+: "${TELEGRAM_BOT_TOKEN:?TELEGRAM_BOT_TOKEN is not set}"
+: "${TELEGRAM_CHAT_ID:?TELEGRAM_CHAT_ID is not set}"
+
+body="$(cat)"
+subject="${VAHTOVIK_SUBJECT:-}"
+subject="${subject//&/&amp;}"; subject="${subject//</&lt;}"; subject="${subject//>/&gt;}"
+text="${subject:+<b>${subject}</b>
+}${body}"
+
+if [[ "${VAHTOVIK_DRY_RUN:-}" == "1" ]]; then
+    printf 'dry run, would send to chat %s:\n%s\n' "$TELEGRAM_CHAT_ID" "$text" >&2
+    echo "dry-run"
+    exit 0
+fi
+
+response="$(curl -sS --max-time 30 -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+    --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+    --data-urlencode "text=${text}" \
+    --data-urlencode "parse_mode=HTML" \
+    --data-urlencode "disable_web_page_preview=true")"
+
+if [[ "$response" == *'"ok":true'* ]]; then
+    id="$(grep -o '"message_id":[0-9]*' <<<"$response" | head -1 | cut -d: -f2)"
+    echo "message ${id:-?}"
+else
+    echo "$response" >&2
+    exit 1
+fi
