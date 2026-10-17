@@ -4,6 +4,7 @@ import pytest
 from conftest import artifact, monitor_answer, report_action, turn_answer, work_log
 
 from vahtovik import cli, journal
+from vahtovik.util import file_lock
 
 
 @pytest.fixture(autouse=True)
@@ -38,12 +39,20 @@ def test_run_writes_one_line_per_key_event(project):
     assert messages[-1] == "Finished run in 0s: 1 new artifact, 1 group turn, 1 report sent, $0.03"
 
 
-def test_run_with_nothing_due_writes_nothing(project):
+def test_run_with_nothing_due_writes_one_line(project):
     project.queue(monitor_answer(), monitor_answer())
     cli.main(["run"])
-    size = (project.root / "data/journal.log").stat().st_size
+    before = len(_entries(project))
     cli.main(["run"])
-    assert (project.root / "data/journal.log").stat().st_size == size
+    entries = _entries(project)
+    assert len(entries) == before + 1 and entries[-1][1] in ("Nothing due: w1 in 59m59s", "Nothing due: w1 in 1h00m")
+
+
+def test_overlapping_run_is_skipped(project):
+    with file_lock(project.root / "data/.run.lock"):
+        assert cli.main(["run", "--force"]) == 0
+    assert _entries(project)[-1][1] == "Skipped run: another run is in progress"
+    assert project.calls() == []
 
 
 def test_failures_are_logged_with_the_attempt(project):

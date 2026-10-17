@@ -57,7 +57,7 @@ vahtovik writes one short line per key event to `data/journal.log`: runs, monito
 2026-10-17 15:20:01 interactive         example/uv-0-13: Started interactive session, resumed session 1b2c3d4e
 ```
 
-The second column says who wrote the line: a timer run, an `interactive` session, or a `manual` command. Problems start with "Failed" or "Skipped". A run with nothing due writes nothing.
+The second column says who wrote the line: a timer run, an `interactive` session, or a `manual` command. Problems start with "Failed" or "Skipped". A run with nothing due writes one line, such as `Nothing due: example in 4h12m`, so you can see the timer works.
 
 - `vahtovik log -f`: watch what happens now.
 - `vahtovik log example/uv-0-13`: one group's history. Any text works as a filter: a watch, a run, a date.

@@ -35,6 +35,15 @@ def _due(state: State, watch, now: datetime) -> bool:
     return last is None or datetime.fromisoformat(last) + watch.interval <= now
 
 
+def _nothing_due(state: State, watches, now: datetime, stage: str | None) -> str:
+    if stage == "deliver":
+        return "no failed reports to retry"
+    if not watches:
+        return "no enabled watches"
+    waits = (datetime.fromisoformat(state.last_run(w.name)) + w.interval - now for w in watches)
+    return ", ".join(f"{w.name} in {duration(wait.total_seconds())}" for w, wait in zip(watches, waits))
+
+
 def _describe(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
 
@@ -58,7 +67,8 @@ def _run(cfg: Config, state: State, args, run_id: str) -> int:
     due = [w for w in watches if args.force or _due(state, w, now)] if args.stage != "deliver" else []
     retry = args.stage in (None, "deliver") and bool(state.retryable_deliveries(delivery.MAX_ATTEMPTS))
     if not due and not retry:
-        return 0  # nothing to do; a timer fires often, so stay out of the journal
+        log.info("Nothing due: %s", _nothing_due(state, watches, now, args.stage))
+        return 0
     flags = [name for name, on in (("forced", args.force), ("dry run", args.dry_run)) if on]
     flags += [f"stage {args.stage}"] if args.stage else []
     log.info("Started run: %s%s", ", ".join(w.name for w in due) or "retrying failed reports",
