@@ -73,6 +73,8 @@ The second column says who wrote the line: a timer run, an `interactive` session
 - `watches/<name>/.env`: the watch's own secrets, such as source tokens. Only this watch's sessions get them, so two watches can each have their own `GITHUB_TOKEN`. If one watch has two sources of the same type with different tokens, give a source `env: {GITHUB_TOKEN: GITHUB_TOKEN_ORG_B}`: its scripts then get `GITHUB_TOKEN` set to the value of `GITHUB_TOKEN_ORG_B`.
 - `skills/`: see [skills/README.md](skills/README.md) for the source and channel contracts.
 
+To have an agent create a watch, ask Claude Code in this folder, for example "create a watch for new CVEs in our dependencies". It follows [.claude/skills/create-watch/SKILL.md](.claude/skills/create-watch/SKILL.md), which says what goes where.
+
 vahtovik keeps your personal `~/.claude/CLAUDE.md` and parent-folder `CLAUDE.md` files out of its sessions. Set `claude.config_dir` to give vahtovik a separate Claude Code profile.
 
 ## Commands
