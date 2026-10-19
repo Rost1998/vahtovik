@@ -1,4 +1,5 @@
 import json
+import logging
 import shutil
 import sys
 from pathlib import Path
@@ -35,6 +36,16 @@ class Project:
     def load(self):
         cfg = config_mod.load(self.root)
         return cfg, State(cfg.db_path), Claude(cfg)
+
+
+@pytest.fixture(autouse=True)
+def detach_journal():
+    """Tests that call cli.main() attach the journal to the "vahtovik" logger; remove it afterwards."""
+    yield
+    logger = logging.getLogger("vahtovik")
+    for handler in [h for h in logger.handlers if getattr(h, "journal", False)]:
+        logger.removeHandler(handler)
+        handler.close()
 
 
 @pytest.fixture

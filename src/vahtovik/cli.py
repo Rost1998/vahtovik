@@ -193,6 +193,10 @@ def cmd_check(args) -> int:
             missing = [p for p in skill.list_meta("required_params") if p not in src.params]
             if missing:
                 problems.append(f"watch {watch.name}, source {src.id}: missing params {', '.join(missing)}")
+            missing = watch.missing_secrets(src, skill.list_meta("required_env"))
+            if missing:
+                problems.append(f"watch {watch.name}, source {src.id}: secret {', '.join(missing)} not set; "
+                                f"add it to {watch.env_file}")
     binary = shutil.which(cfg.claude.binary)
     if not binary:
         problems.append(f"claude: {cfg.claude.binary} not found on PATH")

@@ -1,19 +1,7 @@
-import logging
-
-import pytest
 from conftest import artifact, monitor_answer, report_action, turn_answer, work_log
 
 from vahtovik import cli, journal
 from vahtovik.util import file_lock
-
-
-@pytest.fixture(autouse=True)
-def detach_journal():
-    yield
-    logger = logging.getLogger("vahtovik")
-    for handler in [h for h in logger.handlers if getattr(h, "journal", False)]:
-        logger.removeHandler(handler)
-        handler.close()
 
 
 def _entries(project) -> list[tuple[str, str]]:

@@ -35,7 +35,7 @@ def spec_for(cfg: Config, claude: Claude, state: State, watch: Watch, key: str,
         workdir=cfg.group_dir(watch.name, key),
         prompt="",
         settings=cfg.stage(watch, "group"),
-        env={"VAHTOVIK_WATCH": watch.name, "VAHTOVIK_GROUP": key},
+        env={**watch.secrets(), "VAHTOVIK_WATCH": watch.name, "VAHTOVIK_GROUP": key},
         scope=f"{watch.name}/{key}",
     )
     if stored and not force_new and claude.session_exists(stored):

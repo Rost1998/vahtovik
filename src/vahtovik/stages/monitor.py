@@ -51,7 +51,8 @@ def run(cfg: Config, state: State, claude: Claude, watch: Watch, run_id: str, ra
         spec = SessionSpec(
             stage="monitor", workdir=workdir, prompt=prompt, settings=cfg.stage(watch, "monitor"),
             schema=schema, system_prompt=main, mode="throwaway",
-            env={"VAHTOVIK_WATCH": watch.name, "VAHTOVIK_SOURCE": source.id, "VAHTOVIK_RUN": run_id},
+            env={**watch.source_env(source),
+                 "VAHTOVIK_WATCH": watch.name, "VAHTOVIK_SOURCE": source.id, "VAHTOVIK_RUN": run_id},
             scope=f"{watch.name}/{source.id}",
         )
         log.info("%s: Started monitoring (%s)", spec.scope, skill.name)

@@ -24,7 +24,7 @@ vahtovik's journal of events (runs, turns, reports) is `$journal`. `vahtovik log
 
 $sources
 
-To scan a source again, follow its skill and give its scripts a state folder inside your working folder, for example `scan-state/<source-id>`.
+To scan a source again, follow its skill and give its scripts a state folder inside your working folder, for example `scan-state/<source-id>`. The secrets the sources need are in your environment.
 
 ## Channels you may report to
 

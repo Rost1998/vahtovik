@@ -13,7 +13,10 @@ sources/<name>/SKILL.md
 sources/<name>/scripts/...     optional
 ```
 
-- Front matter: `name`, `description`, and optionally `required_params: [...]`, which `vahtovik check` verifies against each source's `params` in `watch.yaml`.
+- Front matter: `name`, `description`, and optionally:
+  - `required_params: [...]`, which `vahtovik check` verifies against each source's `params` in `watch.yaml`;
+  - `required_env: [...]`: secrets the scripts read from environment variables, such as `GITHUB_TOKEN`. `vahtovik check` verifies them.
+- Secrets come from the watch's own `watches/<name>/.env`, or from the shared `.env`. A source's `env` in `watch.yaml` can fill a variable from a secret with another name.
 - The body tells the agent how to collect new items and what to use as the stable artifact id.
 - Scripts take the source parameters as arguments and a state folder (`--state-dir`) for snapshots or "last seen" markers, and print what is new, preferably as JSON.
 - In monitoring, the state folder is the session's working folder. If the session fails, vahtovik restores the folder, so no item is lost.

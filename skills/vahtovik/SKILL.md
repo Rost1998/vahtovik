@@ -45,6 +45,8 @@ EOF
 
 Read the skill of the source you want to scan (paths are in `CLAUDE.md`) and follow it, giving its scripts a state folder inside your working folder, for example `scan-state/<source-id>`. You may also use web search and web fetch directly.
 
+Secrets that sources need, such as tokens, are in your environment. Use them only to run source scripts; never write them into files, `context.md` or reports.
+
 ## Adding an artifact you found
 
 Write a JSON file into your `artifacts/` folder with at least `id` (stable, usually the canonical URL), `title` and `summary`; optionally `url`, `details`, `group_key`, `group_title`, `source_id`. The schema path is in `CLAUDE.md`. vahtovik registers the file after your turn or session ends. If it belongs to another group, set that group's `group_key` and vahtovik moves it there.

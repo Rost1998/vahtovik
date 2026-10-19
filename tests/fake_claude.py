@@ -22,7 +22,7 @@ def main() -> int:
 
     config_dir = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
     env = {k: v for k, v in os.environ.items()
-           if k.startswith(("VAHTOVIK_", "CLAUDE_")) or k == "ANTHROPIC_API_KEY"}
+           if k.startswith(("VAHTOVIK_", "CLAUDE_")) or k.endswith("_TOKEN") or k == "ANTHROPIC_API_KEY"}
     with open(os.environ["FAKE_CLAUDE_LOG"], "a") as log:
         log.write(json.dumps({"args": args, "cwd": os.getcwd(), "prompt": prompt, "env": env}) + "\n")
 

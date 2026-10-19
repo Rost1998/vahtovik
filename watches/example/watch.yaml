@@ -5,5 +5,6 @@ sources:
   - id: uv-releases
     skill: rss
     params: {url: "https://github.com/astral-sh/uv/releases.atom", max: 10}
+    # env: {GITHUB_TOKEN: GITHUB_TOKEN_ORG_B}   # optional: fill a variable the skill reads from another secret
 channels: [local-log]           # add ops-telegram here once it is defined in vahtovik.yaml
 # claude: {group: {effort: xhigh}}   # optional per-stage overrides of vahtovik.yaml

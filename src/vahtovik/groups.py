@@ -51,6 +51,7 @@ def write_claude_md(cfg: Config, state: State, watch: Watch, key: str) -> None:
     sources = "\n".join(
         f"- `{s.id}`: skill `{s.skill}`, {_skill_line(cfg, 'sources', s.skill)}, "
         f"params `{yaml.safe_dump(s.params, default_flow_style=True, sort_keys=False).strip()}`"
+        + "".join(f", set `{var}` to `${name}` when you run its scripts" for var, name in s.env.items())
         for s in watch.sources
     ) or "- none"
     channels = "\n".join(

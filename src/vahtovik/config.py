@@ -49,6 +49,7 @@ class Source:
     id: str
     skill: str
     params: dict = field(default_factory=dict)
+    env: dict[str, str] = field(default_factory=dict)  # variable the skill reads -> name of the secret to use
 
 
 @dataclass
@@ -73,9 +74,31 @@ class Watch:
     def report_md(self) -> Path:
         return self.dir / "report.md"
 
+    @property
+    def env_file(self) -> Path:
+        return self.dir / ".env"
+
     def process_files(self) -> list[Path]:
         process_dir = self.dir / "process"
         return sorted(process_dir.glob("*.md")) if process_dir.is_dir() else []
+
+    def secrets(self) -> dict[str, str]:
+        """This watch's own secrets. Only this watch's sessions get them."""
+        return read_env_file(self.env_file)
+
+    def source_env(self, source: Source) -> dict[str, str]:
+        """The watch's secrets, plus the variables the source's `env` fills from other secrets."""
+        env = self.secrets()
+        for var, name in source.env.items():
+            value = env.get(name) or os.environ.get(name)
+            if value:
+                env[var] = value
+        return env
+
+    def missing_secrets(self, source: Source, required: list[str]) -> list[str]:
+        secrets = self.secrets()
+        names = [source.env.get(var, var) for var in [*required, *source.env]]
+        return sorted({n for n in names if not secrets.get(n) and not os.environ.get(n)})
 
 
 @dataclass
@@ -129,11 +152,11 @@ def find_root(start: Path | None = None) -> Path:
     raise ConfigError(f"{CONFIG_FILE} not found in {here} or its parents (or set VAHTOVIK_HOME)")
 
 
-def load_env_file(root: Path) -> None:
-    """Load KEY=VALUE lines from .env without overriding the real environment."""
-    path = root / ".env"
+def read_env_file(path: Path) -> dict[str, str]:
+    """KEY=VALUE lines of a .env file."""
+    values = {}
     if not path.is_file():
-        return
+        return values
     for line in path.read_text().splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
@@ -143,6 +166,13 @@ def load_env_file(root: Path) -> None:
         value = value.strip()
         if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
             value = value[1:-1]
+        values[key] = value
+    return values
+
+
+def load_env_file(root: Path) -> None:
+    """Load the shared .env without overriding the real environment."""
+    for key, value in read_env_file(root / ".env").items():
         os.environ.setdefault(key, value)
 
 
@@ -212,7 +242,10 @@ def _load_watch(path: Path, channels: dict[str, Channel]) -> Watch:
         params = item.get("params") or {}
         if not isinstance(params, dict):
             raise ConfigError(f"{where}: params of source {item['id']!r} must be a mapping")
-        sources.append(Source(str(item["id"]), str(item["skill"]), params))
+        env = item.get("env") or {}
+        if not isinstance(env, dict):
+            raise ConfigError(f"{where}: env of source {item['id']!r} must be a mapping of variable to secret name")
+        sources.append(Source(str(item["id"]), str(item["skill"]), params, {str(k): str(v) for k, v in env.items()}))
     ids = [s.id for s in sources]
     if len(ids) != len(set(ids)):
         raise ConfigError(f"{where}: source ids must be unique")

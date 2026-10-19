@@ -68,8 +68,9 @@ The second column says who wrote the line: a timer run, an `interactive` session
 ## Configuration
 
 - `vahtovik.yaml`: Claude login mode (`subscription` or `api-key`), model, effort and dollar cap per stage, and channels. A watch can override stage settings.
-- `.env`: secrets (bot tokens, `ANTHROPIC_API_KEY`); see `.env.example`.
+- `.env`: shared secrets, such as channel tokens and `ANTHROPIC_API_KEY`; see `.env.example`.
 - `watches/<name>/`: `watch.yaml` (interval, sources, channels), `monitor.md`, `process/*.md` (used in name order), `report.md`. See `watches/example/`.
+- `watches/<name>/.env`: the watch's own secrets, such as source tokens. Only this watch's sessions get them, so two watches can each have their own `GITHUB_TOKEN`. If one watch has two sources of the same type with different tokens, give a source `env: {GITHUB_TOKEN: GITHUB_TOKEN_ORG_B}`: its scripts then get `GITHUB_TOKEN` set to the value of `GITHUB_TOKEN_ORG_B`.
 - `skills/`: see [skills/README.md](skills/README.md) for the source and channel contracts.
 
 vahtovik keeps your personal `~/.claude/CLAUDE.md` and parent-folder `CLAUDE.md` files out of its sessions. Set `claude.config_dir` to give vahtovik a separate Claude Code profile.
