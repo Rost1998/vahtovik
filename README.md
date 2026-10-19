@@ -84,34 +84,28 @@ vahtovik keeps your personal `~/.claude/CLAUDE.md` and parent-folder `CLAUDE.md`
 | `report --channel C [--subject S]` | send a report, body on stdin (inside a session, the group comes from the environment) |
 | `log [TEXT] [-n N] [-f]` | the last N journal lines (default 40, 0 for all) that contain TEXT; `-f` keeps showing new lines |
 | `status [--watch W]` | watches, sources, groups, sessions, undelivered reports, AI cost in the last 24 hours |
+| `install-timer [--every 15m]` | start vahtovik periodically with a systemd user timer |
+| `uninstall-timer` | remove that timer |
 | `check` | validate config, skills, environment variables and `claude` |
 | `test-channel C [--dry-run]` | send a test message, no AI |
 
 ## Scheduling
 
-`bin/vahtovik-cron` runs one cycle, never two at once. Events go to the journal; anything else the run prints, such as a crash trace, goes to `data/logs/<date>.log`.
+vahtovik has no background process. A timer starts one cycle at a fixed period, and each watch runs only when its own `interval` has passed. Keep the period at or below your shortest watch interval.
+
+`vahtovik install-timer [--every 15m]` sets up a systemd user timer and starts it. The period must divide an hour or a day: 5m, 15m, 30m, 1h, 6h, 1d. Run it again to change the period. `vahtovik uninstall-timer` removes the timer.
+
+- `systemctl --user list-timers vahtovik.timer` shows the next run.
+- `journalctl --user -u vahtovik` shows anything a run prints, such as a crash trace.
+- A run missed while the computer was off or asleep happens when it is back.
+- The timer runs only while you are logged in, unless you run `loginctl enable-linger $USER` once.
+- The timer uses the `PATH` of the shell you installed it from, so it finds `uv` and `claude`. If you move them, install the timer again.
+
+Without systemd, use cron with `bin/vahtovik-cron`. It writes anything a run prints to `data/logs/<date>.log`.
 
 ```cron
 */15 * * * * /path/to/vahtovik/bin/vahtovik-cron
 ```
-
-Or a systemd user timer:
-
-```ini
-# ~/.config/systemd/user/vahtovik.service
-[Service]
-Type=oneshot
-ExecStart=/path/to/vahtovik/bin/vahtovik-cron
-
-# ~/.config/systemd/user/vahtovik.timer
-[Timer]
-OnCalendar=*:0/15
-Persistent=true
-[Install]
-WantedBy=timers.target
-```
-
-Then `systemctl --user enable --now vahtovik.timer`. The timer only wakes vahtovik; each watch's `interval` decides when it actually runs.
 
 ## Development
 

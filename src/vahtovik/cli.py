@@ -12,7 +12,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from . import config as config_mod
-from . import delivery, group_session, journal, skills
+from . import delivery, group_session, journal, skills, timer
 from .claude_session import Claude
 from .config import Config, ConfigError
 from .stages import group_turn, monitor
@@ -239,6 +239,24 @@ def cmd_log(args) -> int:
     return 0
 
 
+def cmd_install_timer(args) -> int:
+    cfg, _state = _load()
+    for line in timer.install(cfg, args.every):
+        print(line)
+    log.info("Installed the systemd user timer: a cycle every %s", args.every)
+    return 0
+
+
+def cmd_uninstall_timer(args) -> int:
+    _load()
+    lines = timer.uninstall()
+    for line in lines:
+        print(line)
+    if lines[0].startswith("Removed"):
+        log.info("Removed the systemd user timer")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="vahtovik", description="AI monitoring on Claude Code sessions")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -273,6 +291,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-f", "--follow", action="store_true", help="keep showing new lines as they are written")
     p.set_defaults(func=cmd_log)
 
+    p = sub.add_parser("install-timer", help="start vahtovik periodically with a systemd user timer")
+    p.add_argument("--every", default="15m",
+                   help="how often to start a cycle; must divide an hour or a day (default 15m)")
+    p.set_defaults(func=cmd_install_timer)
+
+    p = sub.add_parser("uninstall-timer", help="remove the systemd user timer")
+    p.set_defaults(func=cmd_uninstall_timer)
+
     p = sub.add_parser("check", help="validate config, skills and environment")
     p.set_defaults(func=cmd_check)
 
@@ -287,7 +313,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)
-    except (ConfigError, delivery.DeliveryError, skills.SkillError) as exc:
+    except (ConfigError, delivery.DeliveryError, skills.SkillError, timer.TimerError) as exc:
         print(f"vahtovik: {exc}", file=sys.stderr)
         return 2
 
