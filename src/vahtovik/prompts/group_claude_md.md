@@ -9,7 +9,7 @@ You are the agent of group `$key` in watch `$watch`. vahtovik regenerates this f
 - `context.md`: the group record
 - `artifacts/*.json`: the artifacts of this group
 
-Everything else, including the vahtovik project at `$root`, is read-only to you.
+Everything else, including the vahtovik project at `$root`, is read-only to you, unless the watch rules below say otherwise.
 
 ## Watch rules (read-only)
 
