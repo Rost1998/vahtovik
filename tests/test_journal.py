@@ -1,3 +1,5 @@
+import time
+
 from conftest import artifact, monitor_answer, report_action, turn_answer, work_log
 
 from vahtovik import cli, journal
@@ -36,11 +38,20 @@ def test_run_with_nothing_due_writes_one_line(project):
     assert len(entries) == before + 1 and entries[-1][1] in ("Nothing due: w1 in 59m59s", "Nothing due: w1 in 1h00m")
 
 
-def test_overlapping_run_is_skipped(project):
-    with file_lock(project.root / "data/.run.lock"):
+def test_overlapping_run_is_skipped_and_names_the_running_one(project):
+    with file_lock(project.root / "data/.run.lock") as handle:
+        handle.write(f"20261020-140312 {time.time() - 47 * 60:.0f}\n")
+        handle.flush()
         assert cli.main(["run", "--force"]) == 0
-    assert _entries(project)[-1][1] == "Skipped run: another run is in progress"
+    assert _entries(project)[-1][1] == "Skipped run: run 20261020-140312 has been going for 47m00s"
     assert project.calls() == []
+
+
+def test_run_writes_its_id_into_the_lock(project):
+    project.queue(monitor_answer(), monitor_answer())
+    cli.main(["run"])
+    run_id, _ = (project.root / "data/.run.lock").read_text().split()
+    assert _entries(project)[-1][0] == f"run {run_id}"
 
 
 def test_failures_are_logged_with_the_attempt(project):

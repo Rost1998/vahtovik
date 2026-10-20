@@ -95,6 +95,8 @@ vahtovik keeps your personal `~/.claude/CLAUDE.md` and parent-folder `CLAUDE.md`
 
 vahtovik has no background process. A timer starts one cycle at a fixed period, and each watch runs only when its own `interval` has passed. Keep the period at or below your shortest watch interval.
 
+Runs never overlap, and sessions have no time limit. A run that starts while another is still going does nothing and writes a line such as `Skipped run: run 20261020-140312 has been going for 47m00s`. Watches that are due stay due, so the first run after the long one picks them up. The systemd timer does not even start a run while one is going, so these fires leave no line.
+
 `vahtovik install-timer [--every 15m]` sets up a systemd user timer and starts it. The period must divide an hour or a day: 5m, 15m, 30m, 1h, 6h, 1d. Run it again to change the period. `vahtovik uninstall-timer` removes the timer.
 
 - `systemctl --user list-timers vahtovik.timer` shows the next run.

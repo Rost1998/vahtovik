@@ -33,7 +33,6 @@ class ClaudeSettings:
     binary: str = "claude"
     config_dir: Path | None = None
     model: str = "claude-opus-5-5"
-    timeout_seconds: int = 900
     stages: dict[str, dict] = field(default_factory=dict)
 
 
@@ -213,7 +212,6 @@ def _load_claude(raw: dict, root: Path) -> ClaudeSettings:
     if raw.get("config_dir"):
         settings.config_dir = (root / Path(raw["config_dir"]).expanduser()).resolve()
     settings.model = str(raw.get("model", settings.model))
-    settings.timeout_seconds = int(raw.get("timeout_seconds", settings.timeout_seconds))
     settings.stages = _stage_overrides(raw.get("stages"), "claude.stages")
     return settings
 

@@ -154,11 +154,8 @@ class Claude:
         try:
             proc = subprocess.run(
                 self.print_args(spec), input=spec.prompt, text=True, capture_output=True,
-                cwd=spec.workdir, env=self.env(spec), timeout=self.cfg.claude.timeout_seconds,
+                cwd=spec.workdir, env=self.env(spec),
             )
-        except subprocess.TimeoutExpired:
-            return SessionResult(ok=False, error=f"timed out after {self.cfg.claude.timeout_seconds} s",
-                                 duration_s=time.monotonic() - started, session_id=spec.session_id)
         except OSError as exc:
             return SessionResult(ok=False, error=f"cannot run {self.cfg.claude.binary}: {exc}")
         duration = time.monotonic() - started

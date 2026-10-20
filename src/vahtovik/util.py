@@ -76,7 +76,7 @@ class LockBusy(Exception):
 
 @contextmanager
 def file_lock(path: Path, wait: bool = False):
-    """Exclusive flock on `path`. Raises LockBusy at once unless `wait` is set."""
+    """Exclusive flock on `path`, yielding the open file. Raises LockBusy at once unless `wait` is set."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a") as handle:
         try:
@@ -84,6 +84,6 @@ def file_lock(path: Path, wait: bool = False):
         except BlockingIOError:
             raise LockBusy(str(path)) from None
         try:
-            yield
+            yield handle
         finally:
             fcntl.flock(handle, fcntl.LOCK_UN)

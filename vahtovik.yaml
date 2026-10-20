@@ -4,7 +4,6 @@ claude:
   auth: subscription          # subscription (your Claude login) or api-key (ANTHROPIC_API_KEY, runs with --bare)
   config_dir: null            # optional separate CLAUDE_CONFIG_DIR for vahtovik sessions
   model: claude-opus-5-5
-  timeout_seconds: 900        # per session turn
   stages:                     # defaults per stage; a watch can override them in its watch.yaml
     monitor: {effort: medium, max_budget_usd: 0.50}
     group:   {effort: high,   max_budget_usd: 2.00}

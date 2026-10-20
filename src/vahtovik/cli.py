@@ -10,6 +10,7 @@ import subprocess
 import sys
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from . import config as config_mod
 from . import delivery, group_session, journal, skills, timer
@@ -53,12 +54,25 @@ def cmd_run(args) -> int:
     cfg, state = _load(who=f"run {run_id}", echo=sys.stderr.isatty())
     if args.dry_run:
         os.environ["VAHTOVIK_DRY_RUN"] = "1"  # sessions inherit it, so `vahtovik report` dry-runs too
+    lock = cfg.data_dir / ".run.lock"
     try:
-        with file_lock(cfg.data_dir / ".run.lock"):
+        with file_lock(lock) as handle:
+            handle.truncate(0)
+            handle.write(f"{run_id} {time.time():.0f}\n")  # for a run that finds the lock busy
+            handle.flush()
             return _run(cfg, state, args, run_id)
     except LockBusy:
-        log.warning("Skipped run: another run is in progress")
+        log.warning("Skipped run: %s", _running(lock))
         return 0
+
+
+def _running(lock: Path) -> str:
+    """Which run holds the run lock, from what it wrote into the lock file."""
+    try:
+        run_id, started = lock.read_text().split()
+        return f"run {run_id} has been going for {duration(time.time() - float(started))}"
+    except (OSError, ValueError):
+        return "another run is in progress"
 
 
 def _run(cfg: Config, state: State, args, run_id: str) -> int:
