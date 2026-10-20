@@ -13,6 +13,9 @@ Watch: {watch} · Group key: {key} · Created: {created}
 ## Summary
 _Not processed yet._
 
+## Open questions
+_None._
+
 ## Artifacts
 | First seen | Source | Artifact | Link |
 |---|---|---|---|
@@ -53,6 +56,30 @@ def append(path: Path, section: str, text: str) -> None:
         new_lines.append("")
     lines[insert_at:end] = new_lines
     write_atomic(path, "\n".join(lines) + "\n")
+
+
+def replace_section(path: Path, section: str, text: str, after: str | None = None) -> None:
+    """Replace the text of a section; add the section after `after` (or at the end) if it is missing."""
+    lines = path.read_text().splitlines() if path.exists() else []
+    body = text.splitlines()
+    found = _section(lines, section)
+    if found is None:
+        anchor = _section(lines, after) if after else None
+        at = anchor[1] if anchor else len(lines)
+        block = [f"## {section}", *body]
+        if at < len(lines):
+            block.append("")
+        elif lines and lines[-1].strip():
+            block.insert(0, "")
+        lines[at:at] = block
+    else:
+        start, end = found
+        lines[start + 1:end] = body + ([""] if end < len(lines) else [])
+    write_atomic(path, "\n".join(lines) + "\n")
+
+
+def questions_text(questions: list[str]) -> str:
+    return "\n".join(f"- {' '.join(q.split())}" for q in questions) or "_None._"
 
 
 def _cell(text: str) -> str:

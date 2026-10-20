@@ -1,3 +1,4 @@
+import re
 import time
 
 from conftest import artifact, monitor_answer, report_action, turn_answer, work_log
@@ -25,8 +26,9 @@ def test_run_writes_one_line_per_key_event(project):
     assert "w1/src-a: Finished monitoring in 0s: 1 found, 1 new, $0.01" in messages
     assert any(m.startswith("w1/g: Started group turn: 1 artifact, new session ") for m in messages)
     assert 'w1/g: Sent report 1 to log "Test report"' in messages
-    assert "w1/g: Finished group turn in 0s: importance high, 1 report, $0.01. All good." in messages
-    assert messages[-1] == "Finished run in 0s: 1 new artifact, 1 group turn, 1 report sent, $0.03"
+    assert "w1/g: Status finished, importance high: All good." in messages
+    assert any(re.fullmatch(r"w1/g: Finished group turn in \ds: status finished, 1 report, \$0.01", m) for m in messages)
+    assert re.fullmatch(r"Finished run in \ds: 1 new artifact, 1 group turn, 1 report sent, \$0.03", messages[-1])
 
 
 def test_run_with_nothing_due_writes_one_line(project):
@@ -62,8 +64,8 @@ def test_failures_are_logged_with_the_attempt(project):
     assert any(m.startswith("w1/src-b: Failed monitoring after") for m in messages)
     assert any(m.startswith('w1/g: Failed report 1 to broken "Test report" (attempt 1 of 5): boom')
                for m in messages)
-    assert any(m.startswith("w1/g: Failed group turn after 0s (attempt 1 of 3): the agent did not add")
-               for m in messages)
+    assert any(re.fullmatch(r"w1/g: Failed group turn after \ds \(attempt 1 of 3\): "
+                            r"the agent stopped 4 times without running `vahtovik turn`", m) for m in messages)
     assert messages[-1].endswith("1 group turn (1 failed), 0 reports sent, 1 not sent, $0.02")
 
 

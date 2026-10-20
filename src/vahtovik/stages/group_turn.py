@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from pathlib import Path
@@ -10,7 +11,7 @@ from .. import artifacts, context_file, group_session, groups, skills
 from ..claude_session import Claude
 from ..config import Config, Watch
 from ..state import State
-from ..util import LockBusy, duration, human, load_schema, plural, render
+from ..util import LockBusy, duration, human, plural, render
 
 log = logging.getLogger(__name__)
 
@@ -77,34 +78,44 @@ def turn(cfg: Config, state: State, claude: Claude, watch: Watch, key: str, run_
         report_rules=_read(watch.report_md), channels=_channels_text(cfg, watch),
         deliveries=_deliveries_text(state.deliveries_since(watch.name, key, last["started_at"] if last else None)),
     )
-    spec.schema = load_schema("group_turn")
     spec.env.update(VAHTOVIK_TURN=turn_id, VAHTOVIK_RUN=run_id)
     log.info("%s: Started group turn: %s, %s", spec.scope, plural(len(ids), "artifact"),
              group_session.describe(spec, note))
-    before = context_file.fingerprint(context)
-    state.start_turn(turn_id, run_id, watch.name, key)
+    state.start_turn(turn_id, run_id, watch.name, key, ids, context_file.fingerprint(context).work_log_entries)
+    state.set_status(watch.name, key, "running")
     result = claude.run(spec, raw_dir)
     group_session.remember(claude, state, watch, key, spec)
     state.log_session(run_id, "group", watch.name, key, result)
-
-    ok = result.ok and context_file.was_updated(before, context_file.fingerprint(context))
-    error = result.error if not result.ok else (None if ok else "the agent did not add a Work log entry to context.md")
-    if ok:
-        state.mark_processed(watch.name, ids)
-        state.touch_group(watch.name, key)
-        claimed = {r["delivery_id"] for r in result.output["reports"]}
-        recorded = {r["id"] for r in state.turn_deliveries(turn_id)}
-        if claimed != recorded:
-            log.warning("%s: Reports in the answer %s differ from recorded deliveries %s",
-                        spec.scope, sorted(claimed), sorted(recorded))
-        log.info("%s: Finished group turn in %s: importance %s, %s, $%.2f. %s", spec.scope,
-                 duration(result.duration_s), result.output["importance"], plural(len(recorded), "report"),
-                 result.cost_usd, result.output["summary"][:150])
-    else:
-        state.mark_attempt_failed(watch.name, ids, MAX_ATTEMPTS)
-        attempt = max(r["attempts"] for r in pending) + 1
-        log.error("%s: Failed group turn after %s (attempt %d of %d%s): %s", spec.scope, duration(result.duration_s),
-                  attempt, MAX_ATTEMPTS, ", giving up" if attempt >= MAX_ATTEMPTS else "", error)
-    state.finish_turn(turn_id, ok, result.output, error)
+    ok = _finish(state, watch, key, turn_id, pending, result.duration_s, result.error)
     artifacts.register_agent_files(cfg, state, watch, key)
     return ok
+
+
+def _finish(state: State, watch: Watch, key: str, turn_id: str, pending, seconds: float, error: str | None) -> bool:
+    """Close the turn after the session ended. The turn is done only if the agent ran `vahtovik turn`."""
+    scope = f"{watch.name}/{key}"
+    turn = state.turn(turn_id)
+    if turn["finished_at"]:
+        output = json.loads(turn["output"])
+        status = output["status"] + (f" ({plural(len(output['questions']), 'question')})" if output["questions"] else "")
+        log.info("%s: Finished group turn in %s: status %s, %s, $%.2f", scope, duration(seconds), status,
+                 plural(len(state.turn_deliveries(turn_id)), "report"), _cost(state, turn))
+        return True
+    group = state.group(watch.name, key)
+    if group["status"] == "failed" and group["status_reason"]:
+        error = group["status_reason"]
+    error = error or "the session ended before the agent ran `vahtovik turn`"
+    state.mark_attempt_failed(watch.name, [r["id"] for r in pending], MAX_ATTEMPTS)
+    state.finish_turn(turn_id, False, None, error)
+    state.set_status(watch.name, key, "failed", error)
+    attempt = max(r["attempts"] for r in pending) + 1
+    log.error("%s: Failed group turn after %s (attempt %d of %d%s): %s", scope, duration(seconds),
+              attempt, MAX_ATTEMPTS, ", giving up" if attempt >= MAX_ATTEMPTS else "", error)
+    return False
+
+
+def _cost(state: State, turn) -> float:
+    row = state.row("SELECT COALESCE(SUM(cost_usd), 0) AS c FROM sessions WHERE run_id = ? AND stage = 'group' "
+                    "AND watch = ? AND target = ? AND started_at >= ?",
+                    turn["run_id"], turn["watch"], turn["group_key"], turn["started_at"])
+    return row["c"]

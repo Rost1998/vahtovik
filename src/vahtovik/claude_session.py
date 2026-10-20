@@ -14,6 +14,7 @@ from pathlib import Path
 
 import jsonschema
 
+from . import group_status
 from .config import Config, StageSettings
 from .util import tail
 
@@ -67,17 +68,21 @@ class Claude:
     def session_exists(self, session_id: str | None) -> bool:
         return bool(session_id) and any((self.config_dir / "projects").glob(f"*/{session_id}.jsonl"))
 
-    def settings_json(self, workdir: Path) -> str:
-        """Keep the user's personal and parent-folder CLAUDE.md files out of vahtovik sessions.
-        The working folder's own CLAUDE.md still loads."""
+    def settings_json(self, spec: SessionSpec) -> str:
+        """Keep the user's personal and parent-folder CLAUDE.md files out of vahtovik sessions
+        (the working folder's own CLAUDE.md still loads), skip the bypassPermissions warning screen,
+        and give group sessions the hooks that keep their status (group_status.py)."""
         excludes = [str(Path.home() / ".claude" / "CLAUDE.md"), str(Path.home() / ".claude" / "rules" / "**")]
-        for parent in workdir.resolve().parents:
+        for parent in spec.workdir.resolve().parents:
             excludes += [str(parent / name) for name in ("CLAUDE.md", "CLAUDE.local.md", ".claude/CLAUDE.md")]
-        return json.dumps({"claudeMdExcludes": excludes})
+        settings = {"claudeMdExcludes": excludes, "skipDangerousModePermissionPrompt": True}
+        if spec.stage == "group":
+            settings["hooks"] = group_status.hooks()
+        return json.dumps(settings)
 
     def _common_args(self, spec: SessionSpec) -> list[str]:
         args = ["--model", spec.settings.model, "--permission-mode", "bypassPermissions",
-                "--settings", self.settings_json(spec.workdir)]
+                "--settings", self.settings_json(spec)]
         if spec.settings.effort:
             args += ["--effort", spec.settings.effort]
         if self.cfg.claude.auth == "api-key":

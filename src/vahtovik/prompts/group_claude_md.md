@@ -38,6 +38,15 @@ vahtovik report --channel <name> --subject "<subject>" <<'EOF'
 EOF
 ```
 
+## Ending every turn
+
+Whenever you finish working, at the end of an automated turn and after each reply to a person, run exactly one of:
+
+- `vahtovik turn finished`: you need nothing from a person;
+- `vahtovik turn waiting --question "<question>" [--question ...]`: you need a person's answer or action to go on. List every question that is still open.
+
+At the end of an automated turn, add `--importance <low|medium|high|critical> --summary "<the current state>"`, and write your Work log entry first. vahtovik does not let you stop before you run the command.
+
 ## Adding an artifact you found
 
 Write a JSON file into `artifacts/` that follows `$artifact_schema`. Set `group_key` to `$key`, or to another group's key if it belongs there. vahtovik registers it after your turn or session ends.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import shutil
@@ -13,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from . import config as config_mod
-from . import delivery, group_session, journal, skills, timer
+from . import delivery, group_session, group_status, journal, skills, timer
 from .claude_session import Claude
 from .config import Config, ConfigError
 from .stages import group_turn, monitor
@@ -144,6 +145,35 @@ def cmd_report(args) -> int:
     return 1
 
 
+def _session_group() -> tuple[str, str]:
+    watch, key = os.environ.get("VAHTOVIK_WATCH"), os.environ.get("VAHTOVIK_GROUP")
+    if not watch or not key:
+        raise ConfigError("run this inside a group session (VAHTOVIK_WATCH and VAHTOVIK_GROUP are not set)")
+    return watch, key
+
+
+def cmd_turn(args) -> int:
+    cfg, state = _load()
+    watch, key = _session_group()
+    print(group_status.declare(cfg, state, cfg.watch(watch), key, args.status, args.importance, args.summary,
+                               args.question, os.environ.get("VAHTOVIK_TURN")))
+    return 0
+
+
+def cmd_hook(args) -> int:
+    """Claude Code runs this for the hooks of group sessions (group_status.hooks)."""
+    _cfg, state = _load()
+    watch, key = _session_group()
+    data = json.loads(sys.stdin.read() or "{}")
+    if args.event == "prompt":
+        group_status.on_prompt(state, watch, key, data.get("session_id"))
+    else:
+        answer = group_status.on_stop(state, watch, key)
+        if answer:
+            print(json.dumps(answer))
+    return 0
+
+
 def cmd_status(args) -> int:
     cfg, state = _load()
     names = [args.watch] if args.watch else sorted(cfg.watches)
@@ -162,7 +192,11 @@ def cmd_status(args) -> int:
                 "SELECT status, COUNT(*) AS n FROM artifacts WHERE watch = ? AND group_key = ? GROUP BY status",
                 name, g["key"])}
             summary = ", ".join(f"{n} {s}" for s, n in sorted(counts.items()))
-            print(f"  group {g['key']}: {g['title']} | {summary} | session {g['session_id'] or 'none yet'}")
+            status = g["status"] + (f": {g['status_reason']}" if g["status_reason"] else "")
+            questions = json.loads(g["questions"] or "[]") if g["status"] == "waiting" else []
+            status += f", {plural(len(questions), 'open question')}" if questions else ""
+            print(f"  group {g['key']}: {g['title']} | {status} | {summary} | "
+                  f"session {g['session_id'] or 'none yet'}")
     failed = state.row("SELECT COUNT(*) AS n FROM deliveries WHERE status != 'sent'")["n"]
     day_ago = utc_iso(datetime.now(timezone.utc) - timedelta(days=1))
     cost = state.row("SELECT COALESCE(SUM(cost_usd), 0) AS c FROM sessions WHERE started_at >= ?", day_ago)["c"]
@@ -294,6 +328,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--group", help="default: $VAHTOVIK_GROUP")
     p.set_defaults(func=cmd_report)
 
+    p = sub.add_parser("turn", help="end your turn with your status (for agents in group sessions)")
+    p.add_argument("status", choices=["finished", "waiting"],
+                   help="finished: you need nothing from a person; waiting: you need an answer or action")
+    p.add_argument("--importance", choices=group_status.IMPORTANCE, help="required at the end of an automated turn")
+    p.add_argument("--summary", help="the current state in one or two sentences; required at the end of an automated turn")
+    p.add_argument("--question", action="append", default=[], help="an open question; repeat for each one")
+    p.set_defaults(func=cmd_turn)
+
+    p = sub.add_parser("hook", help=argparse.SUPPRESS)
+    p.add_argument("event", choices=["prompt", "stop"])
+    p.set_defaults(func=cmd_hook)
+
     p = sub.add_parser("status", help="show watches, groups and deliveries")
     p.add_argument("--watch")
     p.set_defaults(func=cmd_status)
@@ -327,7 +373,8 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)
-    except (ConfigError, delivery.DeliveryError, skills.SkillError, timer.TimerError) as exc:
+    except (ConfigError, delivery.DeliveryError, group_status.StatusError, skills.SkillError,
+            timer.TimerError) as exc:
         print(f"vahtovik: {exc}", file=sys.stderr)
         return 2
 

@@ -1,3 +1,4 @@
+import json
 import shutil
 
 from conftest import artifact, monitor_answer, report_action, turn_answer, work_log
@@ -37,7 +38,9 @@ def test_first_turn_creates_the_session_and_reports(project):
     assert "Hello from the agent." in (cfg.root / "data/outbox.md").read_text()
     assert "· log · sent" in (cfg.group_dir("w1", "g") / "context.md").read_text()
     turn = state.row("SELECT * FROM group_turns")
-    assert turn["ok"] == 1 and '"delivery_id": 1' in turn["output"]
+    assert turn["ok"] == 1 and json.loads(turn["output"])["status"] == "finished"
+    assert group["status"] == "finished"
+    assert "--settings" in call["args"] and "hook stop" in call["args"][call["args"].index("--settings") + 1]
 
 
 def test_next_turn_resumes_the_same_session(project):
@@ -75,17 +78,19 @@ def test_locked_group_is_skipped(project):
     assert state.row("SELECT status FROM artifacts WHERE id = 'a1'")["status"] == "new"
 
 
-def test_turn_without_work_log_is_retried_then_given_up(project):
+def test_turn_without_status_is_retried_then_given_up(project):
     _monitor(project, artifact("a1", "g"))
     for attempt in range(1, 4):
-        project.queue(turn_answer([]))
+        project.queue({"actions": [work_log()]})
         _cfg, state = _turns(project)
         row = state.row("SELECT status, attempts FROM artifacts WHERE id = 'a1'")
         assert row["attempts"] == attempt
     assert row["status"] == "failed"
     _turns(project)
     assert len(project.calls()) == 3  # no fourth attempt
-    assert "Work log" in state.row("SELECT error FROM group_turns ORDER BY started_at DESC LIMIT 1")["error"]
+    error = state.row("SELECT error FROM group_turns ORDER BY started_at DESC LIMIT 1")["error"]
+    assert error == "the agent stopped 4 times without running `vahtovik turn`"
+    assert state.group("w1", "g")["status"] == "failed"
 
 
 def test_agent_added_artifacts_are_registered_after_the_turn(project):

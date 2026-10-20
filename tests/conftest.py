@@ -31,7 +31,19 @@ class Project:
         self.queue_file.write_text(json.dumps(queue + list(responses)))
 
     def calls(self) -> list[dict]:
-        return [json.loads(line) for line in self.log_file.read_text().splitlines()] if self.log_file.exists() else []
+        return self._lines(self.log_file)
+
+    def hook_answers(self, event: str = "Stop") -> list[dict]:
+        """What vahtovik answered to each hook the fake claude ran."""
+        return [h["answer"] for h in self._lines(Path(f"{self.log_file}.hooks")) if h["event"] == event]
+
+    def command_runs(self) -> list[dict]:
+        """Commands the fake agent ran: the command, its exit code and output."""
+        return self._lines(Path(f"{self.log_file}.runs"))
+
+    @staticmethod
+    def _lines(path: Path) -> list[dict]:
+        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
 
     def load(self):
         cfg = config_mod.load(self.root)
@@ -104,9 +116,19 @@ def work_log(text: str = "Processed.") -> dict:
             "new": f"## Work log\n### 2026-10-17 10:00 · run test\n{text}\n"}
 
 
-def turn_answer(actions: list[dict], importance: str = "low") -> dict:
-    return {"actions": actions, "structured_output": {
-        "summary": "All good.", "importance": importance, "reports": "from-runs", "not_reported": []}}
+def status_action(status: str = "finished", importance: str | None = "low", summary: str | None = "All good.",
+                  questions: tuple[str, ...] = ()) -> dict:
+    args = ["vahtovik", "turn", status]
+    args += ["--importance", importance] if importance else []
+    args += ["--summary", summary] if summary else []
+    for question in questions:
+        args += ["--question", question]
+    return {"run": args}
+
+
+def turn_answer(actions: list[dict], importance: str = "low", **status) -> dict:
+    """A group turn that ends with `vahtovik turn`."""
+    return {"actions": [*actions, status_action(importance=importance, **status)]}
 
 
 def report_action(channel: str = "log", body: str = "Report body.") -> dict:

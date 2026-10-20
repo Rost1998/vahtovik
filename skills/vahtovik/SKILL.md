@@ -25,11 +25,21 @@ Your working folder is the folder the session starts in:
 
 ## context.md
 
-`context.md` is the permanent record of all work on the group. It has four sections:
+`context.md` is the permanent record of all work on the group. It has five sections:
 - **Summary**: yours. Rewrite it so it always describes the current state of the group.
+- **Open questions**: vahtovik's. The questions from your last `vahtovik turn waiting`. Do not edit it.
 - **Artifacts**: vahtovik's. One row per artifact. Do not edit it.
 - **Work log**: yours. Add one entry for each automated turn and for each piece of work with a person. Never delete entries. Head each entry `### YYYY-MM-DD HH:MM · run <run id>` for automated turns, or `### YYYY-MM-DD HH:MM · interactive` for work with a person.
 - **Reports**: vahtovik's. One line per delivery. Do not edit it.
+
+## Ending every turn
+
+Whenever you finish working, at the end of an automated turn and after each reply to a person, run exactly one command:
+
+- `vahtovik turn finished`: you need nothing from a person.
+- `vahtovik turn waiting --question "<question>" [--question "<question>" ...]`: you need a person's answer or action to go on. List every question that is still open, including earlier ones; they replace the Open questions in `context.md`. Put the questions in your report too, so the person sees them.
+
+At the end of an automated turn, also give `--importance <low|medium|high|critical>` and `--summary "<the current state in one or two sentences>"`, and write your Work log entry first. The command checks all this; if it prints an error, fix what it says and run it again. vahtovik does not let you stop before you run it.
 
 ## Reporting
 

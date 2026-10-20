@@ -39,6 +39,15 @@ CREATE TABLE IF NOT EXISTS deliveries (
     created_at TEXT, updated_at TEXT, sent_at TEXT);
 """
 
+# Columns added later. Opening an older database adds them.
+COLUMNS = {
+    "groups": {
+        "status": "TEXT DEFAULT 'idle'", "status_at": "TEXT", "status_reason": "TEXT", "questions": "TEXT",
+        "prompt_at": "TEXT", "idle": "INTEGER DEFAULT 1", "stop_blocks": "INTEGER DEFAULT 0",
+    },
+    "group_turns": {"artifact_ids": "TEXT", "work_log_before": "INTEGER"},
+}
+
 
 class State:
     def __init__(self, path: Path):
@@ -49,6 +58,15 @@ class State:
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(SCHEMA)
+        for table, columns in COLUMNS.items():
+            have = {r["name"] for r in self.rows(f"PRAGMA table_info({table})")}
+            for name, kind in columns.items():
+                if name not in have:
+                    try:
+                        self.execute(f"ALTER TABLE {table} ADD COLUMN {name} {kind}")
+                    except sqlite3.OperationalError as exc:  # another process added it first
+                        if "duplicate column" not in str(exc):
+                            raise
 
     def close(self) -> None:
         self.db.close()
@@ -129,6 +147,32 @@ class State:
             session_id, utc_iso(), watch, key,
         )
 
+    # group status (see group_status.py)
+
+    def set_status(self, watch: str, key: str, status: str, reason: str | None = None,
+                   questions: list[str] | None = None) -> None:
+        """Set the status; `questions` replaces the open questions when given."""
+        self.execute(
+            "UPDATE groups SET status = ?, status_at = ?, status_reason = ?, questions = COALESCE(?, questions) "
+            "WHERE watch = ? AND key = ?",
+            status, utc_iso(), reason, json.dumps(questions) if questions is not None else None, watch, key,
+        )
+
+    def prompt_submitted(self, watch: str, key: str) -> None:
+        now = utc_iso()
+        self.execute(
+            "UPDATE groups SET status = 'running', status_at = ?, status_reason = NULL, prompt_at = ?, idle = 0, "
+            "stop_blocks = 0 WHERE watch = ? AND key = ?",
+            now, now, watch, key,
+        )
+
+    def agent_stopped(self, watch: str, key: str) -> None:
+        self.execute("UPDATE groups SET idle = 1 WHERE watch = ? AND key = ?", watch, key)
+
+    def add_stop_block(self, watch: str, key: str) -> int:
+        self.execute("UPDATE groups SET stop_blocks = stop_blocks + 1 WHERE watch = ? AND key = ?", watch, key)
+        return self.group(watch, key)["stop_blocks"]
+
     # artifacts
 
     def artifact_exists(self, watch: str, artifact_id: str) -> bool:
@@ -191,11 +235,16 @@ class State:
             int(result.ok), result.error, str(result.raw_path) if result.raw_path else None,
         )
 
-    def start_turn(self, turn_id: str, run_id: str, watch: str, key: str) -> None:
+    def start_turn(self, turn_id: str, run_id: str, watch: str, key: str, artifact_ids: list[str],
+                   work_log_before: int) -> None:
         self.execute(
-            "INSERT INTO group_turns (id, run_id, watch, group_key, started_at) VALUES (?, ?, ?, ?, ?)",
-            turn_id, run_id, watch, key, utc_iso(),
+            "INSERT INTO group_turns (id, run_id, watch, group_key, started_at, artifact_ids, work_log_before) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            turn_id, run_id, watch, key, utc_iso(), json.dumps(artifact_ids), work_log_before,
         )
+
+    def turn(self, turn_id: str) -> sqlite3.Row | None:
+        return self.row("SELECT * FROM group_turns WHERE id = ?", turn_id)
 
     def finish_turn(self, turn_id: str, ok: bool, output: dict | None, error: str | None) -> None:
         self.execute(
