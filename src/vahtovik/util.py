@@ -5,6 +5,7 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
+import os
 import re
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -68,6 +69,13 @@ def load_schema(name: str) -> dict:
 
 def schema_path(name: str) -> Path:
     return Path(str(resources.files("vahtovik").joinpath("schemas", f"{name}.json")))
+
+
+def write_atomic(path: Path, text: str) -> None:
+    """Replace the file in one step, so a stopped run never leaves half a file."""
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(text)
+    os.replace(tmp, path)
 
 
 class LockBusy(Exception):

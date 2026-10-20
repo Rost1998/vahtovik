@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import shutil
-import tempfile
 from pathlib import Path
 
 import yaml
@@ -25,6 +24,12 @@ def _groups_text(state: State, watch: Watch) -> str:
     return "\n".join(f"- `{r['key']}`: {r['title']} (updated {r['updated_at'][:10]})" for r in rows) or "- none yet"
 
 
+def _restore(workdir: Path, backup: Path) -> None:
+    """Put the state folder back as it was before the session."""
+    shutil.rmtree(workdir, ignore_errors=True)
+    backup.rename(workdir)
+
+
 def run(cfg: Config, state: State, claude: Claude, watch: Watch, run_id: str, raw_dir: Path) -> int:
     main = skills.main_skill(cfg.skills_dir).body
     schema = load_schema("monitor")
@@ -38,6 +43,17 @@ def run(cfg: Config, state: State, claude: Claude, watch: Watch, run_id: str, ra
             state.source_failed(watch.name, source.id, str(exc))
             continue
         workdir = cfg.source_dir(watch.name, source.id)
+        # Source scripts move their "already seen" markers during the session, so vahtovik keeps a backup
+        # of the state folder until the new artifacts are saved. A backup found at the start means the last
+        # run stopped before that: put it back and monitor again. Artifacts saved already are dropped by id.
+        # Renames are atomic, so the backup folder only ever holds a whole copy.
+        backup = workdir.with_name(f".{workdir.name}.backup")
+        partial = workdir.with_name(f".{workdir.name}.partial")
+        shutil.rmtree(partial, ignore_errors=True)
+        if backup.exists():
+            _restore(workdir, backup)
+            log.warning("%s/%s: Restored the source state: the last run stopped before it saved the artifacts",
+                        watch.name, source.id)
         workdir.mkdir(parents=True, exist_ok=True)
         recent = state.recent_artifacts(watch.name, source.id)
         prompt = render(
@@ -56,23 +72,20 @@ def run(cfg: Config, state: State, claude: Claude, watch: Watch, run_id: str, ra
             scope=f"{watch.name}/{source.id}",
         )
         log.info("%s: Started monitoring (%s)", spec.scope, skill.name)
-        # Source scripts move their "last seen" markers during the session.
-        # If the session fails, put the state folder back so no item is lost.
-        with tempfile.TemporaryDirectory() as tmp:
-            backup = Path(tmp) / "state"
-            shutil.copytree(workdir, backup)
-            result = claude.run(spec, raw_dir)
-            state.log_session(run_id, "monitor", watch.name, source.id, result)
-            if not result.ok:
-                shutil.rmtree(workdir)
-                shutil.copytree(backup, workdir)
+        shutil.copytree(workdir, partial)
+        partial.rename(backup)
+        result = claude.run(spec, raw_dir)
+        state.log_session(run_id, "monitor", watch.name, source.id, result)
         if not result.ok:
+            _restore(workdir, backup)
             log.error("%s: Failed monitoring after %s: %s", spec.scope, duration(result.duration_s), result.error)
             state.source_failed(watch.name, source.id, result.error or "unknown error")
             continue
         found = result.output["artifacts"]
         new = sum(artifacts.register(cfg, state, watch, item, source.id) for item in found)
         state.source_ok(watch.name, source.id)
+        backup.rename(partial)  # from here a half-removed backup is never taken for a whole one
+        shutil.rmtree(partial)
         notes = result.output.get("notes", "").strip()
         log.info("%s: Finished monitoring in %s: %d found, %d new, $%.2f%s", spec.scope, duration(result.duration_s),
                  len(found), new, result.cost_usd, f" ({notes[:100]})" if notes else "")

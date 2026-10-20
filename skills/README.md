@@ -19,7 +19,7 @@ sources/<name>/scripts/...     optional
 - Secrets come from the watch's own `watches/<name>/.env`, or from the shared `.env`. A source's `env` in `watch.yaml` can fill a variable from a secret with another name.
 - The body tells the agent how to collect new items and what to use as the stable artifact id.
 - Scripts take the source parameters as arguments and a state folder (`--state-dir`) for snapshots or "last seen" markers, and print what is new, preferably as JSON.
-- In monitoring, the state folder is the session's working folder. If the session fails, vahtovik restores the folder, so no item is lost.
+- In monitoring, the state folder is the session's working folder. If the session fails, or the run stops before the new artifacts are saved, vahtovik puts the folder back as it was and monitors the source again, so no item is lost.
 
 ## Channel skill
 

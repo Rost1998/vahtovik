@@ -10,7 +10,7 @@ import jsonschema
 from . import context_file, groups
 from .config import Config, Watch
 from .state import State
-from .util import artifact_filename, group_key, load_schema, utc_iso
+from .util import artifact_filename, group_key, load_schema, utc_iso, write_atomic
 
 log = logging.getLogger(__name__)
 
@@ -28,10 +28,11 @@ def register(cfg: Config, state: State, watch: Watch, data: dict, source_id: str
     record = {f: data.get(f, "") for f in FIELDS}
     record.update(id=artifact_id, group_key=key, source_id=source_id, origin=origin, first_seen=utc_iso())
     filename = artifact_filename(artifact_id)
-    (group_dir / "artifacts" / filename).write_text(json.dumps(record, indent=2, ensure_ascii=False) + "\n")
-    state.add_artifact(watch.name, artifact_id, key, source_id, record["title"], record["url"], origin, status, filename)
+    write_atomic(group_dir / "artifacts" / filename, json.dumps(record, indent=2, ensure_ascii=False) + "\n")
     context_file.append(group_dir / "context.md", "Artifacts",
                         context_file.artifact_row(source_id, record["title"], record["url"]))
+    # The database row comes last: if the run stops before it, the artifact counts as unseen and is saved again.
+    state.add_artifact(watch.name, artifact_id, key, source_id, record["title"], record["url"], origin, status, filename)
     state.touch_group(watch.name, key)
     return True
 

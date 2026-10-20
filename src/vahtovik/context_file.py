@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from .util import human
+from .util import human, write_atomic
 
 TEMPLATE = """# {title}
 Watch: {watch} · Group key: {key} · Created: {created}
@@ -25,7 +25,7 @@ _Not processed yet._
 
 def create(path: Path, title: str, watch: str, key: str) -> None:
     if not path.exists():
-        path.write_text(TEMPLATE.format(title=title, watch=watch, key=key, created=human()))
+        write_atomic(path, TEMPLATE.format(title=title, watch=watch, key=key, created=human()))
 
 
 def _section(lines: list[str], name: str) -> tuple[int, int] | None:
@@ -52,7 +52,7 @@ def append(path: Path, section: str, text: str) -> None:
     if end < len(lines):
         new_lines.append("")
     lines[insert_at:end] = new_lines
-    path.write_text("\n".join(lines) + "\n")
+    write_atomic(path, "\n".join(lines) + "\n")
 
 
 def _cell(text: str) -> str:
