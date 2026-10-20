@@ -35,5 +35,6 @@ channels/<name>/send           executable; only vahtovik runs it
   - channel settings from `env` in `vahtovik.yaml`, and secrets from `.env`, as environment variables;
   - exit code 0 means delivered; the last line of stdout may hold a delivery identifier;
   - any other exit code is a failure, and stderr holds the reason;
-  - `VAHTOVIK_DRY_RUN=1` means do not send; print what would be sent to stderr and exit 0.
+  - `VAHTOVIK_DRY_RUN=1` means do not send; print what would be sent to stderr and exit 0;
+  - `VAHTOVIK_PLAIN=1` means the body is plain text from vahtovik itself, such as a notice that a group waits for an answer: if the channel uses markup, escape the body.
 - `send` runs in the vahtovik project folder with a 60-second timeout.

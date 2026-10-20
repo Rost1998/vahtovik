@@ -43,6 +43,12 @@ class TmuxSettings:
 
 
 @dataclass
+class WatchdogSettings:
+    every: timedelta = timedelta(minutes=1)  # how often a run that waits for a turn looks after the windows
+    notify_every: timedelta = timedelta(hours=6)  # repeat a notice this often; 0 never repeats
+
+
+@dataclass
 class Channel:
     name: str
     skill: str
@@ -116,6 +122,7 @@ class Config:
     skills_dir: Path
     watches_dir: Path
     tmux: TmuxSettings = field(default_factory=TmuxSettings)
+    watchdog: WatchdogSettings = field(default_factory=WatchdogSettings)
 
     def stage(self, watch: Watch | None, stage: str) -> StageSettings:
         merged: dict = {"model": self.claude.model}
@@ -233,6 +240,18 @@ def _load_tmux(raw: object) -> TmuxSettings:
     return settings
 
 
+def _load_watchdog(raw: object) -> WatchdogSettings:
+    if not isinstance(raw or {}, dict):
+        raise ConfigError("watchdog must be a mapping")
+    raw = raw or {}
+    settings = WatchdogSettings()
+    for name in ("every", "notify_every"):
+        if name in raw:
+            value = raw[name]
+            setattr(settings, name, timedelta(0) if value in (0, "0") else parse_interval(value))
+    return settings
+
+
 def _load_channels(raw: object) -> dict[str, Channel]:
     if not isinstance(raw or {}, dict):
         raise ConfigError("channels must be a mapping of channel name to settings")
@@ -300,4 +319,5 @@ def load(root: Path | None = None) -> Config:
         skills_dir=skills_dir,
         watches_dir=watches_dir,
         tmux=_load_tmux(raw.get("tmux")),
+        watchdog=_load_watchdog(raw.get("watchdog")),
     )

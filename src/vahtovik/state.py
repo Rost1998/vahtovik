@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS windows (
 COLUMNS = {
     "groups": {
         "status": "TEXT DEFAULT 'idle'", "status_at": "TEXT", "status_reason": "TEXT", "questions": "TEXT",
-        "prompt_at": "TEXT", "idle": "INTEGER DEFAULT 1", "stop_blocks": "INTEGER DEFAULT 0",
+        "prompt_at": "TEXT", "idle": "INTEGER DEFAULT 1", "stop_blocks": "INTEGER DEFAULT 0", "notified_at": "TEXT",
     },
     "group_turns": {"artifact_ids": "TEXT", "work_log_before": "INTEGER"},
 }
@@ -157,8 +157,8 @@ class State:
                    questions: list[str] | None = None) -> None:
         """Set the status; `questions` replaces the open questions when given."""
         self.execute(
-            "UPDATE groups SET status = ?, status_at = ?, status_reason = ?, questions = COALESCE(?, questions) "
-            "WHERE watch = ? AND key = ?",
+            "UPDATE groups SET status = ?, status_at = ?, status_reason = ?, questions = COALESCE(?, questions), "
+            "notified_at = NULL WHERE watch = ? AND key = ?",
             status, utc_iso(), reason, json.dumps(questions) if questions is not None else None, watch, key,
         )
 
@@ -166,7 +166,7 @@ class State:
         now = utc_iso()
         self.execute(
             "UPDATE groups SET status = 'running', status_at = ?, status_reason = NULL, prompt_at = ?, idle = 0, "
-            "stop_blocks = 0 WHERE watch = ? AND key = ?",
+            "stop_blocks = 0, notified_at = NULL WHERE watch = ? AND key = ?",
             now, now, watch, key,
         )
 
@@ -176,6 +176,17 @@ class State:
     def add_stop_block(self, watch: str, key: str) -> int:
         self.execute("UPDATE groups SET stop_blocks = stop_blocks + 1 WHERE watch = ? AND key = ?", watch, key)
         return self.group(watch, key)["stop_blocks"]
+
+    def set_notified(self, watch: str, key: str) -> None:
+        """A notice about the current status went out. Any status change clears this."""
+        self.execute("UPDATE groups SET notified_at = ? WHERE watch = ? AND key = ?", utc_iso(), watch, key)
+
+    def reported_since(self, watch: str, key: str, since: str | None) -> bool:
+        """Whether the agent sent a report (not a notice) for the group since that time."""
+        return self.row(
+            "SELECT 1 FROM deliveries WHERE watch = ? AND group_key = ? AND origin != 'notice' AND created_at >= ?",
+            watch, key, since or "",
+        ) is not None
 
     # artifacts
 

@@ -29,7 +29,7 @@ class SendResult:
 
 
 def run_send_script(cfg: Config, channel: str, subject: str, body: str, dry_run: bool,
-                    extra_env: dict[str, str] | None = None) -> SendResult:
+                    extra_env: dict[str, str] | None = None, plain: bool = False) -> SendResult:
     settings = cfg.channels[channel]
     try:
         skill = skills.load(cfg.skills_dir, "channels", settings.skill)
@@ -39,6 +39,8 @@ def run_send_script(cfg: Config, channel: str, subject: str, body: str, dry_run:
            "VAHTOVIK_CHANNEL": channel, "VAHTOVIK_SUBJECT": subject}
     if dry_run:
         env["VAHTOVIK_DRY_RUN"] = "1"
+    if plain:
+        env["VAHTOVIK_PLAIN"] = "1"
     try:
         proc = subprocess.run([str(skill.dir / "send")], input=body, text=True, capture_output=True,
                               cwd=cfg.root, env=env, timeout=SEND_TIMEOUT)
@@ -53,15 +55,17 @@ def run_send_script(cfg: Config, channel: str, subject: str, body: str, dry_run:
 
 def attempt(cfg: Config, state: State, delivery_id: int, dry_run: bool):
     row = state.delivery(delivery_id)
+    notice = row["origin"] == "notice"
     result = run_send_script(cfg, row["channel"], row["subject"], row["body"], dry_run,
-                             {"VAHTOVIK_WATCH": row["watch"], "VAHTOVIK_GROUP": row["group_key"]})
+                             {"VAHTOVIK_WATCH": row["watch"], "VAHTOVIK_GROUP": row["group_key"]}, plain=notice)
     state.update_delivery(delivery_id, result.ok, None if result.ok else result.detail,
                           result.detail if result.ok else None)
     context = cfg.group_dir(row["watch"], row["group_key"]) / "context.md"
     context_file.append(context, "Reports",
                         context_file.report_line(row["channel"], result.ok, result.detail, row["subject"], dry_run))
     row = state.delivery(delivery_id)
-    what = f"report {delivery_id} to {row['channel']}" + (f' "{row["subject"]}"' if row["subject"] else "")
+    what = f"{'notice' if notice else 'report'} {delivery_id} to {row['channel']}"
+    what += f' "{row["subject"]}"' if row["subject"] else ""
     what += " (dry run)" if dry_run else ""
     if result.ok:
         log.info("%s/%s: Sent %s", row["watch"], row["group_key"], what)

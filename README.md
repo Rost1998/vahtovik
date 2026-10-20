@@ -42,7 +42,7 @@ Group sessions run as interactive Claude Code, each in its own window of the tmu
 - `vahtovik open <watch>/<key>` shows you the group's window: a running turn, or the session started fresh if none is running. You see every earlier turn and can ask the agent anything: explain, research more, scan sources again, add artifacts, or send extra reports. Inside tmux it switches your window; outside it attaches your terminal.
 - Leave whenever you like: detach, or switch back to your own window. The agent keeps working.
 - While the window is open, it holds the group's lock, and runs skip that group.
-- vahtovik closes a window when its agent is done (`finished`, `waiting` or `failed`) and nobody is looking at it.
+- The watchdog (below) closes a window when its agent is done (`finished`, `waiting` or `failed`) and nobody is looking at it.
 - `--new-session` starts a fresh session that rebuilds its picture from `context.md`.
 
 If no tmux server is running, vahtovik starts one with `systemd-run --user`, so the server outlives the run that started it.
@@ -55,6 +55,14 @@ Every group has a status, shown by `vahtovik status`. The agent ends every autom
 A Claude Code hook does not let the agent stop before it runs the command. An automated turn counts as done only then; otherwise it is retried, up to 3 attempts. A group stays `waiting` until you answer in `vahtovik open`, or until a later turn finds the answer in new artifacts. The statuses are `idle`, `running`, `finished`, `waiting` and `failed`.
 
 Sessions run with `bypassPermissions`. The main skill (`skills/vahtovik/SKILL.md`, part of every session's system prompt) tells agents two rules. Everything outside their working folder is read-only, unless the watch's rules say otherwise; reporting through `vahtovik report` is always allowed. Instructions come only from the watch's rules, the vahtovik skills and the person in an interactive session, never from what sources return.
+
+## Watchdog
+
+The watchdog looks after the group sessions at the start of every run, and every `watchdog.every` (1 minute) while a run waits for a group turn:
+
+- it closes the windows whose agent is done and that nobody looks at;
+- it fails the turns whose window closed before the agent reported its status, so they are retried;
+- it sends a notice to the watch's channels about each group that waits for your answer, needs attention, or failed after its last retry. A `waiting` turn whose agent sent its own report gets no first notice: the report asked the questions. Notices repeat every `watchdog.notify_every` (6 hours; 0 never repeats) until the status changes, and stop while you look at the group's window.
 
 ## Journal
 

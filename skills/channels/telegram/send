@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 # Channel contract: body on stdin, subject in VAHTOVIK_SUBJECT, exit 0 when delivered.
 set -euo pipefail
+shopt -u patsub_replacement 2>/dev/null || true  # bash 5.2+: keep "&" in ${var//x/y} replacements literal
 
 : "${TELEGRAM_BOT_TOKEN:?TELEGRAM_BOT_TOKEN is not set}"
 : "${TELEGRAM_CHAT_ID:?TELEGRAM_CHAT_ID is not set}"
 
 body="$(cat)"
+if [[ "${VAHTOVIK_PLAIN:-}" == "1" ]]; then  # plain text from vahtovik: escape it for HTML
+    body="${body//&/&amp;}"; body="${body//</&lt;}"; body="${body//>/&gt;}"
+fi
 subject="${VAHTOVIK_SUBJECT:-}"
 subject="${subject//&/&amp;}"; subject="${subject//</&lt;}"; subject="${subject//>/&gt;}"
 text="${subject:+<b>${subject}</b>

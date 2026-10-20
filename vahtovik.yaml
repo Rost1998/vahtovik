@@ -12,6 +12,10 @@ tmux:                         # group sessions run in windows of this tmux sessi
   session: vahtovik-agents
   socket: null                # null: your default tmux server; a name: a separate server (tmux -L <name>)
 
+watchdog:                     # looks after the group session windows (see README)
+  every: 1m                   # how often, while a run waits for a group turn
+  notify_every: 6h            # repeat a notice about a group that waits for you or needs attention; 0: never
+
 channels:
   local-log:
     skill: file
