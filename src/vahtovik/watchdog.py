@@ -1,6 +1,7 @@
 """The watchdog looks after the group sessions: at the start of every run, and every `watchdog.every`
-while a run waits for a turn. It closes finished windows, fails turns whose window is gone, and notifies
-the watch's channels about groups that wait for a person or need attention."""
+while a run waits for a turn. It closes finished windows, fails turns whose window is gone, asks an AI
+session about working sessions that show no activity, and notifies the watch's channels about groups that
+wait for a person or need attention."""
 
 from __future__ import annotations
 
@@ -10,11 +11,13 @@ import os
 import time
 from datetime import datetime, timedelta, timezone
 
-from . import artifacts, delivery, groups, windows
+from . import artifacts, delivery, groups, skills, windows
+from .claude_session import Claude, SessionSpec
 from .config import Config, ConfigError, Watch
 from .stages import group_turn
 from .state import State
-from .tmux import Tmux
+from .tmux import Tmux, Window
+from .util import duration, human, load_schema, plural, render
 
 log = logging.getLogger(__name__)
 
@@ -22,8 +25,9 @@ GRACE = timedelta(minutes=1)  # a new window is left alone this long, so a perso
 DONE = ("finished", "waiting", "failed")
 
 
-def tick(cfg: Config, state: State, tmux: Tmux) -> None:
+def tick(cfg: Config, state: State, tmux: Tmux, claude: Claude | None = None, run_id: str | None = None) -> None:
     tidy(cfg, state, tmux)
+    look(cfg, state, tmux, claude or Claude(cfg), run_id)
     notify(cfg, state, tmux)
 
 
@@ -36,7 +40,7 @@ def tidy(cfg: Config, state: State, tmux: Tmux) -> None:
         group = state.group(watch, key)
         if group is None or window.clients or windows.age(state, watch, key) < GRACE:
             continue
-        if group["idle"] and group["status"] in DONE:
+        if group["status"] == "failed" or (group["idle"] and group["status"] in DONE):
             tmux.close(window.id)
             open_refs.discard(window.ref)
             log.info("%s: Closed the session window: status %s", window.ref, group["status"])
@@ -49,6 +53,85 @@ def tidy(cfg: Config, state: State, tmux: Tmux) -> None:
             started = datetime.fromisoformat(turn["started_at"])
             group_turn.fail(state, turn, windows.exit_error(state, turn["watch"], turn["group_key"]),
                             (datetime.now(timezone.utc) - started).total_seconds())
+
+
+def _last_activity(state: State, claude: Claude, watch: str, key: str, group) -> datetime:
+    """The latest sign of life: the window's start, a prompt or status, the previous look, or a change
+    of the session's conversation file. (The screen is no sign: a status line may change by itself.)"""
+    record = state.window_record(watch, key)
+    times = [datetime.fromisoformat(t) for t in (group["prompt_at"], group["status_at"],
+                                                 record and record["started_at"], record and record["checked_at"]) if t]
+    path = claude.session_file(group["session_id"])
+    if path:
+        times.append(datetime.fromtimestamp(path.stat().st_mtime, timezone.utc))
+    return max(times, default=datetime.now(timezone.utc))
+
+
+def look(cfg: Config, state: State, tmux: Tmux, claude: Claude, run_id: str | None) -> None:
+    """Ask the watchdog AI about the working sessions that showed no activity for `stale_after`."""
+    now = datetime.now(timezone.utc)
+    quiet: dict[str, tuple[Window, timedelta]] = {}
+    for window in tmux.windows():
+        watch, key = groups.parse_ref(window.ref)
+        group = state.group(watch, key)
+        if window.clients or group is None or group["status"] != "running":
+            continue
+        idle_for = now - _last_activity(state, claude, watch, key, group)
+        if idle_for >= cfg.watchdog.stale_after:
+            quiet[window.ref] = (window, idle_for)
+    if not quiet:
+        return
+    skill = skills.watchdog_skill(cfg.skills_dir)
+    screens = {str(s["id"]): s for s in skill.meta.get("screens") or []}
+    sessions = []
+    for ref, (window, idle_for) in quiet.items():
+        screen = "\n".join(tmux.capture(window.id).rstrip().splitlines()[-80:])
+        sessions.append(f"### `{ref}`\n\nNo activity for {duration(idle_for.total_seconds())}. "
+                        f"The screen:\n\n```text\n{screen}\n```")
+        state.window_checked(*groups.parse_ref(ref))
+    workdir = cfg.data_dir / "watchdog"
+    workdir.mkdir(parents=True, exist_ok=True)
+    spec = SessionSpec(
+        stage="watchdog", workdir=workdir, settings=cfg.stage(None, "watchdog"), schema=load_schema("watchdog"),
+        system_prompt=skill.body, mode="throwaway", scope="watchdog",
+        prompt=render("watchdog.md", now=human(), example=next(iter(quiet)), sessions="\n\n".join(sessions),
+                      screens="\n".join(f"- `{i}`: {s['looks_like']}" for i, s in screens.items()) or "- none"),
+    )
+    log.info("Watchdog: Started a look at %s: %s", plural(len(quiet), "quiet session"), ", ".join(quiet))
+    result = claude.run(spec, cfg.runs_dir(run_id or "watchdog"))
+    state.log_session(run_id, "watchdog", "", "watchdog", result)
+    if not result.ok:
+        log.error("Watchdog: Failed a look after %s: %s", duration(result.duration_s), result.error)
+        return
+    for answer in result.output["sessions"]:
+        if answer["group"] in quiet:
+            _act(state, tmux, quiet[answer["group"]][0], answer, screens)
+    log.info("Watchdog: Finished a look in %s, $%.2f", duration(result.duration_s), result.cost_usd)
+
+
+def _act(state: State, tmux: Tmux, window: Window, answer: dict, screens: dict) -> None:
+    watch, key = groups.parse_ref(window.ref)
+    action, reason = answer["action"], " ".join(answer["reason"].split())
+    if action == "press":
+        screen = screens.get(answer.get("screen_id") or "")
+        current = tmux.window(window.ref)
+        if screen is None:
+            action, reason = "maintenance", f"a screen that is not on the known list: {reason}"
+        elif current is None or current.id != window.id or current.clients:
+            return  # it closed, or a person came to look
+        else:
+            keys = [str(k) for k in screen["keys"]]
+            tmux.send_keys(window.id, keys)
+            log.info("%s: Watchdog pressed %s on the screen %s: %s", window.ref, " ".join(keys), screen["id"], reason)
+            return
+    if action == "maintenance":
+        state.set_status(watch, key, "maintenance", reason)
+        log.warning("%s: Needs a person: %s", window.ref, reason)
+    elif action == "failed":
+        state.set_status(watch, key, "failed", reason)
+        log.error("%s: Watchdog found the session broken: %s", window.ref, reason)
+    else:
+        log.info("%s: Watchdog found it still working: %s", window.ref, reason)
 
 
 def notify(cfg: Config, state: State, tmux: Tmux) -> None:
@@ -94,11 +177,11 @@ def _send_notice(cfg: Config, state: State, watch: Watch, group) -> None:
 class Ticker:
     """`tick` at most every `watchdog.every`, for the loop that waits for a turn."""
 
-    def __init__(self, cfg: Config, state: State, tmux: Tmux):
-        self.cfg, self.state, self.tmux = cfg, state, tmux
+    def __init__(self, cfg: Config, state: State, tmux: Tmux, claude: Claude, run_id: str):
+        self.cfg, self.state, self.tmux, self.claude, self.run_id = cfg, state, tmux, claude, run_id
         self.last = time.monotonic()
 
     def __call__(self) -> None:
         if time.monotonic() - self.last >= self.cfg.watchdog.every.total_seconds():
             self.last = time.monotonic()
-            tick(self.cfg, self.state, self.tmux)
+            tick(self.cfg, self.state, self.tmux, self.claude, self.run_id)

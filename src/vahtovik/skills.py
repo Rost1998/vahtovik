@@ -1,4 +1,4 @@
-"""Find and read skills: skills/vahtovik (main), skills/sources/*, skills/channels/*."""
+"""Find and read skills: skills/vahtovik (main), skills/watchdog, skills/sources/*, skills/channels/*."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import yaml
 
 KINDS = ("sources", "channels")
 MAIN_SKILL = "vahtovik"
+WATCHDOG_SKILL = "watchdog"
 
 
 class SkillError(Exception):
@@ -61,6 +62,10 @@ def load(skills_dir: Path, kind: str, name: str) -> Skill:
 
 def main_skill(skills_dir: Path) -> Skill:
     return _read("main", MAIN_SKILL, skills_dir / MAIN_SKILL)
+
+
+def watchdog_skill(skills_dir: Path) -> Skill:
+    return _read("watchdog", WATCHDOG_SKILL, skills_dir / WATCHDOG_SKILL)
 
 
 def available(skills_dir: Path, kind: str) -> list[str]:

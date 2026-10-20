@@ -7,6 +7,7 @@ claude:
   stages:                     # defaults per stage; a watch can override them in its watch.yaml
     monitor: {effort: medium, max_budget_usd: 0.50}
     group:   {effort: high}     # group sessions are interactive: max_budget_usd does not apply to them
+    watchdog: {model: claude-haiku-5-5, effort: low, max_budget_usd: 0.20}
 
 tmux:                         # group sessions run in windows of this tmux session; `vahtovik open` shows you one
   session: vahtovik-agents
@@ -15,6 +16,7 @@ tmux:                         # group sessions run in windows of this tmux sessi
 watchdog:                     # looks after the group session windows (see README)
   every: 1m                   # how often, while a run waits for a group turn
   notify_every: 6h            # repeat a notice about a group that waits for you or needs attention; 0: never
+  stale_after: 5m             # a working session with no activity this long gets a look from the watchdog AI
 
 channels:
   local-log:

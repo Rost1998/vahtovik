@@ -78,8 +78,12 @@ class Claude:
         folder = folder.resolve()
         return any((projects.get(str(p)) or {}).get("hasTrustDialogAccepted") for p in (folder, *folder.parents))
 
+    def session_file(self, session_id: str | None) -> Path | None:
+        """The file where Claude Code keeps the session's conversation."""
+        return next((self.config_dir / "projects").glob(f"*/{session_id}.jsonl"), None) if session_id else None
+
     def session_exists(self, session_id: str | None) -> bool:
-        return bool(session_id) and any((self.config_dir / "projects").glob(f"*/{session_id}.jsonl"))
+        return self.session_file(session_id) is not None
 
     def settings_json(self, spec: SessionSpec) -> str:
         """Keep the user's personal and parent-folder CLAUDE.md files out of vahtovik sessions

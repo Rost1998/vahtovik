@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from datetime import timedelta
 from pathlib import Path
 
@@ -13,6 +14,7 @@ import yaml
 from vahtovik import config as config_mod
 from vahtovik import watchdog, windows
 from vahtovik.claude_session import Claude
+from vahtovik.group_session import spec_for
 from vahtovik.state import State
 from vahtovik.tmux import Tmux
 
@@ -124,7 +126,7 @@ def artifact(item_id: str, group: str, title: str | None = None) -> dict:
 
 
 def monitor_answer(*items: dict) -> dict:
-    return {"structured_output": {"artifacts": list(items), "notes": ""}}
+    return {"mode": "print", "structured_output": {"artifacts": list(items), "notes": ""}}
 
 
 def work_log(text: str = "Processed.") -> dict:
@@ -144,8 +146,31 @@ def status_action(status: str = "finished", importance: str | None = "low", summ
 
 def turn_answer(actions: list[dict], importance: str = "low", **status) -> dict:
     """A group turn that ends with `vahtovik turn`."""
-    return {"actions": [*actions, status_action(importance=importance, **status)]}
+    return {"mode": "interactive", "actions": [*actions, status_action(importance=importance, **status)]}
 
 
 def report_action(channel: str = "log", body: str = "Report body.") -> dict:
     return {"run": ["vahtovik", "report", "--channel", channel, "--subject", "Test report"], "stdin": body}
+
+
+def until(condition, timeout: float = 15.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if condition():
+            return
+        time.sleep(0.05)
+    raise AssertionError("timed out")
+
+
+def launch_turn(cfg, state, claude, tmux, turn_id: str = "t1") -> str:
+    """Start the window of a turn for group w1/g, without waiting for it."""
+    spec, _ = spec_for(cfg, claude, state, cfg.watch("w1"), "g")
+    spec.prompt = "Process."
+    spec.env["VAHTOVIK_TURN"] = turn_id
+    state.start_turn(turn_id, "run1", "w1", "g", ["a1"], 0)
+    state.prompt_submitted("w1", "g")
+    return windows.launch(cfg, state, tmux, claude, spec, "turn", turn_id)
+
+
+def watchdog_answer(*sessions: dict) -> dict:
+    return {"mode": "print", "structured_output": {"sessions": list(sessions)}}

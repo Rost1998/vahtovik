@@ -78,8 +78,8 @@ def _running(lock: Path) -> str:
 
 
 def _run(cfg: Config, state: State, args, run_id: str) -> int:
-    tmux = Tmux(cfg)
-    watchdog.tick(cfg, state, tmux)
+    tmux, claude = Tmux(cfg), Claude(cfg)
+    watchdog.tick(cfg, state, tmux, claude, run_id)
     now = datetime.now(timezone.utc)
     watches = [cfg.watch(args.watch)] if args.watch else [w for w in cfg.watches.values() if w.enabled]
     due = [w for w in watches if args.force or _due(state, w, now)] if args.stage != "deliver" else []
@@ -93,7 +93,6 @@ def _run(cfg: Config, state: State, args, run_id: str) -> int:
              f" ({', '.join(flags)})" if flags else "")
     started = time.monotonic()
     raw_dir = cfg.runs_dir(run_id)
-    claude = Claude(cfg)
     new = 0
     state.start_run(run_id)
     status = "ok"
@@ -102,7 +101,8 @@ def _run(cfg: Config, state: State, args, run_id: str) -> int:
             if args.stage in (None, "monitor"):
                 new += monitor.run(cfg, state, claude, watch, run_id, raw_dir)
             if args.stage in (None, "group"):
-                group_turn.run(cfg, state, claude, tmux, watch, run_id, watchdog.Ticker(cfg, state, tmux))
+                ticker = watchdog.Ticker(cfg, state, tmux, claude, run_id)
+                group_turn.run(cfg, state, claude, tmux, watch, run_id, ticker)
             if args.stage is None:
                 state.set_last_run(watch.name)
         if args.stage in (None, "deliver"):

@@ -50,6 +50,7 @@ COLUMNS = {
         "prompt_at": "TEXT", "idle": "INTEGER DEFAULT 1", "stop_blocks": "INTEGER DEFAULT 0", "notified_at": "TEXT",
     },
     "group_turns": {"artifact_ids": "TEXT", "work_log_before": "INTEGER"},
+    "windows": {"checked_at": "TEXT"},
 }
 
 
@@ -290,6 +291,9 @@ class State:
             "UPDATE windows SET ended_at = ?, exit_code = ?, exit_screen = ? WHERE watch = ? AND group_key = ?",
             utc_iso(), exit_code, screen, watch, key,
         )
+
+    def window_checked(self, watch: str, key: str) -> None:
+        self.execute("UPDATE windows SET checked_at = ? WHERE watch = ? AND group_key = ?", utc_iso(), watch, key)
 
     def window_record(self, watch: str, key: str) -> sqlite3.Row | None:
         return self.row("SELECT * FROM windows WHERE watch = ? AND group_key = ?", watch, key)

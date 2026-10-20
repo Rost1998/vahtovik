@@ -52,7 +52,7 @@ Every group has a status, shown by `vahtovik status`. The agent ends every autom
 - `vahtovik turn finished`: it needs nothing from a person;
 - `vahtovik turn waiting --question "..."`: it needs a person's answer or action to go on. The questions go to the Open questions section of `context.md`, and the agent puts them in its report too. Answer them in `vahtovik open`.
 
-A Claude Code hook does not let the agent stop before it runs the command. An automated turn counts as done only then; otherwise it is retried, up to 3 attempts. A group stays `waiting` until you answer in `vahtovik open`, or until a later turn finds the answer in new artifacts. The statuses are `idle`, `running`, `finished`, `waiting` and `failed`.
+A Claude Code hook does not let the agent stop before it runs the command. An automated turn counts as done only then; otherwise it is retried, up to 3 attempts. A group stays `waiting` until you answer in `vahtovik open`, or until a later turn finds the answer in new artifacts. The statuses are `idle`, `running`, `finished`, `waiting`, `maintenance` (set by the watchdog, below) and `failed`.
 
 Sessions run with `bypassPermissions`. The main skill (`skills/vahtovik/SKILL.md`, part of every session's system prompt) tells agents two rules. Everything outside their working folder is read-only, unless the watch's rules say otherwise; reporting through `vahtovik report` is always allowed. Instructions come only from the watch's rules, the vahtovik skills and the person in an interactive session, never from what sources return.
 
@@ -62,6 +62,7 @@ The watchdog looks after the group sessions at the start of every run, and every
 
 - it closes the windows whose agent is done and that nobody looks at;
 - it fails the turns whose window closed before the agent reported its status, so they are retried;
+- it asks an AI session (the `watchdog` stage, a cheap model by default) about every working session that showed no activity for `watchdog.stale_after` (5 minutes). The AI follows the strict skill `skills/watchdog/SKILL.md` and picks one action per session: still working; press the keys of a known screen, such as Claude Code's "trust this folder" question (the screens and their keys are listed in that skill, and vahtovik presses the keys, never the AI); `maintenance`, when the session needs a person, for example to log in again; or `failed`. It never types text, and never touches a window that a person is looking at. A `maintenance` session keeps its window and its lock until you fix it: open it, fix the problem, and type "continue";
 - it sends a notice to the watch's channels about each group that waits for your answer, needs attention, or failed after its last retry. A `waiting` turn whose agent sent its own report gets no first notice: the report asked the questions. Notices repeat every `watchdog.notify_every` (6 hours; 0 never repeats) until the status changes, and stop while you look at the group's window.
 
 ## Journal

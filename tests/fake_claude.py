@@ -8,11 +8,12 @@ and performs the response's actions in the working folder (their results go to $
 - Without -p (interactive, in a tmux window), the prompt is the last argument. Then each line typed into the
   window is the next prompt (logged to $FAKE_CLAUDE_LOG.typed); end of input exits.
 
-Response keys: "actions"; "on_block" (actions run when a Stop hook blocks the first time); "exit" (exit code,
+Response keys: "mode" ("print" or "interactive": only a session in that mode takes the response); "actions"; "on_block" (actions run when a Stop hook blocks the first time); "exit" (exit code,
 right after the actions); "screen" (interactive: show this text and wait for a line of keys, as a startup
 screen does, before the prompt); "hang" (interactive: stop responding after the prompt hook).
 """
 
+import fcntl
 import json
 import os
 import subprocess
@@ -53,7 +54,7 @@ def main() -> int:
     session = Session(json.loads(options.get("--settings") or "{}"), resume or new or str(uuid.uuid4()), not printing)
 
     if printing:
-        response = _pop()
+        response = _pop("print")
         if response is None:
             print("fake claude: no prepared response", file=sys.stderr)
             return 1
@@ -70,7 +71,7 @@ def main() -> int:
     print(f"fake claude, session {session.id[:8]}", flush=True)
     while True:
         if prompt:
-            response = _pop()
+            response = _pop("interactive")
             if response is None:
                 print("fake claude: no prepared response", flush=True)
             else:
@@ -144,14 +145,18 @@ def perform(actions: list[dict]) -> None:
             _log(".runs", {"run": action["run"], "code": proc.returncode, "out": proc.stdout + proc.stderr})
 
 
-def _pop() -> dict | None:
+def _pop(mode: str) -> dict | None:
+    """The first prepared response for this mode. A lock keeps sessions running at once apart."""
     queue_path = Path(os.environ["FAKE_CLAUDE_QUEUE"])
-    queue = json.loads(queue_path.read_text()) if queue_path.exists() else []
-    if not queue:
-        return None
-    response = queue.pop(0)
-    queue_path.write_text(json.dumps(queue))
-    return response
+    with open(f"{queue_path}.lock", "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        queue = json.loads(queue_path.read_text()) if queue_path.exists() else []
+        for index, response in enumerate(queue):
+            if response.get("mode", mode) == mode:
+                queue.pop(index)
+                queue_path.write_text(json.dumps(queue))
+                return response
+    return None
 
 
 def _log(suffix: str, record: dict) -> None:
