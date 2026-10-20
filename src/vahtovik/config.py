@@ -47,6 +47,7 @@ class WatchdogSettings:
     every: timedelta = timedelta(minutes=1)  # how often a run that waits for a turn looks after the windows
     notify_every: timedelta = timedelta(hours=6)  # repeat a notice this often; 0 never repeats
     stale_after: timedelta = timedelta(minutes=5)  # a working session quiet this long gets a look from the AI
+    long_turn_after: timedelta = timedelta(hours=3)  # warn once about a turn running this long; 0 never warns
 
 
 @dataclass
@@ -246,7 +247,7 @@ def _load_watchdog(raw: object) -> WatchdogSettings:
         raise ConfigError("watchdog must be a mapping")
     raw = raw or {}
     settings = WatchdogSettings()
-    for name in ("every", "notify_every", "stale_after"):
+    for name in ("every", "notify_every", "stale_after", "long_turn_after"):
         if name in raw:
             value = raw[name]
             setattr(settings, name, timedelta(0) if value in (0, "0") else parse_interval(value))

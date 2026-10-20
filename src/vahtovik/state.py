@@ -49,8 +49,9 @@ COLUMNS = {
         "status": "TEXT DEFAULT 'idle'", "status_at": "TEXT", "status_reason": "TEXT", "questions": "TEXT",
         "prompt_at": "TEXT", "idle": "INTEGER DEFAULT 1", "stop_blocks": "INTEGER DEFAULT 0", "notified_at": "TEXT",
     },
-    "group_turns": {"artifact_ids": "TEXT", "work_log_before": "INTEGER"},
+    "group_turns": {"artifact_ids": "TEXT", "work_log_before": "INTEGER", "long_warned_at": "TEXT"},
     "windows": {"checked_at": "TEXT"},
+    "deliveries": {"given_up_warned_at": "TEXT"},
 }
 
 

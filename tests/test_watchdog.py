@@ -4,7 +4,7 @@ import logging
 import yaml
 from conftest import artifact, launch_turn, status_action, until, watchdog_answer, work_log
 
-from vahtovik import artifacts, watchdog
+from vahtovik import artifacts, delivery, watchdog
 from vahtovik.stages import group_turn
 from vahtovik.tmux import Tmux, Window
 
@@ -124,3 +124,37 @@ def test_failed_watchdog_session_changes_nothing(project, caplog):
     assert any(m.startswith("Watchdog: Failed a look after") and m.endswith("no network") for m in caplog.messages)
     cost = state.row("SELECT stage, ok FROM sessions WHERE stage = 'watchdog'")
     assert (cost["stage"], cost["ok"]) == ("watchdog", 0)
+
+
+def test_long_turn_is_reported_once(project, caplog):
+    cfg, state, claude, tmux = _setup(project, stale_after="1h", long_turn_after="3h")
+    project.queue({"mode": "interactive", "hang": True})
+    launch_turn(cfg, state, claude, tmux)
+    watchdog.tick(cfg, state, tmux, claude, "run1")
+    state.execute("UPDATE group_turns SET started_at = datetime('now', '-4 hours') || '+00:00'")
+    watchdog.tick(cfg, state, tmux, claude, "run1")
+    watchdog.tick(cfg, state, tmux, claude, "run1")
+    notice, = state.rows("SELECT * FROM deliveries WHERE origin = 'notice'")
+    assert notice["subject"] == "Long turn: G" and notice["body"].startswith("w1/g has been working on one turn for 4h00m")
+    assert "w1/g: Long group turn: running for 4h00m" in caplog.messages
+
+
+def test_given_up_report_is_told_through_the_other_channels_once(project, caplog):
+    cfg, state, claude, tmux = _setup(project)
+    path = project.root / "watches/w1/watch.yaml"
+    data = yaml.safe_load(path.read_text())
+    data["channels"] = ["broken", "log"]
+    path.write_text(yaml.safe_dump(data))
+    cfg, state, claude = project.load()
+    delivery.report(cfg, state, "w1", "g", "broken", "Weekly digest", "<b>All</b> is fine.", "automated")
+    for _ in range(delivery.MAX_ATTEMPTS - 1):
+        delivery.retry_failed(cfg, state, False)
+    watchdog.tick(cfg, state, tmux, claude, "run1")
+    watchdog.tick(cfg, state, tmux, claude, "run1")
+    notice, = state.rows("SELECT * FROM deliveries WHERE origin = 'notice'")
+    assert (notice["channel"], notice["status"]) == ("log", "sent")
+    assert notice["subject"] == "Report not delivered: Weekly digest"
+    assert notice["body"].startswith("vahtovik could not send report 1 of w1/g to broken and stopped retrying "
+                                     "after 5 attempts. Last error: boom")
+    assert notice["body"].endswith('The report, "Weekly digest":\n<b>All</b> is fine.')
+    assert "w1/g: Gave up report 1 to broken after 5 attempts: boom" in caplog.messages

@@ -29,6 +29,8 @@ def tick(cfg: Config, state: State, tmux: Tmux, claude: Claude | None = None, ru
     tidy(cfg, state, tmux)
     look(cfg, state, tmux, claude or Claude(cfg), run_id)
     notify(cfg, state, tmux)
+    warn_long_turns(cfg, state, tmux)
+    warn_given_up_reports(cfg, state)
 
 
 def tidy(cfg: Config, state: State, tmux: Tmux) -> None:
@@ -166,12 +168,59 @@ def _send_notice(cfg: Config, state: State, watch: Watch, group) -> None:
     else:
         subject = f"Failed: {group['title']}"
         body = f"{ref} failed, and vahtovik stopped retrying: {group['status_reason']}"
-    body += f"\n\nOpen its session: vahtovik open {ref}"
-    if not watch.channels:
-        log.warning("%s: Skipped notice \"%s\": the watch has no channels", ref, subject)
-    for channel in watch.channels:
+    _send(cfg, state, watch, key, watch.channels, subject, body + f"\n\nOpen its session: vahtovik open {ref}")
+
+
+def _send(cfg: Config, state: State, watch: Watch, key: str, channels: list[str], subject: str, body: str) -> None:
+    if not channels:
+        log.warning("%s/%s: Skipped notice \"%s\": no channel to send it to", watch.name, key, subject)
+    for channel in channels:
         delivery.report(cfg, state, watch.name, key, channel, subject, body, "notice",
                         dry_run=os.environ.get("VAHTOVIK_DRY_RUN") == "1")
+
+
+def warn_long_turns(cfg: Config, state: State, tmux: Tmux) -> None:
+    """Warn once about each turn that runs longer than `long_turn_after`: sessions have no time limit."""
+    limit = cfg.watchdog.long_turn_after
+    if not limit:
+        return
+    now = datetime.now(timezone.utc)
+    for turn in state.unfinished_turns():
+        ref = f"{turn['watch']}/{turn['group_key']}"
+        running = now - datetime.fromisoformat(turn["started_at"])
+        if turn["long_warned_at"] or running < limit or turn["watch"] not in cfg.watches:
+            continue
+        state.execute("UPDATE group_turns SET long_warned_at = ? WHERE id = ?", now.isoformat(timespec="seconds"),
+                      turn["id"])
+        log.warning("%s: Long group turn: running for %s", ref, duration(running.total_seconds()))
+        window = tmux.window(ref)
+        if window and window.clients:
+            continue  # a person is looking at it
+        title = (state.group(turn["watch"], turn["group_key"]) or {"title": ref})["title"]
+        _send(cfg, state, cfg.watches[turn["watch"]], turn["group_key"], cfg.watches[turn["watch"]].channels,
+              f"Long turn: {title}", f"{ref} has been working on one turn for {duration(running.total_seconds())}. "
+              f"It may be fine. See it: vahtovik open {ref}")
+
+
+def warn_given_up_reports(cfg: Config, state: State) -> None:
+    """Tell the watch's other channels about each report that vahtovik stopped retrying."""
+    rows = state.rows("SELECT * FROM deliveries WHERE status = 'failed' AND attempts >= ? AND origin != 'notice' "
+                      "AND given_up_warned_at IS NULL", delivery.MAX_ATTEMPTS)
+    for row in rows:
+        state.execute("UPDATE deliveries SET given_up_warned_at = ? WHERE id = ?",
+                      datetime.now(timezone.utc).isoformat(timespec="seconds"), row["id"])
+        ref = f"{row['watch']}/{row['group_key']}"
+        log.error("%s: Gave up report %d to %s after %d attempts: %s", ref, row["id"], row["channel"],
+                  row["attempts"], row["last_error"])
+        watch = cfg.watches.get(row["watch"])
+        if watch is None:
+            continue
+        body = (f"vahtovik could not send report {row['id']} of {ref} to {row['channel']} and stopped retrying "
+                f"after {row['attempts']} attempts. Last error: {row['last_error']}\n"
+                f"Check the channel: vahtovik test-channel {row['channel']}\n\n"
+                f"The report, \"{row['subject']}\":\n{row['body'][:2000]}")
+        _send(cfg, state, watch, row["group_key"], [c for c in watch.channels if c != row["channel"]],
+              f"Report not delivered: {row['subject'] or ref}", body)
 
 
 class Ticker:
