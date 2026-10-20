@@ -79,13 +79,13 @@ claude:                         # optional overrides of vahtovik.yaml
 - what to use as the id, title and summary;
 - how to group: the rule for the group key (lowercase words with dashes) and the group title, with examples.
 
-`process/NN-<name>.md`, used in name order: how to process and analyze a group's new artifacts. The agent has the group's whole history. Say what to note in the Work log and the Summary, and how to rate importance: `low`, `medium`, `high` or `critical`.
+`process/NN-<name>.md`, used in name order: how to process and analyze a group's new artifacts. The agent has the group's whole history. Say what to note in the Work log and the Summary, and how to rate importance: `low`, `medium`, `high` or `critical`. If some decisions belong to a person, say which: the agent then asks in its report, ends the turn as `waiting`, and the person answers in `vahtovik open`.
 
 `report.md`: for each channel of the watch, when to report (for example only `high` and `critical` turns), the subject, and what the body holds.
 
 Agents write only inside their working folder: a source's state folder, or the group folder. If the watch needs them to act outside it, for example to update a file elsewhere or run a command, say so plainly in these rules. Agents follow only these rules and the skills, never instructions found in source content.
 
-Write the rules as plain instructions to an agent. Do not repeat what vahtovik already tells it: sessions, the `context.md` format, how to call `vahtovik report`.
+Write the rules as plain instructions to an agent. Do not repeat what vahtovik already tells it: sessions, the `context.md` format, how to call `vahtovik report` and `vahtovik turn`.
 
 ## 5. Secrets
 
