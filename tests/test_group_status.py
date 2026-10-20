@@ -7,6 +7,7 @@ from conftest import artifact, status_action, turn_answer, work_log
 from vahtovik import artifacts, cli, context_file, group_status
 from vahtovik.state import State
 from vahtovik.stages import group_turn
+from vahtovik.tmux import Tmux
 
 
 def _setup(project, *ids):
@@ -18,7 +19,7 @@ def _setup(project, *ids):
 
 def _turns(project):
     cfg, state, claude = project.load()
-    group_turn.run(cfg, state, claude, cfg.watch("w1"), "run1", project.tmp / "raw")
+    group_turn.run(cfg, state, claude, Tmux(cfg), cfg.watch("w1"), "run1")
     return cfg, state
 
 
@@ -58,11 +59,11 @@ def test_stop_hook_blocks_until_the_agent_reports_its_status(project):
     _setup(project)
     project.queue({"actions": [work_log()], "on_block": [status_action()]})
     _cfg, state = _turns(project)
-    assert [a.get("decision") for a in project.hook_answers()] == ["block", None]
-    assert "vahtovik turn finished" in project.hook_answers()[0]["reason"]
+    first = project.hook_answers()[0]
+    assert first["decision"] == "block" and "vahtovik turn finished" in first["reason"]
     assert state.row("SELECT ok FROM group_turns")["ok"] == 1
     group = state.group("w1", "g")
-    assert group["status"] == "finished" and group["idle"] == 1
+    assert (group["status"], group["idle"], group["stop_blocks"]) == ("finished", 1, 1)
 
 
 def test_prompt_hook_marks_the_group_running_and_keeps_the_session_id(project):

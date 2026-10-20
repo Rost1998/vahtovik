@@ -62,14 +62,33 @@ def test_login_modes(project, monkeypatch):
     assert env["ANTHROPIC_API_KEY"] == "key" and env["CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD"] == "1"
 
 
-def test_invalid_answer_is_retried_in_the_same_session(project):
+def test_invalid_answer_is_retried(project):
     cfg, _, claude = project.load()
     project.queue({"structured_output": {"wrong": True}}, {"structured_output": {"ok": True}})
-    spec = _spec(cfg, "new", session_id="s1")
+    spec = _spec(cfg)
     spec.schema = {"type": "object", "required": ["ok"]}
     result = claude.run(spec, project.tmp / "raw")
     assert result.ok and result.output == {"ok": True}
     first, second = project.calls()
-    assert "--session-id" in first["args"] and _value(second["args"], "--resume") == "s1"
-    assert "did not match" in second["prompt"]
+    assert first["args"] == second["args"] and first["prompt"] == second["prompt"]
     assert abs(result.cost_usd - 0.02) < 1e-9
+
+
+def test_interactive_args_end_with_the_prompt_and_group_sessions_get_the_hooks(project):
+    cfg, _, claude = project.load()
+    args = claude.interactive_args(_spec(cfg, "resume", session_id="abc"))
+    assert args[0] == cfg.claude.binary and "-p" not in args and args[-1] == "do it"
+    settings = json.loads(_value(args, "--settings"))
+    assert settings["skipDangerousModePermissionPrompt"] is True
+    assert settings["hooks"]["Stop"][0]["hooks"][0]["command"].endswith("-m vahtovik hook stop")
+
+
+def test_trust_is_read_from_the_claude_config(project):
+    cfg, _, claude = project.load()
+    config = cfg.claude.config_dir / ".claude.json"
+    assert claude.trusts(cfg.data_dir) is None
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text(json.dumps({"projects": {str(cfg.root): {"hasTrustDialogAccepted": True}}}))
+    assert claude.trusts(cfg.data_dir / "watches") is True
+    config.write_text(json.dumps({"projects": {str(cfg.root): {"hasTrustDialogAccepted": False}}}))
+    assert claude.trusts(cfg.data_dir) is False

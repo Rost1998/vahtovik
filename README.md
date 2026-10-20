@@ -10,7 +10,7 @@ Source types and channels are skills: a folder with `SKILL.md` and optional scri
 
 ## Quick start
 
-Requirements: [uv](https://docs.astral.sh/uv/), [Claude Code](https://code.claude.com/) (`claude`), logged in.
+Requirements: [uv](https://docs.astral.sh/uv/), [Claude Code](https://code.claude.com/) (`claude`), logged in, and tmux. Run `claude` once in the project folder and accept "trust this folder": group sessions run inside it and would otherwise stop at that screen.
 
 ```bash
 uv sync
@@ -26,7 +26,7 @@ uv run vahtovik open example/uv-0-13                 # talk to a group's agent
 `vahtovik run` does one cycle for every enabled watch whose `interval` has passed:
 
 1. **Monitor**: one throwaway session per source. It follows the source skill and `monitor.md`, and returns new artifacts with a `group_key`. vahtovik drops artifacts it has seen, creates new groups, and saves the artifacts.
-2. **Group turn**: for each group with new artifacts, vahtovik resumes the group's session. The agent processes the artifacts by `process/*.md`, updates `context.md`, reports by `report.md` with `vahtovik report`, and ends the turn with its status (see below).
+2. **Group turn**: for each group with new artifacts, vahtovik resumes the group's session in a tmux window and waits for the turn to end. The agent processes the artifacts by `process/*.md`, updates `context.md`, reports by `report.md` with `vahtovik report`, and ends the turn with its status (see below).
 3. **Deliver**: failed deliveries are retried, up to 5 attempts.
 
 ## Group sessions
@@ -37,12 +37,20 @@ Each group has one Claude Code session, created on its first turn and resumed on
 - `context.md`: Summary and Work log (written by the agent), Open questions, Artifacts and Reports (written by vahtovik);
 - `artifacts/*.json`: one file per artifact.
 
-`vahtovik open <watch>/<key>` opens the session interactively. You see every earlier turn and can ask the agent anything: explain, research more, scan sources again, add artifacts, or send extra reports. While you have it open, timer runs skip that group and process it on a later run. `--new-session` starts a fresh session that rebuilds its picture from `context.md`.
+Group sessions run as interactive Claude Code, each in its own window of the tmux session `vahtovik-agents` (set in `vahtovik.yaml`). Its first window shows the journal.
+
+- `vahtovik open <watch>/<key>` shows you the group's window: a running turn, or the session started fresh if none is running. You see every earlier turn and can ask the agent anything: explain, research more, scan sources again, add artifacts, or send extra reports. Inside tmux it switches your window; outside it attaches your terminal.
+- Leave whenever you like: detach, or switch back to your own window. The agent keeps working.
+- While the window is open, it holds the group's lock, and runs skip that group.
+- vahtovik closes a window when its agent is done (`finished`, `waiting` or `failed`) and nobody is looking at it.
+- `--new-session` starts a fresh session that rebuilds its picture from `context.md`.
+
+If no tmux server is running, vahtovik starts one with `systemd-run --user`, so the server outlives the run that started it.
 
 Every group has a status, shown by `vahtovik status`. The agent ends every automated turn, and every reply to a person, with one command:
 
 - `vahtovik turn finished`: it needs nothing from a person;
-- `vahtovik turn waiting --question "..."`: it needs a person's answer or action to go on. The questions go to the Open questions section of `context.md`, and the agent puts them in its report too.
+- `vahtovik turn waiting --question "..."`: it needs a person's answer or action to go on. The questions go to the Open questions section of `context.md`, and the agent puts them in its report too. Answer them in `vahtovik open`.
 
 A Claude Code hook does not let the agent stop before it runs the command. An automated turn counts as done only then; otherwise it is retried, up to 3 attempts. A group stays `waiting` until you answer in `vahtovik open`, or until a later turn finds the answer in new artifacts. The statuses are `idle`, `running`, `finished`, `waiting` and `failed`.
 
@@ -89,14 +97,14 @@ vahtovik keeps your personal `~/.claude/CLAUDE.md` and parent-folder `CLAUDE.md`
 | Command | What it does |
 |---|---|
 | `run [--watch W] [--stage monitor\|group\|deliver] [--force] [--dry-run]` | one cycle; `--force` ignores intervals; `--dry-run` makes channels print instead of send |
-| `open W/KEY [--new-session]` | open a group's session interactively |
+| `open W/KEY [--new-session]` | show a group's session window, starting the session if it is not running |
 | `report --channel C [--subject S]` | send a report, body on stdin (inside a session, the group comes from the environment) |
 | `turn finished\|waiting [--importance I] [--summary S] [--question Q ...]` | for agents: end a turn with the group's status |
 | `log [TEXT] [-n N] [-f]` | the last N journal lines (default 40, 0 for all) that contain TEXT; `-f` keeps showing new lines |
 | `status [--watch W]` | watches, sources, groups, sessions, undelivered reports, AI cost in the last 24 hours |
 | `install-timer [--every 15m]` | start vahtovik periodically with a systemd user timer |
 | `uninstall-timer` | remove that timer |
-| `check` | validate config, skills, environment variables and `claude` |
+| `check` | validate config, skills, environment variables, `claude`, its trust of the project folder, and tmux |
 | `test-channel C [--dry-run]` | send a test message, no AI |
 
 ## Scheduling

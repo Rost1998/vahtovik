@@ -70,7 +70,8 @@ sources:
     env: {GITHUB_TOKEN: GITHUB_TOKEN_ORG_A}   # optional: fill a variable from a secret with another name
 channels: [team-telegram]       # channels from vahtovik.yaml this watch may use
 claude:                         # optional overrides of vahtovik.yaml
-  group: {effort: xhigh, max_budget_usd: 3}
+  group: {effort: xhigh}
+  monitor: {max_budget_usd: 1}
 ```
 
 `monitor.md`, given to every source of the watch:

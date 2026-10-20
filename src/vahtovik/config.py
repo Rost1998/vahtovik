@@ -37,6 +37,12 @@ class ClaudeSettings:
 
 
 @dataclass
+class TmuxSettings:
+    session: str = "vahtovik-agents"  # the tmux session that holds a window per running group session
+    socket: str | None = None  # `tmux -L <socket>`; None uses the default tmux server
+
+
+@dataclass
 class Channel:
     name: str
     skill: str
@@ -109,6 +115,7 @@ class Config:
     data_dir: Path
     skills_dir: Path
     watches_dir: Path
+    tmux: TmuxSettings = field(default_factory=TmuxSettings)
 
     def stage(self, watch: Watch | None, stage: str) -> StageSettings:
         merged: dict = {"model": self.claude.model}
@@ -216,6 +223,16 @@ def _load_claude(raw: dict, root: Path) -> ClaudeSettings:
     return settings
 
 
+def _load_tmux(raw: object) -> TmuxSettings:
+    if not isinstance(raw or {}, dict):
+        raise ConfigError("tmux must be a mapping")
+    raw = raw or {}
+    settings = TmuxSettings()
+    settings.session = str(raw.get("session") or settings.session)
+    settings.socket = str(raw["socket"]) if raw.get("socket") else None
+    return settings
+
+
 def _load_channels(raw: object) -> dict[str, Channel]:
     if not isinstance(raw or {}, dict):
         raise ConfigError("channels must be a mapping of channel name to settings")
@@ -282,4 +299,5 @@ def load(root: Path | None = None) -> Config:
         data_dir=data_dir,
         skills_dir=skills_dir,
         watches_dir=watches_dir,
+        tmux=_load_tmux(raw.get("tmux")),
     )

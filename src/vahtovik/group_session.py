@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 import logging
-import time
 import uuid
-from contextlib import ExitStack
 
-from . import artifacts, groups, skills
+from . import groups, skills, windows
 from .claude_session import Claude, SessionSpec
 from .config import Config, ConfigError, Watch
 from .state import State
-from .util import LockBusy, duration
+from .tmux import Tmux
+from .util import LockBusy
 
 log = logging.getLogger(__name__)
 
@@ -61,28 +60,35 @@ def remember(claude: Claude, state: State, watch: Watch, key: str, spec: Session
 
 
 def open_session(cfg: Config, state: State, ref: str, new_session: bool = False) -> int:
+    """Show the group's session window to the person; start one if the session is not running."""
     watch_name, key = groups.parse_ref(ref)
     watch = cfg.watch(watch_name)
     if state.group(watch_name, key) is None:
         raise ConfigError(f"unknown group {ref}; see `vahtovik status --watch {watch_name}`")
-    group_dir = cfg.group_dir(watch_name, key)
-    claude = Claude(cfg)
-    with ExitStack() as stack:
+    tmux = Tmux(cfg)
+    window = tmux.window(ref)
+    if window and new_session:
+        raise ConfigError(f"{ref} is running in tmux window {window.id}; close that window first "
+                          f"(tmux kill-window -t {window.id}) to start a new session")
+    if window is None:
         try:
-            stack.enter_context(groups.lock(group_dir))
+            with groups.lock(cfg.group_dir(watch_name, key)):
+                pass
         except LockBusy:
-            print(f"An automated turn is using {ref}; waiting for it to finish...")
-            stack.enter_context(groups.lock(group_dir, wait=True))
+            raise ConfigError(f"{ref} is busy; try again in a moment") from None
         groups.write_claude_md(cfg, state, watch, key)
+        claude = Claude(cfg)
         spec, note = spec_for(cfg, claude, state, watch, key, force_new=new_session)
         if spec.mode == "new":
             spec.prompt = f"{note}\n\n{OPEN_NEW_PROMPT}" if note else OPEN_NEW_PROMPT
-        log.info("%s: Started interactive session, %s", ref, describe(spec, note))
-        started = time.monotonic()
-        code = claude.interactive(spec)
-        remember(claude, state, watch, key, spec)
-        log.info("%s: Finished interactive session after %s%s", ref, duration(time.monotonic() - started),
-                 f" (exit code {code})" if code else "")
-    for note in artifacts.register_agent_files(cfg, state, watch, key):
-        print(note)
-    return code
+        window_id = windows.launch(cfg, state, tmux, claude, spec, "open")
+        log.info("%s: Started interactive session, %s, tmux window %s", ref, describe(spec, note), window_id)
+    else:
+        window_id = window.id
+    if tmux.attach(window_id):
+        print(f"Switched to {ref} (tmux session {tmux.session}, window {window_id}). Switch back to your own "
+              "window whenever you like: the agent keeps working, and vahtovik closes the window when it is done.")
+    else:
+        print(f"Detached. The session keeps running in tmux window {window_id}; vahtovik closes the window when "
+              f"the agent is done. `vahtovik open {ref}` brings you back.")
+    return 0

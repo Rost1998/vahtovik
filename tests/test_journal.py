@@ -27,8 +27,10 @@ def test_run_writes_one_line_per_key_event(project):
     assert any(m.startswith("w1/g: Started group turn: 1 artifact, new session ") for m in messages)
     assert 'w1/g: Sent report 1 to log "Test report"' in messages
     assert "w1/g: Status finished, importance high: All good." in messages
-    assert any(re.fullmatch(r"w1/g: Finished group turn in \ds: status finished, 1 report, \$0.01", m) for m in messages)
-    assert re.fullmatch(r"Finished run in \ds: 1 new artifact, 1 group turn, 1 report sent, \$0.03", messages[-1])
+    assert any(re.fullmatch(r"w1/g: Started group turn: 1 artifact, new session \w{8}, tmux window @\d+", m)
+               for m in messages)
+    assert any(re.fullmatch(r"w1/g: Finished group turn in \ds: status finished, 1 report", m) for m in messages)
+    assert re.fullmatch(r"Finished run in \ds: 1 new artifact, 1 group turn, 1 report sent, \$0.02", messages[-1])
 
 
 def test_run_with_nothing_due_writes_one_line(project):
@@ -66,7 +68,7 @@ def test_failures_are_logged_with_the_attempt(project):
                for m in messages)
     assert any(re.fullmatch(r"w1/g: Failed group turn after \ds \(attempt 1 of 3\): "
                             r"the agent stopped 4 times without running `vahtovik turn`", m) for m in messages)
-    assert messages[-1].endswith("1 group turn (1 failed), 0 reports sent, 1 not sent, $0.02")
+    assert messages[-1].endswith("1 group turn (1 failed), 0 reports sent, 1 not sent, $0.01")
 
 
 def test_read_filters_and_follows(tmp_path):

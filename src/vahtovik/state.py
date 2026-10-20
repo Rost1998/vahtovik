@@ -37,6 +37,10 @@ CREATE TABLE IF NOT EXISTS deliveries (
     subject TEXT, body TEXT, origin TEXT, turn_id TEXT, status TEXT,
     attempts INTEGER DEFAULT 0, last_error TEXT, external_id TEXT,
     created_at TEXT, updated_at TEXT, sent_at TEXT);
+CREATE TABLE IF NOT EXISTS windows (
+    watch TEXT, group_key TEXT, purpose TEXT, turn_id TEXT, started_at TEXT,
+    ended_at TEXT, exit_code INTEGER, exit_screen TEXT,
+    PRIMARY KEY (watch, group_key));
 """
 
 # Columns added later. Opening an older database adds them.
@@ -252,12 +256,32 @@ class State:
             utc_iso(), int(ok), json.dumps(output) if output is not None else None, error, turn_id,
         )
 
+    def unfinished_turns(self) -> list[sqlite3.Row]:
+        return self.rows("SELECT * FROM group_turns WHERE finished_at IS NULL ORDER BY started_at")
+
     def last_turn(self, watch: str, key: str) -> sqlite3.Row | None:
         return self.row(
             "SELECT * FROM group_turns WHERE watch = ? AND group_key = ? AND finished_at IS NOT NULL "
             "ORDER BY started_at DESC LIMIT 1",
             watch, key,
         )
+
+    # session windows (see windows.py)
+
+    def window_started(self, watch: str, key: str, purpose: str, turn_id: str | None) -> None:
+        self.execute(
+            "INSERT OR REPLACE INTO windows (watch, group_key, purpose, turn_id, started_at) VALUES (?, ?, ?, ?, ?)",
+            watch, key, purpose, turn_id, utc_iso(),
+        )
+
+    def window_ended(self, watch: str, key: str, exit_code: int, screen: str) -> None:
+        self.execute(
+            "UPDATE windows SET ended_at = ?, exit_code = ?, exit_screen = ? WHERE watch = ? AND group_key = ?",
+            utc_iso(), exit_code, screen, watch, key,
+        )
+
+    def window_record(self, watch: str, key: str) -> sqlite3.Row | None:
+        return self.row("SELECT * FROM windows WHERE watch = ? AND group_key = ?", watch, key)
 
     # deliveries
 

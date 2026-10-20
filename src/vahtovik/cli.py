@@ -14,11 +14,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from . import config as config_mod
-from . import delivery, group_session, group_status, journal, skills, timer
+from . import delivery, group_session, group_status, journal, skills, timer, watchdog, windows
 from .claude_session import Claude
 from .config import Config, ConfigError
 from .stages import group_turn, monitor
 from .state import State
+from .tmux import Tmux, TmuxError
 from .util import LockBusy, duration, file_lock, human, plural, utc_iso
 
 log = logging.getLogger("vahtovik")
@@ -77,6 +78,8 @@ def _running(lock: Path) -> str:
 
 
 def _run(cfg: Config, state: State, args, run_id: str) -> int:
+    tmux = Tmux(cfg)
+    watchdog.tick(cfg, state, tmux)
     now = datetime.now(timezone.utc)
     watches = [cfg.watch(args.watch)] if args.watch else [w for w in cfg.watches.values() if w.enabled]
     due = [w for w in watches if args.force or _due(state, w, now)] if args.stage != "deliver" else []
@@ -99,7 +102,7 @@ def _run(cfg: Config, state: State, args, run_id: str) -> int:
             if args.stage in (None, "monitor"):
                 new += monitor.run(cfg, state, claude, watch, run_id, raw_dir)
             if args.stage in (None, "group"):
-                group_turn.run(cfg, state, claude, watch, run_id, raw_dir)
+                group_turn.run(cfg, state, claude, tmux, watch, run_id, watchdog.Ticker(cfg, state, tmux))
             if args.stage is None:
                 state.set_last_run(watch.name)
         if args.stage in (None, "deliver"):
@@ -123,6 +126,12 @@ def _run(cfg: Config, state: State, args, run_id: str) -> int:
 def cmd_open(args) -> int:
     cfg, state = _load(who="interactive")
     return group_session.open_session(cfg, state, args.ref, new_session=args.new_session)
+
+
+def cmd_window(args) -> int:
+    data = windows.read_spec(Path(args.spec))
+    cfg, state = _load(who=data["who"])
+    return windows.run_window(cfg, state, Tmux(cfg), data)
 
 
 def cmd_report(args) -> int:
@@ -253,6 +262,11 @@ def cmd_check(args) -> int:
         print(f"claude: {version} ({cfg.claude.auth} login)")
     if cfg.claude.auth == "api-key" and not os.environ.get("ANTHROPIC_API_KEY"):
         problems.append("claude: auth is api-key but ANTHROPIC_API_KEY is not set")
+    if Claude(cfg).trusts(cfg.data_dir) is False:
+        problems.append(f"claude: Claude Code does not trust {cfg.data_dir} or a folder above it, so group sessions "
+                        f"would stop at its \"trust this folder\" screen; run `claude` once in {cfg.root} and accept")
+    if not Tmux.installed():
+        problems.append("tmux: not found; group sessions run in tmux windows")
     print(f"watches: {', '.join(cfg.watches) or 'none'} · channels: {', '.join(cfg.channels) or 'none'}")
     for problem in problems:
         print(f"problem: {problem}")
@@ -336,6 +350,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--question", action="append", default=[], help="an open question; repeat for each one")
     p.set_defaults(func=cmd_turn)
 
+    p = sub.add_parser("window", help=argparse.SUPPRESS)
+    p.add_argument("spec")
+    p.set_defaults(func=cmd_window)
+
     p = sub.add_parser("hook", help=argparse.SUPPRESS)
     p.add_argument("event", choices=["prompt", "stop"])
     p.set_defaults(func=cmd_hook)
@@ -374,7 +392,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return args.func(args)
     except (ConfigError, delivery.DeliveryError, group_status.StatusError, skills.SkillError,
-            timer.TimerError) as exc:
+            timer.TimerError, TmuxError) as exc:
         print(f"vahtovik: {exc}", file=sys.stderr)
         return 2
 

@@ -1,16 +1,19 @@
-"""Group turns: resume each group's session to process its new artifacts and report."""
+"""Group turns: resume each group's session in a tmux window to process its new artifacts and report."""
 
 from __future__ import annotations
 
 import json
 import logging
+import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 
-from .. import artifacts, context_file, group_session, groups, skills
-from ..claude_session import Claude
+from .. import artifacts, context_file, group_session, groups, skills, windows
+from ..claude_session import Claude, SessionResult
 from ..config import Config, Watch
 from ..state import State
+from ..tmux import Tmux, TmuxError
 from ..util import LockBusy, duration, human, plural, render
 
 log = logging.getLogger(__name__)
@@ -18,14 +21,23 @@ log = logging.getLogger(__name__)
 MAX_ATTEMPTS = 3
 
 
-def run(cfg: Config, state: State, claude: Claude, watch: Watch, run_id: str, raw_dir: Path) -> None:
+def run(cfg: Config, state: State, claude: Claude, tmux: Tmux, watch: Watch, run_id: str,
+        tick: Callable[[], None] | None = None) -> None:
+    if not Tmux.installed():
+        log.error("%s: Skipped group turns: tmux is not installed", watch.name)
+        return
     for key in state.pending_groups(watch.name, MAX_ATTEMPTS):
+        ref = f"{watch.name}/{key}"
+        if tmux.window(ref):
+            log.warning("%s: Skipped group turn: its session window is open; a later run will process it", ref)
+            continue
         try:
             with groups.lock(cfg.group_dir(watch.name, key)):
-                turn(cfg, state, claude, watch, key, run_id, raw_dir)
+                pass
         except LockBusy:
-            log.warning("%s/%s: Skipped group turn: the session is open; the next run will process it",
-                        watch.name, key)
+            log.warning("%s: Skipped group turn: the group is busy; a later run will process it", ref)
+            continue
+        turn(cfg, state, claude, tmux, watch, key, run_id, tick)
 
 
 def _read(path: Path) -> str:
@@ -62,7 +74,8 @@ def _deliveries_text(rows) -> str:
     return "\n".join(lines) or "- none"
 
 
-def turn(cfg: Config, state: State, claude: Claude, watch: Watch, key: str, run_id: str, raw_dir: Path) -> bool:
+def turn(cfg: Config, state: State, claude: Claude, tmux: Tmux, watch: Watch, key: str, run_id: str,
+         tick: Callable[[], None] | None = None) -> bool:
     pending = state.pending_artifacts(watch.name, key, MAX_ATTEMPTS)
     ids = [r["id"] for r in pending]
     context = cfg.group_dir(watch.name, key) / "context.md"
@@ -79,43 +92,55 @@ def turn(cfg: Config, state: State, claude: Claude, watch: Watch, key: str, run_
         deliveries=_deliveries_text(state.deliveries_since(watch.name, key, last["started_at"] if last else None)),
     )
     spec.env.update(VAHTOVIK_TURN=turn_id, VAHTOVIK_RUN=run_id)
-    log.info("%s: Started group turn: %s, %s", spec.scope, plural(len(ids), "artifact"),
-             group_session.describe(spec, note))
     state.start_turn(turn_id, run_id, watch.name, key, ids, context_file.fingerprint(context).work_log_entries)
-    state.set_status(watch.name, key, "running")
-    result = claude.run(spec, raw_dir)
+    state.prompt_submitted(watch.name, key)  # running until the agent reports its status
+    started = time.monotonic()
+    try:
+        window_id = windows.launch(cfg, state, tmux, claude, spec, "turn", turn_id)
+    except TmuxError as exc:
+        fail(state, state.turn(turn_id), str(exc), 0)
+        return False
+    log.info("%s: Started group turn: %s, %s, tmux window %s", spec.scope, plural(len(ids), "artifact"),
+             group_session.describe(spec, note), window_id)
+    outcome = windows.wait_for_turn(state, tmux, watch.name, key, turn_id, tick)
+    seconds = time.monotonic() - started
     group_session.remember(claude, state, watch, key, spec)
-    state.log_session(run_id, "group", watch.name, key, result)
-    ok = _finish(state, watch, key, turn_id, pending, result.duration_s, result.error)
-    artifacts.register_agent_files(cfg, state, watch, key)
-    return ok
-
-
-def _finish(state: State, watch: Watch, key: str, turn_id: str, pending, seconds: float, error: str | None) -> bool:
-    """Close the turn after the session ended. The turn is done only if the agent ran `vahtovik turn`."""
-    scope = f"{watch.name}/{key}"
-    turn = state.turn(turn_id)
-    if turn["finished_at"]:
-        output = json.loads(turn["output"])
+    state.log_session(run_id, "group", watch.name, key,
+                      SessionResult(ok=outcome == "done", duration_s=seconds, session_id=spec.session_id))
+    if outcome == "maintenance":
+        log.warning("%s: Paused group turn after %s: %s; its window stays open for a person", spec.scope,
+                    duration(seconds), state.group(watch.name, key)["status_reason"] or "it needs a person")
+        return False
+    if outcome == "done":
+        output = json.loads(state.turn(turn_id)["output"])
         status = output["status"] + (f" ({plural(len(output['questions']), 'question')})" if output["questions"] else "")
-        log.info("%s: Finished group turn in %s: status %s, %s, $%.2f", scope, duration(seconds), status,
-                 plural(len(state.turn_deliveries(turn_id)), "report"), _cost(state, turn))
-        return True
-    group = state.group(watch.name, key)
+        log.info("%s: Finished group turn in %s: status %s, %s", spec.scope, duration(seconds), status,
+                 plural(len(state.turn_deliveries(turn_id)), "report"))
+    else:
+        fail(state, state.turn(turn_id), windows.exit_error(state, watch.name, key) if outcome == "ended" else None,
+             seconds)
+    window = tmux.window(spec.scope)
+    if window and not window.clients:
+        tmux.close(window.id)
+    artifacts.register_agent_files(cfg, state, watch, key)
+    return outcome == "done"
+
+
+def fail(state: State, turn, error: str | None, seconds: float) -> None:
+    """Close an unfinished turn as failed. Its artifacts are retried, up to MAX_ATTEMPTS turns."""
+    if turn["finished_at"]:
+        return
+    watch, key = turn["watch"], turn["group_key"]
+    group = state.group(watch, key)
     if group["status"] == "failed" and group["status_reason"]:
         error = group["status_reason"]
     error = error or "the session ended before the agent ran `vahtovik turn`"
-    state.mark_attempt_failed(watch.name, [r["id"] for r in pending], MAX_ATTEMPTS)
-    state.finish_turn(turn_id, False, None, error)
-    state.set_status(watch.name, key, "failed", error)
-    attempt = max(r["attempts"] for r in pending) + 1
-    log.error("%s: Failed group turn after %s (attempt %d of %d%s): %s", scope, duration(seconds),
+    ids = json.loads(turn["artifact_ids"] or "[]")
+    attempt = 1 + max((r["attempts"] for r in state.rows(
+        "SELECT attempts FROM artifacts WHERE watch = ? AND id IN (SELECT value FROM json_each(?))",
+        watch, turn["artifact_ids"] or "[]")), default=0)
+    state.mark_attempt_failed(watch, ids, MAX_ATTEMPTS)
+    state.finish_turn(turn["id"], False, None, error)
+    state.set_status(watch, key, "failed", error)
+    log.error("%s/%s: Failed group turn after %s (attempt %d of %d%s): %s", watch, key, duration(seconds),
               attempt, MAX_ATTEMPTS, ", giving up" if attempt >= MAX_ATTEMPTS else "", error)
-    return False
-
-
-def _cost(state: State, turn) -> float:
-    row = state.row("SELECT COALESCE(SUM(cost_usd), 0) AS c FROM sessions WHERE run_id = ? AND stage = 'group' "
-                    "AND watch = ? AND target = ? AND started_at >= ?",
-                    turn["run_id"], turn["watch"], turn["group_key"], turn["started_at"])
-    return row["c"]

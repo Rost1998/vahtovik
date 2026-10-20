@@ -12,7 +12,7 @@ import logging
 import os
 import sys
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 
 from .config import Config
@@ -28,10 +28,11 @@ def path(cfg: Config) -> Path:
     return cfg.data_dir / FILE_NAME
 
 
-def who_from_env() -> str:
-    if os.environ.get("VAHTOVIK_RUN"):
-        return f"run {os.environ['VAHTOVIK_RUN']}"
-    return "interactive" if os.environ.get("VAHTOVIK_GROUP") else "manual"
+def who_from_env(env: Mapping[str, str] | None = None) -> str:
+    env = os.environ if env is None else env
+    if env.get("VAHTOVIK_RUN"):
+        return f"run {env['VAHTOVIK_RUN']}"
+    return "interactive" if env.get("VAHTOVIK_GROUP") else "manual"
 
 
 class _Formatter(logging.Formatter):

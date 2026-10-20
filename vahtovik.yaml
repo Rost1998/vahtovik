@@ -6,7 +6,11 @@ claude:
   model: claude-opus-5-5
   stages:                     # defaults per stage; a watch can override them in its watch.yaml
     monitor: {effort: medium, max_budget_usd: 0.50}
-    group:   {effort: high,   max_budget_usd: 2.00}
+    group:   {effort: high}     # group sessions are interactive: max_budget_usd does not apply to them
+
+tmux:                         # group sessions run in windows of this tmux session; `vahtovik open` shows you one
+  session: vahtovik-agents
+  socket: null                # null: your default tmux server; a name: a separate server (tmux -L <name>)
 
 channels:
   local-log:

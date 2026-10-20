@@ -5,6 +5,7 @@ from conftest import artifact, monitor_answer, report_action, turn_answer, work_
 
 from vahtovik import artifacts, groups
 from vahtovik.stages import group_turn
+from vahtovik.tmux import Tmux
 
 
 def _monitor(project, *items):
@@ -17,7 +18,7 @@ def _monitor(project, *items):
 
 def _turns(project):
     cfg, state, claude = project.load()
-    group_turn.run(cfg, state, claude, cfg.watch("w1"), "run1", project.tmp / "raw")
+    group_turn.run(cfg, state, claude, Tmux(cfg), cfg.watch("w1"), "run1")
     return cfg, state
 
 

@@ -65,6 +65,19 @@ class Claude:
             return self.cfg.claude.config_dir
         return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
 
+    def trusts(self, folder: Path) -> bool | None:
+        """Whether Claude Code trusts the folder or a folder above it, so interactive sessions there skip
+        the "trust this folder" screen. None if Claude Code's config file cannot be read."""
+        base = self.cfg.claude.config_dir or (Path(os.environ["CLAUDE_CONFIG_DIR"])
+                                              if os.environ.get("CLAUDE_CONFIG_DIR") else None)
+        try:
+            projects = json.loads((base / ".claude.json" if base else Path.home() / ".claude.json").read_text())
+        except (OSError, ValueError):
+            return None
+        projects = projects.get("projects") or {}
+        folder = folder.resolve()
+        return any((projects.get(str(p)) or {}).get("hasTrustDialogAccepted") for p in (folder, *folder.parents))
+
     def session_exists(self, session_id: str | None) -> bool:
         return bool(session_id) and any((self.config_dir / "projects").glob(f"*/{session_id}.jsonl"))
 
@@ -100,7 +113,7 @@ class Claude:
         return args
 
     def print_args(self, spec: SessionSpec) -> list[str]:
-        """Arguments for an automated turn. The prompt goes on stdin."""
+        """Arguments for print mode. The prompt goes on stdin."""
         args = [self.cfg.claude.binary, "-p", "--output-format", "json"]
         if spec.schema:
             args += ["--json-schema", json.dumps(spec.schema)]
@@ -111,6 +124,7 @@ class Claude:
         return args + self._common_args(spec)
 
     def interactive_args(self, spec: SessionSpec) -> list[str]:
+        """Arguments for the interactive mode of group session windows. The prompt is the last argument."""
         args = [self.cfg.claude.binary, *self._common_args(spec)]
         return args + [spec.prompt] if spec.prompt else args
 
@@ -131,23 +145,14 @@ class Claude:
         return env
 
     def run(self, spec: SessionSpec, raw_dir: Path) -> SessionResult:
-        """Run one automated turn; retry once if the answer does not match the schema."""
+        """Run a throwaway session in print mode; run it again once if the answer does not match the schema."""
         if self.cfg.claude.auth == "api-key" and not os.environ.get("ANTHROPIC_API_KEY"):
             return SessionResult(ok=False, error="claude.auth is api-key but ANTHROPIC_API_KEY is not set")
         result = self._invoke(spec, raw_dir, attempt=1)
         if result.ok or not result.schema_error:
             return result
         log.warning("%s: Retrying: the answer did not match the schema (%s)", spec.scope, result.error)
-        if spec.mode == "throwaway":
-            retry = spec
-        else:
-            retry = SessionSpec(
-                stage=spec.stage, workdir=spec.workdir, settings=spec.settings, schema=spec.schema,
-                mode="resume", session_id=spec.session_id, env=spec.env, scope=spec.scope,
-                prompt=f"Your last answer did not match the required result schema: {result.error}\n"
-                       "Do not redo the work. Answer again with the structured result only.",
-            )
-        second = self._invoke(retry, raw_dir, attempt=2)
+        second = self._invoke(spec, raw_dir, attempt=2)
         second.cost_usd += result.cost_usd
         second.duration_s += result.duration_s
         return second
@@ -183,6 +188,3 @@ class Claude:
             except jsonschema.ValidationError as exc:
                 return SessionResult(ok=False, error=exc.message, schema_error=True, output=output, **base)
         return SessionResult(ok=True, output=output, **base)
-
-    def interactive(self, spec: SessionSpec) -> int:
-        return subprocess.run(self.interactive_args(spec), cwd=spec.workdir, env=self.env(spec)).returncode

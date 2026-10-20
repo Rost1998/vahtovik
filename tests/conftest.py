@@ -1,15 +1,20 @@
 import json
 import logging
+import os
 import shutil
+import subprocess
 import sys
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
 import yaml
 
 from vahtovik import config as config_mod
+from vahtovik import watchdog, windows
 from vahtovik.claude_session import Claude
 from vahtovik.state import State
+from vahtovik.tmux import Tmux
 
 REPO = Path(__file__).resolve().parents[1]
 FAKE = Path(__file__).with_name("fake_claude.py")
@@ -62,6 +67,16 @@ def detach_journal():
 
 @pytest.fixture
 def project(tmp_path, monkeypatch) -> Project:
+    """A vahtovik project with one watch, a fake claude, and a tmux server of its own."""
+    socket = f"vahtovik-test-{os.getpid()}-{tmp_path.name}"
+    monkeypatch.setattr(Tmux, "use_systemd_run", False)
+    monkeypatch.setattr(windows, "POLL_SECONDS", 0.05)
+    monkeypatch.setattr(watchdog, "GRACE", timedelta(0))
+    yield _project(tmp_path, monkeypatch, socket)
+    subprocess.run(["tmux", "-L", socket, "kill-server"], capture_output=True)
+
+
+def _project(tmp_path, monkeypatch, socket: str) -> Project:
     root = tmp_path / "proj"
     shutil.copytree(REPO / "skills", root / "skills")
     _script(root / "skills/channels/broken/send", "#!/bin/sh\necho boom >&2\nexit 3\n")
@@ -74,6 +89,7 @@ def project(tmp_path, monkeypatch) -> Project:
     (root / "vahtovik.yaml").write_text(yaml.safe_dump({
         "claude": {"binary": str(fake), "config_dir": str(tmp_path / "claude-home"),
                    "stages": {"monitor": {"effort": "low"}, "group": {"effort": "high", "max_budget_usd": 1}}},
+        "tmux": {"socket": socket},
         "channels": {
             "log": {"skill": "file", "env": {"FILE_CHANNEL_PATH": "data/outbox.md"}},
             "broken": {"skill": "broken"},
