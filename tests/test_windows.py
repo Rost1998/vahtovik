@@ -5,6 +5,7 @@ import pytest
 from conftest import artifact, launch_turn, status_action, turn_answer, until, work_log
 
 from vahtovik import artifacts, group_session, groups, watchdog, windows
+from vahtovik.claude_session import Claude
 from vahtovik.config import ConfigError
 from vahtovik.stages import group_turn
 from vahtovik.tmux import Tmux, Window
@@ -32,11 +33,13 @@ def _locked(cfg) -> bool:
         return True
 
 
-def test_turn_runs_in_a_window_that_closes_when_the_agent_is_done(project):
-    cfg, state, _, tmux = _setup(project)
+def test_turn_runs_in_a_window_that_closes_after_the_watchdog_checks_it(project):
+    cfg, state, claude, tmux = _setup(project)
     project.queue(turn_answer([work_log()]))
     _turns(project)
     assert state.row("SELECT ok FROM group_turns")["ok"] == 1
+    assert tmux.window("w1/g") is not None  # done, but not checked yet
+    watchdog.tick(cfg, state, tmux, claude, "run2")
     assert tmux.window("w1/g") is None and not _locked(cfg)
     assert [w.id for w in tmux.windows()] == []
     assert state.window_record("w1", "g")["purpose"] == "turn"
@@ -81,7 +84,7 @@ def test_window_someone_watches_stays_open_until_they_leave(project, monkeypatch
     monkeypatch.setattr(Tmux, "windows", real)
     watchdog.tick(cfg, state, tmux)
     assert tmux.window("w1/g") is None
-    assert "w1/g: Closed the session window: status finished" in caplog.messages
+    assert "w1/g: Closed the session window: status finished, checked by the watchdog" in caplog.messages
 
 
 def test_tick_fails_turns_whose_window_is_gone(project):
@@ -98,6 +101,7 @@ def test_open_starts_a_window_and_the_person_answers_the_agent(project, monkeypa
     cfg, state, _, tmux = _setup(project)
     project.queue(turn_answer([work_log()], status="waiting", questions=("Upgrade now?",)))
     _turns(project)
+    watchdog.check(cfg, state, tmux, Claude(cfg), "run1")  # the next run's start closes the done window
     shown = []
     monkeypatch.setattr(Tmux, "attach", lambda self, window_id: shown.append(window_id) or True)
     group_session.open_session(cfg, state, "w1/g")

@@ -48,7 +48,7 @@ COLUMNS = {
     "groups": {
         "status": "TEXT DEFAULT 'idle'", "status_at": "TEXT", "status_reason": "TEXT", "questions": "TEXT",
         "prompt_at": "TEXT", "idle": "INTEGER DEFAULT 1", "stop_blocks": "INTEGER DEFAULT 0", "notified_at": "TEXT",
-        "check_after": "TEXT",
+        "check_after": "TEXT", "checked_at": "TEXT",
     },
     "group_turns": {"artifact_ids": "TEXT", "work_log_before": "INTEGER", "long_warned_at": "TEXT"},
     "windows": {"checked_at": "TEXT"},
@@ -183,6 +183,10 @@ class State:
         self.execute("UPDATE groups SET stop_blocks = stop_blocks + 1 WHERE watch = ? AND key = ?", watch, key)
         return self.group(watch, key)["stop_blocks"]
 
+    def group_checked(self, watch: str, key: str) -> None:
+        """The watchdog AI checked the group's session."""
+        self.execute("UPDATE groups SET checked_at = ? WHERE watch = ? AND key = ?", utc_iso(), watch, key)
+
     def set_notified(self, watch: str, key: str) -> None:
         """A notice about the current status went out. Any status change clears this."""
         self.execute("UPDATE groups SET notified_at = ? WHERE watch = ? AND key = ?", utc_iso(), watch, key)
@@ -281,8 +285,20 @@ class State:
         self.execute("UPDATE artifacts SET status = 'new', processed_at = NULL WHERE watch = ? AND status = 'processed' "
                      "AND id IN (SELECT value FROM json_each(?))", turn["watch"], turn["artifact_ids"] or "[]")
 
+    def retry_turn(self, turn_id: str, error: str) -> None:
+        """Count a finished turn as failed, so a later run repeats it: its artifacts wait again."""
+        turn = self.turn(turn_id)
+        self.execute("UPDATE group_turns SET ok = 0, error = ? WHERE id = ?", error, turn_id)
+        self.execute("UPDATE artifacts SET status = 'new', processed_at = NULL WHERE watch = ? AND status = 'processed' "
+                     "AND id IN (SELECT value FROM json_each(?))", turn["watch"], turn["artifact_ids"] or "[]")
+
     def unfinished_turns(self) -> list[sqlite3.Row]:
         return self.rows("SELECT * FROM group_turns WHERE finished_at IS NULL ORDER BY started_at")
+
+    def latest_turn(self, watch: str, key: str) -> sqlite3.Row | None:
+        """The group's latest turn, finished or not."""
+        return self.row("SELECT * FROM group_turns WHERE watch = ? AND group_key = ? ORDER BY started_at DESC LIMIT 1",
+                        watch, key)
 
     def last_turn(self, watch: str, key: str) -> sqlite3.Row | None:
         return self.row(
@@ -304,9 +320,6 @@ class State:
             "UPDATE windows SET ended_at = ?, exit_code = ?, exit_screen = ? WHERE watch = ? AND group_key = ?",
             utc_iso(), exit_code, screen, watch, key,
         )
-
-    def window_checked(self, watch: str, key: str) -> None:
-        self.execute("UPDATE windows SET checked_at = ? WHERE watch = ? AND group_key = ?", utc_iso(), watch, key)
 
     def window_record(self, watch: str, key: str) -> sqlite3.Row | None:
         return self.row("SELECT * FROM windows WHERE watch = ? AND group_key = ?", watch, key)

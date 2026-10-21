@@ -3,7 +3,7 @@ import shutil
 
 from conftest import artifact, monitor_answer, report_action, turn_answer, work_log
 
-from vahtovik import artifacts, groups
+from vahtovik import artifacts, groups, watchdog
 from vahtovik.stages import group_turn
 from vahtovik.tmux import Tmux
 
@@ -17,7 +17,9 @@ def _monitor(project, *items):
 
 
 def _turns(project):
+    """A run's group stage, after the watchdog's check that starts every run (it closes done windows)."""
     cfg, state, claude = project.load()
+    watchdog.check(cfg, state, Tmux(cfg), claude, "run1")
     group_turn.run(cfg, state, claude, Tmux(cfg), cfg.watch("w1"), "run1")
     return cfg, state
 

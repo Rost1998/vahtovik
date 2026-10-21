@@ -12,7 +12,7 @@ import pytest
 import yaml
 
 from vahtovik import config as config_mod
-from vahtovik import watchdog, windows
+from vahtovik import skills, watchdog, windows
 from vahtovik.claude_session import Claude
 from vahtovik.group_session import spec_for
 from vahtovik.state import State
@@ -65,6 +65,18 @@ def detach_journal():
     for handler in [h for h in logger.handlers if getattr(h, "journal", False)]:
         logger.removeHandler(handler)
         handler.close()
+
+
+@pytest.fixture(autouse=True)
+def approving_watchdog(monkeypatch):
+    """The watchdog's AI check finds every session right, without an AI call; so a done window closes at the
+    next tick, as at the start of a real run. tests/test_watchdog.py uses the real check with fake AI answers."""
+    def check(cfg, state, tmux, claude, run_id):
+        meta = skills.watchdog_skill(cfg.skills_dir).meta
+        for session in watchdog.sessions_to_check(cfg, state, tmux, claude):
+            state.group_checked(session.watch.name, session.group["key"])
+            watchdog._act(cfg, state, tmux, claude, session, {"action": "none", "reason": "All is right."}, meta, {})
+    monkeypatch.setattr(watchdog, "check", check)
 
 
 @pytest.fixture

@@ -42,7 +42,7 @@ Group sessions run as interactive Claude Code, each in its own window of the tmu
 - `vahtovik open <watch>/<key>` shows you the group's window: a running turn, or the session started fresh if none is running. You see every earlier turn and can ask the agent anything: explain, research more, scan sources again, add artifacts, or send extra reports. It attaches your terminal to the window. Inside your own tmux this is tmux inside tmux, and Ctrl-b goes to your outer tmux: press Ctrl-b Ctrl-b d to leave the inner one. (With `socket: null`, inside tmux it switches your window instead.)
 - Leave whenever you like: detach, or switch back to your own window. The agent keeps working.
 - While the window is open, it holds the group's lock, and runs skip that group.
-- The watchdog (below) closes a window when its agent is done (`finished`, `waiting` or `failed`) and nobody is looking at it.
+- The watchdog (below) closes a window when nobody is looking at it and its agent is done: `failed`, or `finished` or `waiting` once its AI check confirms that the work is really done.
 - `--new-session` starts a fresh session that rebuilds its picture from `context.md`.
 
 If vahtovik's tmux server is not running, vahtovik starts it with `systemd-run --user`, so the server outlives the run that started it.
@@ -61,14 +61,29 @@ Sessions run with `bypassPermissions`. The main skill (`skills/vahtovik/SKILL.md
 
 ## Watchdog
 
-The watchdog looks after the group sessions at the start of every run, and every `watchdog.every` (1 minute) while a run waits for a group turn:
+The watchdog looks after the group sessions at the start of every run, and while a run waits for a group turn.
 
-- it closes the windows whose agent is done and that nobody looks at;
+Every `watchdog.every` (1 minute):
+
+- it closes the windows of failed groups that nobody looks at;
 - it fails the turns whose window closed before the agent reported its status, so they are retried;
-- it asks an AI session (the `watchdog` stage, a cheap model by default) about every working session that showed no activity for `watchdog.stale_after` (5 minutes). The AI follows the strict skill `skills/watchdog/SKILL.md` and picks one action per session: still working; press the keys of a known screen, such as Claude Code's "trust this folder" question (the screens and their keys are listed in that skill, and vahtovik presses the keys, never the AI); `maintenance`, when the session needs a person, for example to log in again; or `failed`. It never types text, and never touches a window that a person is looking at. A `maintenance` session keeps its window and its lock until you fix it: open it, fix the problem, and type "continue";
 - it sends a notice to the watch's channels about each group that waits for your answer, needs attention, or failed after its last retry. A `waiting` turn whose agent sent its own report gets no first notice: the report asked the questions. Notices repeat every `watchdog.notify_every` (6 hours; 0 never repeats) until the status changes, and stop while you look at the group's window. Every notice's subject starts with `WATCHDOG:`, so you can tell notices from the agents' reports;
 - it warns once about a group turn that runs longer than `watchdog.long_turn_after` (3 hours), since sessions have no time limit;
 - when vahtovik stops retrying a report (after 5 failed attempts), it tells the watch's other channels, with the report itself.
+
+At the start of every run, and every `watchdog.check_every` (5 minutes) while a run waits, it asks an AI session (the `watchdog` stage, a cheap model by default) to check the group sessions: every `running` or `background` one, and every other one with an open window that changed since the last check. It skips the call when there is nothing to check, and the cost shows in `vahtovik status`. The AI gets the facts of each session (status, turn, window, lock, the screen and the end of the conversation), follows the strict skill `skills/watchdog/SKILL.md`, and picks one action per session from a fixed list. vahtovik checks each pick before it acts:
+
+- `none`: all is right. A done window (`finished` or `waiting`) closes only after this answer;
+- `press`: press the keys of a known screen, such as Claude Code's "trust this folder" question. The screens and their keys are listed in the skill, and vahtovik presses the keys, never the AI;
+- `nudge`: the agent is idle in its window but its work is not done, for example its background work hung. vahtovik types the skill's fixed message that tells the agent to check its work and report its status. Only to an idle agent;
+- `resume`: the window is gone but the work is unfinished. vahtovik opens the session again with the skill's fixed message to finish where it stopped. Only when the group has no window and no lock;
+- `retry`: the window is gone and the latest turn's work is lost: vahtovik counts the turn as failed, and the next run repeats it. Only when the group has no window and no lock;
+- `maintenance`: the session needs a person, for example to log in again. It keeps its window and its lock until you fix it: open it, fix the problem, and type "continue";
+- `failed`: the session cannot go on; the turn is retried.
+
+The AI never writes text for a session, and vahtovik never touches a window that a person is looking at. Every action except `none` also sends a notice whose subject starts with `WATCHDOG-DEBUG:`, so you can follow what the watchdog does while it is new.
+
+Between runs nothing checks the sessions. A timer every 5 minutes (`vahtovik install-timer --every 5m`) keeps the checks going while no run waits.
 
 ## Journal
 

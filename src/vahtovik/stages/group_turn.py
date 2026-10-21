@@ -125,8 +125,8 @@ def turn(cfg: Config, state: State, claude: Claude, tmux: Tmux, watch: Watch, ke
         fail(state, state.turn(turn_id), windows.exit_error(state, watch.name, key) if outcome == "ended" else None,
              seconds)
     window = tmux.window(spec.scope)
-    if window and not window.clients:
-        tmux.close(window.id)
+    if window and not window.clients and outcome != "done":
+        tmux.close(window.id)  # a done window stays until the watchdog's check confirms it (watchdog.py)
     artifacts.register_agent_files(cfg, state, watch, key)
     return outcome == "done"
 

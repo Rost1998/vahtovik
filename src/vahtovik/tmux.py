@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -100,6 +101,12 @@ class Tmux:
 
     def send_keys(self, window_id: str, keys: list[str]) -> None:
         self._run("send-keys", "-t", window_id, *keys)
+
+    def send_text(self, window_id: str, text: str) -> None:
+        """Type the text as it is, then press Enter apart, so the program sees typing and not a paste."""
+        self._run("send-keys", "-t", window_id, "-l", text)
+        time.sleep(0.5)
+        self._run("send-keys", "-t", window_id, "Enter")
 
     def close(self, window_id: str) -> None:
         self._run("kill-window", "-t", window_id, check=False)

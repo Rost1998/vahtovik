@@ -6,10 +6,10 @@ Time: $now
 
 $screens
 
-## Sessions without activity
+## Sessions to check
 
 $sessions
 
 ## Your task
 
-For each session above, choose one action by your rules. Answer with one entry per session, naming it by its group, for example `$example`.
+For each session above, check whether its status is right for what it shows, and choose one action by your rules. Answer with one entry per session, naming it by its group, for example `$example`.
