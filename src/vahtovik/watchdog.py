@@ -178,6 +178,7 @@ def _send_notice(cfg: Config, state: State, watch: Watch, group) -> None:
 
 
 def _send(cfg: Config, state: State, watch: Watch, key: str, channels: list[str], subject: str, body: str) -> None:
+    subject = f"WATCHDOG: {subject}"  # tells notices apart from the agents' own reports
     if not channels:
         log.warning("%s/%s: Skipped notice \"%s\": no channel to send it to", watch.name, key, subject)
     for channel in channels:

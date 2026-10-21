@@ -44,7 +44,7 @@ def test_waiting_without_a_report_gets_a_notice_with_the_questions(project):
     _turn(project, turn_answer([work_log()], status="waiting", questions=("Upgrade <now>?", "Who pays?")))
     watchdog.tick(cfg, state, tmux)
     notice, = _notices(state)
-    assert notice["status"] == "sent" and notice["subject"] == "Waiting for your answer: G"
+    assert notice["status"] == "sent" and notice["subject"] == "WATCHDOG: Waiting for your answer: G"
     assert notice["body"] == "w1/g waits for your answer:\n- Upgrade <now>?\n- Who pays?\n\nOpen its session: vahtovik open w1/g"
     watchdog.tick(cfg, state, tmux)
     assert len(_notices(state)) == 1  # not again before notify_every
@@ -91,7 +91,7 @@ def test_failed_group_gets_a_notice_only_when_retries_are_over(project):
         watchdog.tick(cfg, state, tmux)
         assert len(_notices(state)) == (1 if attempt == 2 else 0)
     notice = _notices(state)[0]
-    assert notice["subject"] == "Failed: G"
+    assert notice["subject"] == "WATCHDOG: Failed: G"
     assert "vahtovik stopped retrying: the agent stopped 4 times without running `vahtovik turn`" in notice["body"]
 
 

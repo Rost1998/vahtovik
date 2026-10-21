@@ -135,7 +135,7 @@ def test_long_turn_is_reported_once(project, caplog):
     watchdog.tick(cfg, state, tmux, claude, "run1")
     watchdog.tick(cfg, state, tmux, claude, "run1")
     notice, = state.rows("SELECT * FROM deliveries WHERE origin = 'notice'")
-    assert notice["subject"] == "Long turn: G" and notice["body"].startswith("w1/g has been working on one turn for 4h00m")
+    assert notice["subject"] == "WATCHDOG: Long turn: G" and notice["body"].startswith("w1/g has been working on one turn for 4h00m")
     assert "w1/g: Long group turn: running for 4h00m" in caplog.messages
 
 
@@ -153,7 +153,7 @@ def test_given_up_report_is_told_through_the_other_channels_once(project, caplog
     watchdog.tick(cfg, state, tmux, claude, "run1")
     notice, = state.rows("SELECT * FROM deliveries WHERE origin = 'notice'")
     assert (notice["channel"], notice["status"]) == ("log", "sent")
-    assert notice["subject"] == "Report not delivered: Weekly digest"
+    assert notice["subject"] == "WATCHDOG: Report not delivered: Weekly digest"
     assert notice["body"].startswith("vahtovik could not send report 1 of w1/g to broken and stopped retrying "
                                      "after 5 attempts. Last error: boom")
     assert notice["body"].endswith('The report, "Weekly digest":\n<b>All</b> is fine.')
