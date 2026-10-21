@@ -1,4 +1,5 @@
 import logging
+from datetime import timedelta
 
 import pytest
 from conftest import artifact, launch_turn, status_action, turn_answer, until, work_log
@@ -115,6 +116,25 @@ def test_open_starts_a_window_and_the_person_answers_the_agent(project, monkeypa
     assert shown == [window.id, window.id] and len(project.calls()) == 2
     with pytest.raises(ConfigError, match="close that window first"):
         group_session.open_session(cfg, state, "w1/g", new_session=True)
+    watchdog.tick(cfg, state, tmux)
+    assert tmux.window("w1/g") is None
+
+
+def test_only_a_window_just_started_by_open_is_left_alone(project, monkeypatch):
+    monkeypatch.setattr(watchdog, "GRACE", timedelta(seconds=10))
+    cfg, state, claude, tmux = _setup(project)
+    project.queue(turn_answer([work_log()]))
+    launch_turn(cfg, state, claude, tmux)
+    until(lambda: state.group("w1", "g")["status"] == "finished" and state.group("w1", "g")["idle"] == 1)
+    watchdog.tick(cfg, state, tmux)
+    assert tmux.window("w1/g") is None  # a run's window closes as soon as its agent is done
+
+    until(lambda: not _locked(cfg))
+    monkeypatch.setattr(Tmux, "attach", lambda self, window_id: True)
+    group_session.open_session(cfg, state, "w1/g")
+    watchdog.tick(cfg, state, tmux)
+    assert tmux.window("w1/g") is not None  # the person may not have attached yet
+    monkeypatch.setattr(watchdog, "GRACE", timedelta(0))
     watchdog.tick(cfg, state, tmux)
     assert tmux.window("w1/g") is None
 

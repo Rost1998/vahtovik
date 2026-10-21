@@ -21,7 +21,7 @@ from .util import duration, human, load_schema, plural, render
 
 log = logging.getLogger(__name__)
 
-GRACE = timedelta(minutes=1)  # a new window is left alone this long, so a person can attach to it
+GRACE = timedelta(seconds=10)  # a window of `vahtovik open` is left alone this long, so the person can attach to it
 DONE = ("finished", "waiting", "failed")
 
 
@@ -40,7 +40,7 @@ def tidy(cfg: Config, state: State, tmux: Tmux) -> None:
         open_refs.add(window.ref)
         watch, key = groups.parse_ref(window.ref)
         group = state.group(watch, key)
-        if group is None or window.clients or windows.age(state, watch, key) < GRACE:
+        if group is None or window.clients or _just_opened(state, watch, key):
             continue
         if group["status"] == "failed" or (group["idle"] and group["status"] in DONE):
             tmux.close(window.id)
@@ -55,6 +55,12 @@ def tidy(cfg: Config, state: State, tmux: Tmux) -> None:
             started = datetime.fromisoformat(turn["started_at"])
             group_turn.fail(state, turn, windows.exit_error(state, turn["watch"], turn["group_key"]),
                             (datetime.now(timezone.utc) - started).total_seconds())
+
+
+def _just_opened(state: State, watch: str, key: str) -> bool:
+    """`vahtovik open` started the window a moment ago: the person may not have attached to it yet."""
+    record = state.window_record(watch, key)
+    return bool(record and record["purpose"] == "open") and windows.age(state, watch, key) < GRACE
 
 
 def _last_activity(state: State, claude: Claude, watch: str, key: str, group) -> datetime:
