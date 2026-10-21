@@ -1,5 +1,5 @@
 # Example watch: new releases of uv (the Python package manager).
-enabled: true
+enabled: false                  # timer runs skip it; `vahtovik run --watch example` still runs it
 interval: 6h
 sources:
   - id: uv-releases
