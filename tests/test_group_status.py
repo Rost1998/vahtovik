@@ -135,3 +135,6 @@ def test_older_database_gets_the_new_columns(tmp_path):
     state = State(path)
     group = state.group("w", "k")
     assert (group["status"], group["idle"], group["stop_blocks"]) == ("idle", 1, 0)
+    assert group["checked_at"]  # the watchdog checks what changes from now on, not every older session
+    state.execute("INSERT INTO groups (watch, key, title) VALUES ('w', 'new', 'N')")
+    assert State(path).group("w", "new")["checked_at"] is None

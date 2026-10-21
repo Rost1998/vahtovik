@@ -85,14 +85,17 @@ def _time(value: str | None) -> datetime:
     return datetime.fromisoformat(value) if value else EPOCH
 
 
-def _last_activity(state: State, claude: Claude, watch: str, key: str, group) -> datetime:
-    """The latest change: a prompt, a status, the window's start or end, or the session's conversation file."""
-    record = state.window_record(watch, key)
-    times = [_time(t) for t in (group["prompt_at"], group["status_at"],
-                                record and record["started_at"], record and record["ended_at"])]
-    path = claude.session_file(group["session_id"])
-    if path:
-        times.append(datetime.fromtimestamp(path.stat().st_mtime, timezone.utc))
+def _last_activity(state: State, claude: Claude, watch: str, key: str, group, window: Window | None) -> datetime:
+    """The latest change: a prompt or a status, and for an open window also its start and the session's
+    conversation file. The end of a window is no change: the watchdog itself ends the windows it checked, and
+    Claude Code writes to the conversation file as it ends."""
+    times = [_time(group["prompt_at"]), _time(group["status_at"])]
+    if window:
+        record = state.window_record(watch, key)
+        times.append(_time(record and record["started_at"]))
+        path = claude.session_file(group["session_id"])
+        if path:
+            times.append(datetime.fromtimestamp(path.stat().st_mtime, timezone.utc))
     return max(times)
 
 
@@ -110,9 +113,9 @@ class Session:
 
 def sessions_to_check(cfg: Config, state: State, tmux: Tmux, claude: Claude) -> list[Session]:
     """The sessions the AI should check: every working one (`running` or `background`, with a window or
-    without one, which means it was interrupted), and every other one with an open window that changed since
-    the last check. Not the ones a person looks at, nor the ones that wait for a person (`maintenance`) or
-    are failed."""
+    without one, which means it was interrupted), and every other one that changed since the last check:
+    with an open window, or `finished` or `waiting` with a window that ended before a check. Not the ones a
+    person looks at, nor the ones that wait for a person (`maintenance`) or are failed."""
     open_windows = {w.ref: w for w in tmux.windows()}
     found = []
     for watch in cfg.watches.values():
@@ -121,10 +124,10 @@ def sessions_to_check(cfg: Config, state: State, tmux: Tmux, claude: Claude) -> 
             window = open_windows.get(f"{watch.name}/{key}")
             if window and (window.clients or _just_opened(state, watch.name, key)):
                 continue
-            if status in ("maintenance", "failed") or (window is None and status not in WORKING):
+            if status in ("maintenance", "failed") or (window is None and status == "idle"):
                 continue
             # Times are kept to the second: a change in the second of the last check counts as a change.
-            changed = _last_activity(state, claude, watch.name, key, group) >= _time(group["checked_at"])
+            changed = _last_activity(state, claude, watch.name, key, group, window) >= _time(group["checked_at"])
             if status in WORKING or changed:
                 found.append(Session(watch, group, window))
     return found

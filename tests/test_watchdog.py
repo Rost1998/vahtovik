@@ -146,6 +146,47 @@ def test_done_window_closes_only_after_the_check_says_none(project, caplog):
     assert tmux.window("w1/g") is None
     assert "w1/g: Closed the session window: status finished, checked by the watchdog" in caplog.messages
     assert _notices(state) == []
+    with open(claude.session_file(state.group("w1", "g")["session_id"]), "a") as conversation:
+        conversation.write('{"type": "cost-state"}\n')  # Claude Code writes to it as its window ends
+    watchdog.tick(cfg, state, tmux, claude, "run1")
+    assert len(_watchdog_calls(project)) == 2  # the close itself is no change to check
+
+
+@pytest.mark.parametrize("status", ["finished", "waiting"])
+def test_done_session_whose_window_ended_before_a_check_is_checked_once(project, caplog, status):
+    caplog.set_level(logging.INFO, logger="vahtovik")
+    cfg, state, claude, tmux = _setup(project)
+    _done_turn(project, cfg, state, claude, tmux)
+    if status == "waiting":
+        state.set_status("w1", "g", "waiting", None, ["Which build?"])
+    tmux.close(tmux.window("w1/g").id)  # a reboot, or a person, ended it
+    until(lambda: not _locked(cfg))
+    time.sleep(1.1)  # times are kept to the second: the check comes in a later second than the agent's stop
+    project.queue(_answer("none", "It reported and stopped."))
+    watchdog.check(cfg, state, tmux, claude, "run1")
+    call, = _watchdog_calls(project)
+    assert f"- Status: `{status}` since" in call["prompt"]
+    assert "- Window: none" in call["prompt"] and "The screen:" not in call["prompt"]
+    assert "w1/g: Watchdog found it right: It reported and stopped." in caplog.messages
+    watchdog.check(cfg, state, tmux, claude, "run1")
+    assert len(_watchdog_calls(project)) == 1 and tmux.window("w1/g") is None
+
+
+def test_finished_session_with_unfinished_work_and_no_window_is_resumed(project, caplog):
+    caplog.set_level(logging.INFO, logger="vahtovik")
+    cfg, state, claude, tmux = _setup(project)
+    _done_turn(project, cfg, state, claude, tmux)
+    tmux.close(tmux.window("w1/g").id)
+    until(lambda: not _locked(cfg))
+    project.queue(_answer("resume", "It said finished while its build still ran."),
+                  {"mode": "interactive", "actions": [status_action("finished", None, None)]})
+    watchdog.check(cfg, state, tmux, claude, "run1")
+    until(lambda: len(project.hook_answers("UserPromptSubmit")) == 2)
+    until(lambda: state.group("w1", "g")["status"] == "finished" and state.group("w1", "g")["idle"] == 1)
+    call = project.calls()[-1]
+    assert "--resume" in call["args"] and call["prompt"] == " ".join(_meta(cfg)["resume"].split())
+    assert [n["subject"] for n in _notices(state)] == ["WATCHDOG-DEBUG: Resumed: G"]
+    assert state.turn("t1")["ok"] == 1
 
 
 def test_working_session_is_checked_every_time_and_stays_open(project, caplog):

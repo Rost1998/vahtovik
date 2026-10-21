@@ -74,6 +74,10 @@ class State:
                     except sqlite3.OperationalError as exc:  # another process added it first
                         if "duplicate column" not in str(exc):
                             raise
+                        continue
+                    if (table, name) == ("groups", "checked_at"):
+                        # The watchdog checks what changes from now on, not every older session at once.
+                        self.execute("UPDATE groups SET checked_at = ?", utc_iso())
 
     def close(self) -> None:
         self.db.close()
