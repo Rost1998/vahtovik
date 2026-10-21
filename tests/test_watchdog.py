@@ -317,7 +317,16 @@ def test_ticker_checks_only_every_check_every(project):
     assert len(_watchdog_calls(project)) == 1
 
 
-def test_conversation_tail_shows_messages_commands_and_stops(tmp_path):
+@pytest.fixture
+def kyiv_summer_time(monkeypatch):
+    monkeypatch.setenv("TZ", "Etc/GMT-3")  # three hours ahead of UTC
+    time.tzset()
+    yield
+    monkeypatch.undo()
+    time.tzset()
+
+
+def test_conversation_tail_shows_messages_commands_and_stops(tmp_path, kyiv_summer_time):
     path = tmp_path / "s.jsonl"
     lines = [
         {"type": "mode", "mode": "x"},
@@ -330,11 +339,11 @@ def test_conversation_tail_shows_messages_commands_and_stops(tmp_path):
         {"type": "system", "subtype": "turn_duration", "timestamp": "2026-10-21T14:43:19Z"},
     ]
     path.write_text("\n".join(json.dumps(line) for line in lines) + "\nnot json\n")
-    assert watchdog.conversation_tail(path) == (
-        "14:43:11 user: Process the artifacts.\n"
-        '14:43:14 assistant: Starting the build. [runs Bash] {"command": "make", "run_in_background": true}\n'
-        "14:43:15 user: [result] Command running in background\n"
-        "14:43:19 (the agent stopped)")
+    assert watchdog.conversation_tail(path) == (  # in local time, like the other times in the prompt
+        "17:43:11 user: Process the artifacts.\n"
+        '17:43:14 assistant: Starting the build. [runs Bash] {"command": "make", "run_in_background": true}\n'
+        "17:43:15 user: [result] Command running in background\n"
+        "17:43:19 (the agent stopped)")
     assert watchdog.conversation_tail(None) == "(no conversation file)"
 
 

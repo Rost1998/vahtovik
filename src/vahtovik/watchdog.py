@@ -225,7 +225,7 @@ def conversation_tail(path: Path | None, entries: int = 30, width: int = 400) ->
                 item = json.loads(raw)
             except json.JSONDecodeError:
                 continue
-            kind, when = item.get("type"), str(item.get("timestamp", ""))[11:19]
+            kind, when = item.get("type"), _clock(item.get("timestamp"))
             if kind == "system" and item.get("subtype") == "turn_duration":
                 lines.append(f"{when} (the agent stopped)")
                 continue
@@ -237,6 +237,14 @@ def conversation_tail(path: Path | None, entries: int = 30, width: int = 400) ->
             if text:
                 lines.append(f"{when} {kind}: {text[:width]}")
     return "\n".join(lines[-entries:]) or "(empty)"
+
+
+def _clock(stamp) -> str:
+    """A conversation file's time, which is UTC, as local time like the other times in the prompt."""
+    try:
+        return datetime.fromisoformat(str(stamp)).astimezone().strftime("%H:%M:%S")
+    except ValueError:
+        return ""
 
 
 def _block(block: dict) -> str:
