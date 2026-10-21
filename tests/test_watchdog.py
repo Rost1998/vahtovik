@@ -43,7 +43,7 @@ def _answer(action: str, reason: str = "Seen.", **extra) -> dict:
     return watchdog_answer({"group": "w1/g", "action": action, "reason": reason, **extra})
 
 
-def _notices(state, prefix: str = "WATCHDOG-DEBUG: "):
+def _notices(state, prefix: str = "WATCHDOG: "):
     return [r for r in state.rows("SELECT * FROM deliveries WHERE origin = 'notice'") if r["subject"].startswith(prefix)]
 
 
@@ -81,7 +81,7 @@ def test_watchdog_presses_the_keys_of_a_known_screen(project, caplog):
     assert "--json-schema" in call["args"] and "# vahtovik watchdog" in call["args"][call["args"].index("--append-system-prompt") + 1]
     assert "w1/g: Watchdog pressed Down Enter on the screen trust-folder: It asks to trust the folder." in caplog.messages
     notice, = _notices(state)
-    assert notice["subject"] == "WATCHDOG-DEBUG: Pressed keys: G"
+    assert notice["subject"] == "WATCHDOG: Pressed keys: G"
     assert notice["body"].startswith("w1/g: vahtovik pressed Down Enter on the screen trust-folder. "
                                      "The watchdog saw: It asks to trust the folder.")
 
@@ -97,7 +97,7 @@ def test_stuck_turn_pauses_for_a_person_and_the_channels_hear_of_it(project, cap
     assert tmux.window("w1/g") is not None and state.unfinished_turns()[0]["id"]
     notice = state.row("SELECT * FROM deliveries WHERE subject LIKE 'WATCHDOG: Needs attention%'")
     assert notice["body"].startswith("w1/g is stuck: Claude Code asks to log in.")
-    assert [n["subject"] for n in _notices(state)] == ["WATCHDOG-DEBUG: Needs a person: G"]
+    assert [n["subject"] for n in _notices(state)] == ["WATCHDOG: Needs a person: G", "WATCHDOG: Needs attention: G"]
     until(lambda: len(project.calls()) == 2)  # the window's session and the watchdog
     group_turn.run(cfg, state, claude, tmux, cfg.watch("w1"), "run2")
     assert len(project.calls()) == 2  # the window still holds the group: no new session
@@ -185,7 +185,7 @@ def test_finished_session_with_unfinished_work_and_no_window_is_resumed(project,
     until(lambda: state.group("w1", "g")["status"] == "finished" and state.group("w1", "g")["idle"] == 1)
     call = project.calls()[-1]
     assert "--resume" in call["args"] and call["prompt"] == " ".join(_meta(cfg)["resume"].split())
-    assert [n["subject"] for n in _notices(state)] == ["WATCHDOG-DEBUG: Resumed: G"]
+    assert [n["subject"] for n in _notices(state)] == ["WATCHDOG: Resumed: G"]
     assert state.turn("t1")["ok"] == 1
 
 
@@ -229,7 +229,7 @@ def test_nudge_types_the_fixed_message_to_an_idle_agent(project, caplog):
     until(lambda: len(project.hook_answers("UserPromptSubmit")) == 2)  # the nudge counts as a prompt
     assert "w1/g: Watchdog nudged the agent: It said finished, but its build never ended." in caplog.messages
     notice, = _notices(state)
-    assert notice["subject"] == "WATCHDOG-DEBUG: Nudged: G"
+    assert notice["subject"] == "WATCHDOG: Nudged: G"
 
 
 def test_nudge_and_press_never_reach_a_working_agent(project, caplog):
@@ -258,7 +258,7 @@ def test_resume_opens_an_interrupted_session_with_the_fixed_message(project, cap
     assert "--resume" in call["args"] and call["prompt"] == " ".join(_meta(cfg)["resume"].split())
     assert state.window_record("w1", "g")["purpose"] == "resume"
     assert any(m.startswith("w1/g: Watchdog resumed the session in tmux window @") for m in caplog.messages)
-    assert [n["subject"] for n in _notices(state)] == ["WATCHDOG-DEBUG: Resumed: G"]
+    assert [n["subject"] for n in _notices(state)] == ["WATCHDOG: Resumed: G"]
 
 
 def test_resume_and_retry_never_start_a_second_agent(project, caplog):
@@ -287,7 +287,7 @@ def test_retry_repeats_a_turn_whose_work_was_lost(project):
     assert (row["status"], row["attempts"]) == ("new", 1)
     assert state.group("w1", "g")["status"] == "failed"
     assert state.pending_groups("w1", group_turn.MAX_ATTEMPTS) == ["g"]
-    assert [n["subject"] for n in _notices(state)] == ["WATCHDOG-DEBUG: Retrying: G"]
+    assert [n["subject"] for n in _notices(state)] == ["WATCHDOG: Retrying: G"]
 
 
 def test_failed_watchdog_session_changes_nothing(project, caplog):

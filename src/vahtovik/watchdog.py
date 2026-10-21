@@ -339,8 +339,7 @@ def _debug(cfg: Config, state: State, session: Session, action: str, what: str, 
     """Tell the watch's channels what the watchdog did, for now while it is new."""
     _send(cfg, state, session.watch, session.group["key"], session.watch.channels,
           f"{DONE_WHAT[action]}: {session.group['title']}",
-          f"{session.ref}: {what}. The watchdog saw: {reason}\n\nOpen its session: vahtovik open {session.ref}",
-          prefix="WATCHDOG-DEBUG")
+          f"{session.ref}: {what}. The watchdog saw: {reason}\n\nOpen its session: vahtovik open {session.ref}")
 
 
 def notify(cfg: Config, state: State, tmux: Tmux) -> None:
@@ -378,9 +377,8 @@ def _send_notice(cfg: Config, state: State, watch: Watch, group) -> None:
     _send(cfg, state, watch, key, watch.channels, subject, body + f"\n\nOpen its session: vahtovik open {ref}")
 
 
-def _send(cfg: Config, state: State, watch: Watch, key: str, channels: list[str], subject: str, body: str,
-          prefix: str = "WATCHDOG") -> None:
-    subject = f"{prefix}: {subject}"  # tells notices apart from the agents' own reports
+def _send(cfg: Config, state: State, watch: Watch, key: str, channels: list[str], subject: str, body: str) -> None:
+    subject = f"WATCHDOG: {subject}"  # tells notices apart from the agents' own reports
     if not channels:
         log.warning("%s/%s: Skipped notice \"%s\": no channel to send it to", watch.name, key, subject)
     for channel in channels:
