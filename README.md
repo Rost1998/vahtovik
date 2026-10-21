@@ -37,15 +37,15 @@ Each group has one Claude Code session, created on its first turn and resumed on
 - `context.md`: Summary and Work log (written by the agent), Open questions, Artifacts and Reports (written by vahtovik);
 - `artifacts/*.json`: one file per artifact.
 
-Group sessions run as interactive Claude Code, each in its own window of the tmux session `vahtovik-agents` (set in `vahtovik.yaml`). Its first window shows the journal.
+Group sessions run as interactive Claude Code, each in its own window of the tmux session `vahtovik-agents`. The session is on a tmux server of its own, `tmux -L vahtovik`, apart from your own tmux sessions; both names are set in `vahtovik.yaml`, and `socket: null` uses your default tmux server instead. The first window shows the journal. To look around yourself: `tmux -L vahtovik attach -t vahtovik-agents`.
 
-- `vahtovik open <watch>/<key>` shows you the group's window: a running turn, or the session started fresh if none is running. You see every earlier turn and can ask the agent anything: explain, research more, scan sources again, add artifacts, or send extra reports. Inside tmux it switches your window; outside it attaches your terminal.
+- `vahtovik open <watch>/<key>` shows you the group's window: a running turn, or the session started fresh if none is running. You see every earlier turn and can ask the agent anything: explain, research more, scan sources again, add artifacts, or send extra reports. It attaches your terminal to the window. Inside your own tmux this is tmux inside tmux, and Ctrl-b goes to your outer tmux: press Ctrl-b Ctrl-b d to leave the inner one. (With `socket: null`, inside tmux it switches your window instead.)
 - Leave whenever you like: detach, or switch back to your own window. The agent keeps working.
 - While the window is open, it holds the group's lock, and runs skip that group.
 - The watchdog (below) closes a window when its agent is done (`finished`, `waiting` or `failed`) and nobody is looking at it.
 - `--new-session` starts a fresh session that rebuilds its picture from `context.md`.
 
-If no tmux server is running, vahtovik starts one with `systemd-run --user`, so the server outlives the run that started it.
+If vahtovik's tmux server is not running, vahtovik starts it with `systemd-run --user`, so the server outlives the run that started it.
 
 Every group has a status, shown by `vahtovik status`. The agent ends every automated turn, and every reply to a person, with one command:
 

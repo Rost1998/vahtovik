@@ -39,7 +39,7 @@ class ClaudeSettings:
 @dataclass
 class TmuxSettings:
     session: str = "vahtovik-agents"  # the tmux session that holds a window per running group session
-    socket: str | None = None  # `tmux -L <socket>`; None uses the default tmux server
+    socket: str | None = "vahtovik"  # `tmux -L <socket>`, a server of its own; None uses the default tmux server
 
 
 @dataclass
@@ -238,7 +238,8 @@ def _load_tmux(raw: object) -> TmuxSettings:
     raw = raw or {}
     settings = TmuxSettings()
     settings.session = str(raw.get("session") or settings.session)
-    settings.socket = str(raw["socket"]) if raw.get("socket") else None
+    if "socket" in raw:
+        settings.socket = str(raw["socket"]) if raw["socket"] else None
     return settings
 
 

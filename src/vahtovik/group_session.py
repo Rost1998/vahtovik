@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import shlex
 import uuid
 
 from . import groups, skills, windows
@@ -69,7 +70,7 @@ def open_session(cfg: Config, state: State, ref: str, new_session: bool = False)
     window = tmux.window(ref)
     if window and new_session:
         raise ConfigError(f"{ref} is running in tmux window {window.id}; close that window first "
-                          f"(tmux kill-window -t {window.id}) to start a new session")
+                          f"({shlex.join([*tmux.base, 'kill-window', '-t', window.id])}) to start a new session")
     if window is None:
         try:
             with groups.lock(cfg.group_dir(watch_name, key)):

@@ -11,7 +11,7 @@ claude:
 
 tmux:                         # group sessions run in windows of this tmux session; `vahtovik open` shows you one
   session: vahtovik-agents
-  socket: null                # null: your default tmux server; a name: a separate server (tmux -L <name>)
+  socket: vahtovik            # a tmux server of its own (tmux -L vahtovik); null: your default tmux server
 
 watchdog:                     # looks after the group session windows (see README)
   every: 1m                   # how often, while a run waits for a group turn

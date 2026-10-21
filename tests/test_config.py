@@ -17,6 +17,18 @@ def test_loads_project_and_merges_stage_settings(project):
     assert cfg.stage(watch, "monitor").effort == "low"
 
 
+
+def test_tmux_server_is_vahtoviks_own_unless_set_to_null(project):
+    path = project.root / "vahtovik.yaml"
+    data = yaml.safe_load(path.read_text())
+    del data["tmux"]
+    path.write_text(yaml.safe_dump(data))
+    assert config_mod.load(project.root).tmux.socket == "vahtovik"
+    data["tmux"] = {"socket": None}
+    path.write_text(yaml.safe_dump(data))
+    assert config_mod.load(project.root).tmux.socket is None
+
+
 def test_watch_with_unknown_channel_is_rejected(project):
     path = project.root / "watches/w1/watch.yaml"
     data = yaml.safe_load(path.read_text())

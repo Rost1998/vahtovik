@@ -114,7 +114,7 @@ def test_open_starts_a_window_and_the_person_answers_the_agent(project, monkeypa
 
     group_session.open_session(cfg, state, "w1/g")  # a second open shows the same window
     assert shown == [window.id, window.id] and len(project.calls()) == 2
-    with pytest.raises(ConfigError, match="close that window first"):
+    with pytest.raises(ConfigError, match=r"close that window first \(tmux -L vahtovik-test-\S+ kill-window -t @"):
         group_session.open_session(cfg, state, "w1/g", new_session=True)
     watchdog.tick(cfg, state, tmux)
     assert tmux.window("w1/g") is None
