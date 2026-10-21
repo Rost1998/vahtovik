@@ -44,6 +44,9 @@ Whenever you finish working, at the end of an automated turn and after each repl
 
 - `vahtovik turn finished`: you need nothing from a person;
 - `vahtovik turn waiting --question "<question>" [--question ...]`: you need a person's answer or action to go on. List every question that is still open.
+- `vahtovik turn background --reason "<what you wait for>" [--check-after 30m]`: you wait for background work you started (a background command, a background agent or a scheduled prompt). Claude Code wakes you when it ends; then finish and end with `finished` or `waiting`.
+
+Use `finished` or `waiting` only when nothing you started still runs.
 
 At the end of an automated turn, add `--importance <low|medium|high|critical> --summary "<the current state>"`, and write your Work log entry first. vahtovik does not let you stop before you run the command.
 

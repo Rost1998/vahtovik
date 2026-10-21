@@ -114,8 +114,9 @@ def _run(cfg: Config, state: State, args, run_id: str) -> int:
     finally:
         state.finish_run(run_id, status)
     summary = state.run_summary(run_id)
-    turns = plural(summary["turns_ok"] + summary["turns_failed"], "group turn")
-    turns += f" ({summary['turns_failed']} failed)" if summary["turns_failed"] else ""
+    turns = plural(summary["turns_ok"] + summary["turns_failed"] + summary["turns_paused"], "group turn")
+    notes = [f"{summary[k]} {what}" for k, what in (("turns_failed", "failed"), ("turns_paused", "paused")) if summary[k]]
+    turns += f" ({', '.join(notes)})" if notes else ""
     reports = plural(summary["reports_sent"], "report") + " sent"
     reports += f", {summary['reports_failed']} not sent" if summary["reports_failed"] else ""
     log.info("Finished run in %s: %s, %s, %s, $%.2f", duration(time.monotonic() - started),
@@ -164,8 +165,12 @@ def _session_group() -> tuple[str, str]:
 def cmd_turn(args) -> int:
     cfg, state = _load()
     watch, key = _session_group()
+    try:
+        check_after = config_mod.parse_interval(args.check_after) if args.check_after else None
+    except ConfigError as exc:
+        raise group_status.StatusError(f"--check-after: {exc}") from None
     print(group_status.declare(cfg, state, cfg.watch(watch), key, args.status, args.importance, args.summary,
-                               args.question, os.environ.get("VAHTOVIK_TURN")))
+                               args.question, os.environ.get("VAHTOVIK_TURN"), args.reason, check_after))
     return 0
 
 
@@ -177,7 +182,7 @@ def cmd_hook(args) -> int:
     if args.event == "prompt":
         group_status.on_prompt(state, watch, key, data.get("session_id"))
     else:
-        answer = group_status.on_stop(state, watch, key)
+        answer = group_status.on_stop(state, watch, key, data, os.environ.get("VAHTOVIK_TURN"))
         if answer:
             print(json.dumps(answer))
     return 0
@@ -202,6 +207,7 @@ def cmd_status(args) -> int:
                 name, g["key"])}
             summary = ", ".join(f"{n} {s}" for s, n in sorted(counts.items()))
             status = g["status"] + (f": {g['status_reason']}" if g["status_reason"] else "")
+            status += f", check after {human(datetime.fromisoformat(g['check_after']))}" if g["check_after"] else ""
             questions = json.loads(g["questions"] or "[]") if g["status"] == "waiting" else []
             status += f", {plural(len(questions), 'open question')}" if questions else ""
             print(f"  group {g['key']}: {g['title']} | {status} | {summary} | "
@@ -343,11 +349,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_report)
 
     p = sub.add_parser("turn", help="end your turn with your status (for agents in group sessions)")
-    p.add_argument("status", choices=["finished", "waiting"],
-                   help="finished: you need nothing from a person; waiting: you need an answer or action")
+    p.add_argument("status", choices=["finished", "waiting", "background"],
+                   help="finished: you need nothing from a person; waiting: you need an answer or action; "
+                        "background: you wait for background work you started, which wakes you when it ends")
     p.add_argument("--importance", choices=group_status.IMPORTANCE, help="required at the end of an automated turn")
     p.add_argument("--summary", help="the current state in one or two sentences; required at the end of an automated turn")
     p.add_argument("--question", action="append", default=[], help="an open question; repeat for each one")
+    p.add_argument("--reason", help="background: what you wait for")
+    p.add_argument("--check-after", help="background: when the watchdog should check on you if you are still "
+                                         "waiting, for example 30m")
     p.set_defaults(func=cmd_turn)
 
     p = sub.add_parser("window", help=argparse.SUPPRESS)

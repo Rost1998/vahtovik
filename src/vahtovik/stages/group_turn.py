@@ -111,6 +111,11 @@ def turn(cfg: Config, state: State, claude: Claude, tmux: Tmux, watch: Watch, ke
         log.warning("%s: Paused group turn after %s: %s; its window stays open for a person", spec.scope,
                     duration(seconds), state.group(watch.name, key)["status_reason"] or "it needs a person")
         return False
+    if outcome == "background":
+        log.info("%s: Paused group turn after %s: the agent waits for its background work (%s); its window stays "
+                 "open, and the agent ends the turn when the work wakes it", spec.scope, duration(seconds),
+                 state.group(watch.name, key)["status_reason"])
+        return False
     if outcome == "done":
         output = json.loads(state.turn(turn_id)["output"])
         status = output["status"] + (f" ({plural(len(output['questions']), 'question')})" if output["questions"] else "")

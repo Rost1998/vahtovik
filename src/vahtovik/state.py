@@ -48,6 +48,7 @@ COLUMNS = {
     "groups": {
         "status": "TEXT DEFAULT 'idle'", "status_at": "TEXT", "status_reason": "TEXT", "questions": "TEXT",
         "prompt_at": "TEXT", "idle": "INTEGER DEFAULT 1", "stop_blocks": "INTEGER DEFAULT 0", "notified_at": "TEXT",
+        "check_after": "TEXT",
     },
     "group_turns": {"artifact_ids": "TEXT", "work_log_before": "INTEGER", "long_warned_at": "TEXT"},
     "windows": {"checked_at": "TEXT"},
@@ -95,12 +96,14 @@ class State:
         self.execute("UPDATE runs SET finished_at = ?, status = ? WHERE id = ?", utc_iso(), status, run_id)
 
     def run_summary(self, run_id: str) -> dict:
-        turns = self.row("SELECT COUNT(*) AS n, COALESCE(SUM(ok), 0) AS ok FROM group_turns WHERE run_id = ?", run_id)
+        turns = self.row("SELECT COUNT(*) AS n, COALESCE(SUM(ok = 1), 0) AS ok, COALESCE(SUM(ok = 0), 0) AS failed "
+                         "FROM group_turns WHERE run_id = ?", run_id)
         reports = self.row(
             "SELECT COALESCE(SUM(d.status = 'sent'), 0) AS sent, COALESCE(SUM(d.status != 'sent'), 0) AS failed "
             "FROM deliveries d JOIN group_turns t ON d.turn_id = t.id WHERE t.run_id = ?", run_id)
         cost = self.row("SELECT COALESCE(SUM(cost_usd), 0) AS c FROM sessions WHERE run_id = ?", run_id)["c"]
-        return {"turns_ok": turns["ok"], "turns_failed": turns["n"] - turns["ok"],
+        return {"turns_ok": turns["ok"], "turns_failed": turns["failed"],
+                "turns_paused": turns["n"] - turns["ok"] - turns["failed"],
                 "reports_sent": reports["sent"], "reports_failed": reports["failed"], "cost": cost}
 
     def last_run(self, watch: str) -> str | None:
@@ -156,19 +159,20 @@ class State:
     # group status (see group_status.py)
 
     def set_status(self, watch: str, key: str, status: str, reason: str | None = None,
-                   questions: list[str] | None = None) -> None:
+                   questions: list[str] | None = None, check_after: str | None = None) -> None:
         """Set the status; `questions` replaces the open questions when given."""
         self.execute(
             "UPDATE groups SET status = ?, status_at = ?, status_reason = ?, questions = COALESCE(?, questions), "
-            "notified_at = NULL WHERE watch = ? AND key = ?",
-            status, utc_iso(), reason, json.dumps(questions) if questions is not None else None, watch, key,
+            "check_after = ?, notified_at = NULL WHERE watch = ? AND key = ?",
+            status, utc_iso(), reason, json.dumps(questions) if questions is not None else None, check_after,
+            watch, key,
         )
 
     def prompt_submitted(self, watch: str, key: str) -> None:
         now = utc_iso()
         self.execute(
             "UPDATE groups SET status = 'running', status_at = ?, status_reason = NULL, prompt_at = ?, idle = 0, "
-            "stop_blocks = 0, notified_at = NULL WHERE watch = ? AND key = ?",
+            "stop_blocks = 0, check_after = NULL, notified_at = NULL WHERE watch = ? AND key = ?",
             now, now, watch, key,
         )
 
@@ -268,6 +272,14 @@ class State:
             "UPDATE group_turns SET finished_at = ?, ok = ?, output = ?, error = ? WHERE id = ?",
             utc_iso(), int(ok), json.dumps(output) if output is not None else None, error, turn_id,
         )
+
+    def reopen_turn(self, turn_id: str) -> None:
+        """Undo the end of a turn: its artifacts wait for the turn again."""
+        turn = self.turn(turn_id)
+        self.execute("UPDATE group_turns SET finished_at = NULL, ok = NULL, output = NULL, error = NULL WHERE id = ?",
+                     turn_id)
+        self.execute("UPDATE artifacts SET status = 'new', processed_at = NULL WHERE watch = ? AND status = 'processed' "
+                     "AND id IN (SELECT value FROM json_each(?))", turn["watch"], turn["artifact_ids"] or "[]")
 
     def unfinished_turns(self) -> list[sqlite3.Row]:
         return self.rows("SELECT * FROM group_turns WHERE finished_at IS NULL ORDER BY started_at")

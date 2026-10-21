@@ -79,7 +79,7 @@ claude:                         # optional overrides of vahtovik.yaml
 - what to use as the id, title and summary;
 - how to group: the rule for the group key (lowercase words with dashes) and the group title, with examples.
 
-`process/NN-<name>.md`, used in name order: how to process and analyze a group's new artifacts. The agent has the group's whole history. Say what to note in the Work log and the Summary, and how to rate importance: `low`, `medium`, `high` or `critical`. If some decisions belong to a person, say which: the agent then asks in its report, ends the turn as `waiting`, and the person answers in `vahtovik open`.
+`process/NN-<name>.md`, used in name order: how to process and analyze a group's new artifacts. The agent has the group's whole history. Say what to note in the Work log and the Summary, and how to rate importance: `low`, `medium`, `high` or `critical`. If some decisions belong to a person, say which: the agent then asks in its report, ends the turn as `waiting`, and the person answers in `vahtovik open`. If processing starts long work, such as a build, the rules may tell the agent to run it in the background: it ends the turn as `background`, and Claude Code wakes it when the work ends.
 
 `report.md`: for each channel of the watch, when to report (for example only `high` and `critical` turns), the subject, and what the body holds.
 

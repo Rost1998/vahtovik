@@ -32,6 +32,7 @@ $deliveries
 4. Decide what to report by the reporting rules. Send each report with `vahtovik report --channel <name> --subject "<subject>"` and the message body on stdin, formatted by that channel's rules. Each command prints the delivery id and whether it was sent. If you need a person's answer to go on, put the questions in the report too.
 5. End the turn with exactly one command:
    - `vahtovik turn finished --importance <low|medium|high|critical> --summary "<the current state in one or two sentences>"` when you need nothing from a person;
-   - `vahtovik turn waiting --importance <...> --summary "<...>" --question "<question>" [--question "<question>" ...]` when you need a person's answer or action to go on. List every question that is still open, including earlier ones.
+   - `vahtovik turn waiting --importance <...> --summary "<...>" --question "<question>" [--question "<question>" ...]` when you need a person's answer or action to go on. List every question that is still open, including earlier ones;
+   - `vahtovik turn background --reason "<what you wait for>" [--check-after 30m]` when you started background work (a background command, a background agent or a scheduled prompt) and go on when it ends. Claude Code wakes you then; finish the steps above and end the turn with one of the two commands above.
 
-   If the command prints an error, fix what it says and run it again. Then stop.
+   Use `finished` or `waiting` only when nothing you started still runs. If the command prints an error, fix what it says and run it again. Then stop.

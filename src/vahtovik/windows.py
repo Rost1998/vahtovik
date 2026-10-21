@@ -84,13 +84,14 @@ def exit_error(state: State, watch: str, key: str) -> str:
 
 def wait_for_turn(state: State, tmux: Tmux, watch: str, key: str, turn_id: str,
                   tick: Callable[[], None] | None = None) -> str:
-    """Wait until the turn ends: "done", "failed", "maintenance", or "ended" (the window closed)."""
+    """Wait until the turn ends: "done", "failed", "maintenance", "background" (the agent waits for its own
+    background work), or "ended" (the window closed)."""
     ref = f"{watch}/{key}"
     while True:
         group, turn = state.group(watch, key), state.turn(turn_id)
         if turn["finished_at"] and (group["idle"] or not turn["ok"]):
             return "done" if turn["ok"] else "failed"
-        if group["status"] in ("failed", "maintenance"):
+        if group["status"] in ("failed", "maintenance") or (group["status"] == "background" and group["idle"]):
             return group["status"]
         if tmux.window(ref) is None:
             return "ended"

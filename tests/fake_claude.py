@@ -10,7 +10,10 @@ and performs the response's actions in the working folder (their results go to $
 
 Response keys: "mode" ("print" or "interactive": only a session in that mode takes the response); "actions"; "on_block" (actions run when a Stop hook blocks the first time); "exit" (exit code,
 right after the actions); "screen" (interactive: show this text and wait for a line of keys, as a startup
-screen does, before the prompt); "hang" (interactive: stop responding after the prompt hook).
+screen does, before the prompt); "hang" (interactive: stop responding after the prompt hook);
+"background_tasks" and "session_crons" (what the Stop hook hears is still running, as Claude Code tells it);
+"wake" ({"after": seconds, "actions": [...]}: then the background work ends, and like Claude Code the fake
+wakes the agent with a task notification prompt that runs these actions).
 """
 
 import fcntl
@@ -105,13 +108,19 @@ class Session:
             print(response.get("stderr", "fake failure"), file=sys.stderr, flush=True)
             return response["exit"]
         for attempt in range(10):
-            answers = self.hook("Stop", {"stop_hook_active": attempt > 0})
+            answers = self.hook("Stop", {"stop_hook_active": attempt > 0,
+                                         "background_tasks": response.get("background_tasks", []),
+                                         "session_crons": response.get("session_crons", [])})
             if not any(a.get("decision") == "block" for a in answers):
                 break
             if attempt == 0:
                 perform(response.get("on_block", []))
         if self.interactive:
             print(response.get("result", "done"), flush=True)
+        if "wake" in response:
+            time.sleep(response["wake"].get("after", 0))
+            return self.turn("<task-notification>background work ended</task-notification>",
+                             {"actions": response["wake"].get("actions", [])})
         return None
 
     def hook(self, event: str, payload: dict) -> list[dict]:
