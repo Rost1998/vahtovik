@@ -81,7 +81,7 @@ At the start of every run, and every `watchdog.check_every` (5 minutes) while a 
 - `maintenance`: the session needs a person, for example to log in again. It keeps its window and its lock until you fix it: open it, fix the problem, and type "continue";
 - `failed`: the session cannot go on; the turn is retried.
 
-The AI never writes text for a session, and vahtovik never touches a window that a person is looking at. Every action except `none` also sends a notice whose subject starts with `WATCHDOG:`, so you can follow what the watchdog does while it is new.
+The AI never writes text for a session, and vahtovik never touches a window that a person is looking at. Every action except `none` also sends a notice whose subject starts with `WATCHDOG:`, so you can follow what the watchdog does while it is new. For `maintenance` this is the usual "Needs attention" notice, sent at once.
 
 Between runs nothing checks the sessions. A timer every 5 minutes (`vahtovik install-timer --every 5m`) keeps the checks going while no run waits.
 

@@ -95,15 +95,15 @@ def test_stuck_turn_pauses_for_a_person_and_the_channels_hear_of_it(project, cap
     assert any(m.startswith("w1/g: Paused group turn after") and m.endswith(
         "Claude Code asks to log in.; its window stays open for a person") for m in caplog.messages)
     assert tmux.window("w1/g") is not None and state.unfinished_turns()[0]["id"]
-    notice = state.row("SELECT * FROM deliveries WHERE subject LIKE 'WATCHDOG: Needs attention%'")
-    assert notice["body"].startswith("w1/g is stuck: Claude Code asks to log in.")
-    assert [n["subject"] for n in _notices(state)] == ["WATCHDOG: Needs a person: G", "WATCHDOG: Needs attention: G"]
+    notice, = _notices(state)  # one notice: the AI's pick sends the usual one at once
+    assert notice["subject"] == "WATCHDOG: Needs attention: G"
+    assert notice["body"] == "w1/g is stuck: Claude Code asks to log in.\n\nOpen its session: vahtovik open w1/g"
     until(lambda: len(project.calls()) == 2)  # the window's session and the watchdog
     group_turn.run(cfg, state, claude, tmux, cfg.watch("w1"), "run2")
     assert len(project.calls()) == 2  # the window still holds the group: no new session
     watchdog.tick(cfg, state, tmux, claude, "run3")
     assert tmux.window("w1/g") is not None  # a stuck window waits for the person, and is not checked again
-    assert len(_watchdog_calls(project)) == 1
+    assert len(_watchdog_calls(project)) == 1 and len(_notices(state)) == 1  # not again before notify_every
 
 
 def test_screen_that_is_not_on_the_list_needs_a_person(project):
@@ -115,6 +115,41 @@ def test_screen_that_is_not_on_the_list_needs_a_person(project):
     group = state.group("w1", "g")
     assert group["status"] == "maintenance"
     assert group["status_reason"] == "a screen that is not on the known list: It asks to confirm."
+    notice, = _notices(state)
+    assert notice["subject"] == "WATCHDOG: Needs attention: G"
+    assert notice["body"].startswith("w1/g is stuck: a screen that is not on the known list: It asks to confirm.")
+
+
+def test_session_that_cannot_be_resumed_needs_a_person(project):
+    cfg, state, claude, tmux = _setup(project)
+    _done_turn(project, cfg, state, claude, tmux)
+    tmux.close(tmux.window("w1/g").id)
+    until(lambda: not _locked(cfg))
+    state.prompt_submitted("w1", "g")
+    claude.session_file(state.group("w1", "g")["session_id"]).unlink()
+    project.queue(_answer("resume", "It was killed mid-task."))
+    watchdog.check(cfg, state, tmux, claude, "run1")
+    group = state.group("w1", "g")
+    assert (group["status"], group["status_reason"]) == ("maintenance", "the session to resume is gone: It was killed mid-task.")
+    assert [n["subject"] for n in _notices(state)] == ["WATCHDOG: Needs attention: G"]
+
+
+def test_maintenance_notice_that_breaks_goes_out_at_the_next_tick(project, monkeypatch):
+    cfg, state, claude, tmux = _setup(project)
+    project.queue({"mode": "interactive", "hang": True}, _answer("maintenance", "Claude Code asks to log in."))
+    launch_turn(cfg, state, claude, tmux)
+    until(lambda: project.hook_answers("UserPromptSubmit"))
+    real = delivery.report
+
+    def broken(*args, **kwargs):
+        raise OSError("disk full")
+    monkeypatch.setattr(delivery, "report", broken)
+    with pytest.raises(OSError):
+        watchdog.check(cfg, state, tmux, claude, "run1")
+    assert state.group("w1", "g")["status"] == "maintenance" and _notices(state) == []
+    monkeypatch.setattr(delivery, "report", real)
+    watchdog.tick(cfg, state, tmux, claude, "run1")
+    assert [n["subject"] for n in _notices(state)] == ["WATCHDOG: Needs attention: G"]
 
 
 def test_broken_session_fails_the_turn_and_its_window_closes(project):

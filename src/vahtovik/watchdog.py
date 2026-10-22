@@ -30,8 +30,7 @@ GRACE = timedelta(seconds=10)  # a window of `vahtovik open` is left alone this 
 CLOSABLE = ("finished", "waiting", "idle")  # statuses of an agent that is done, once it is idle
 WORKING = ("running", "background")  # statuses the AI checks every time, changed or not
 EPOCH = datetime.min.replace(tzinfo=timezone.utc)
-DONE_WHAT = {"press": "Pressed keys", "nudge": "Nudged", "resume": "Resumed", "retry": "Retrying",
-             "maintenance": "Needs a person", "failed": "Failed"}
+DONE_WHAT = {"press": "Pressed keys", "nudge": "Nudged", "resume": "Resumed", "retry": "Retrying", "failed": "Failed"}
 
 
 def tick(cfg: Config, state: State, tmux: Tmux, claude: Claude | None = None, run_id: str | None = None,
@@ -328,7 +327,7 @@ def _act(cfg: Config, state: State, tmux: Tmux, claude: Claude, session: Session
     if action == "maintenance":
         state.set_status(watch, key, "maintenance", reason)
         log.warning("%s: Needs a person: %s", ref, reason)
-        return _debug(cfg, state, session, action, "vahtovik set the status to maintenance", reason)
+        return _send_notice(cfg, state, session.watch, state.group(watch, key))  # now, not at the next tick
     if action == "failed":
         state.set_status(watch, key, "failed", reason)
         log.error("%s: Watchdog found the session broken: %s", ref, reason)
@@ -365,7 +364,6 @@ def notify(cfg: Config, state: State, tmux: Tmux) -> None:
 
 def _send_notice(cfg: Config, state: State, watch: Watch, group) -> None:
     key, ref = group["key"], f"{watch.name}/{group['key']}"
-    state.set_notified(watch.name, key)
     if group["status"] == "waiting":
         questions = "\n".join(f"- {q}" for q in json.loads(group["questions"] or "[]"))
         subject, body = f"Waiting for your answer: {group['title']}", f"{ref} waits for your answer:\n{questions}"
@@ -375,6 +373,7 @@ def _send_notice(cfg: Config, state: State, watch: Watch, group) -> None:
         subject = f"Failed: {group['title']}"
         body = f"{ref} failed, and vahtovik stopped retrying: {group['status_reason']}"
     _send(cfg, state, watch, key, watch.channels, subject, body + f"\n\nOpen its session: vahtovik open {ref}")
+    state.set_notified(watch.name, key)  # only after the send: if it breaks, notify() sends the notice again
 
 
 def _send(cfg: Config, state: State, watch: Watch, key: str, channels: list[str], subject: str, body: str) -> None:

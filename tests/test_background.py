@@ -1,6 +1,7 @@
 import logging
 
 import pytest
+import yaml
 from conftest import artifact, status_action, until, work_log
 
 from vahtovik import artifacts, cli, group_status, watchdog
@@ -84,12 +85,17 @@ def test_background_with_nothing_running_is_sent_back_to_work(project):
 
 
 def test_background_that_never_ends_needs_a_person(project):
+    path = project.root / "watches/w1/watch.yaml"
+    path.write_text(yaml.safe_dump({**yaml.safe_load(path.read_text()), "channels": ["log"]}))
     cfg, state, _, _ = _setup(project)
     group_status.declare(cfg, state, cfg.watch("w1"), "g", "background", reason="waiting for a build")
     for _ in range(group_status.MAX_STOP_BLOCKS):
         assert group_status.on_stop(state, "w1", "g", {"background_tasks": []})["decision"] == "block"
     assert group_status.on_stop(state, "w1", "g", {"background_tasks": []}) is None
     assert state.group("w1", "g")["status"] == "maintenance"
+    watchdog.notify(cfg, state, Tmux(cfg))  # the hook sends no notice itself: the watchdog's next tick does
+    notice, = state.rows("SELECT * FROM deliveries WHERE origin = 'notice'")
+    assert notice["subject"] == "WATCHDOG: Needs attention: G"
 
 
 def test_older_claude_code_that_does_not_tell_is_trusted(project):
