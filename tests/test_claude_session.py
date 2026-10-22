@@ -49,6 +49,7 @@ def test_login_modes(project, monkeypatch):
     assert "--bare" not in claude.print_args(spec)
     assert "ANTHROPIC_API_KEY" not in claude.env(spec)
     assert claude.env(spec)["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] == "1"
+    assert claude.env(spec)["CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION"] == "false"
 
     path = project.root / "vahtovik.yaml"
     data = yaml.safe_load(path.read_text())
@@ -79,7 +80,7 @@ def test_interactive_args_end_with_the_prompt_and_group_sessions_get_the_hooks(p
     args = claude.interactive_args(_spec(cfg, "resume", session_id="abc"))
     assert args[0] == cfg.claude.binary and "-p" not in args and args[-1] == "do it"
     settings = json.loads(_value(args, "--settings"))
-    assert settings["skipDangerousModePermissionPrompt"] is True
+    assert settings["skipDangerousModePermissionPrompt"] is True and settings["promptSuggestionEnabled"] is False
     assert settings["hooks"]["Stop"][0]["hooks"][0]["command"].endswith("-m vahtovik hook stop")
 
 

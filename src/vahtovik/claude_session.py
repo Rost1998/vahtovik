@@ -88,11 +88,13 @@ class Claude:
     def settings_json(self, spec: SessionSpec) -> str:
         """Keep the user's personal and parent-folder CLAUDE.md files out of vahtovik sessions
         (the working folder's own CLAUDE.md still loads), skip the bypassPermissions warning screen,
-        and give group sessions the hooks that keep their status (group_status.py)."""
+        turn off prompt suggestions (see env()), and give group sessions the hooks that keep their status
+        (group_status.py)."""
         excludes = [str(Path.home() / ".claude" / "CLAUDE.md"), str(Path.home() / ".claude" / "rules" / "**")]
         for parent in spec.workdir.resolve().parents:
             excludes += [str(parent / name) for name in ("CLAUDE.md", "CLAUDE.local.md", ".claude/CLAUDE.md")]
-        settings = {"claudeMdExcludes": excludes, "skipDangerousModePermissionPrompt": True}
+        settings = {"claudeMdExcludes": excludes, "skipDangerousModePermissionPrompt": True,
+                    "promptSuggestionEnabled": False}
         if spec.stage == "group":
             settings["hooks"] = group_status.hooks()
         return json.dumps(settings)
@@ -137,6 +139,8 @@ class Claude:
         env.update(spec.env)
         env["VAHTOVIK_HOME"] = str(self.cfg.root)
         env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"  # context.md is the memory
+        # A suggestion shows as grey text in the input box, and the watchdog's screen shows it as typed text.
+        env["CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION"] = "false"
         vahtovik = shutil.which("vahtovik")
         bin_dir = str(Path(vahtovik).parent if vahtovik else Path(sys.executable).parent)
         env["PATH"] = bin_dir + os.pathsep + env.get("PATH", "")
