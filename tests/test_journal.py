@@ -78,9 +78,11 @@ def test_run_whose_groups_cannot_start_writes_nothing_due(project):
     assert not any(m.startswith("Started run") for _, m in entries[before:])
 
 
-def test_overlapping_run_is_skipped_and_names_the_running_one(project):
+def test_overlapping_run_is_skipped_and_names_the_running_one(project, monkeypatch):
+    now = float(int(time.time()))  # a whole second, as the lock file has it
+    monkeypatch.setattr(time, "time", lambda: now)  # no time passes before the run reads the lock
     with file_lock(project.root / "data/.run.lock") as handle:
-        handle.write(f"20261020-140312 {time.time() - 47 * 60:.0f}\n")
+        handle.write(f"20261020-140312 {now - 47 * 60:.0f}\n")
         handle.flush()
         assert cli.main(["run", "--force"]) == 0
     assert _entries(project)[-1][1] == "Skipped run: run 20261020-140312 has been going for 47m00s"
