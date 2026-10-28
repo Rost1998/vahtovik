@@ -379,8 +379,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_log)
 
     p = sub.add_parser("install-timer", help="start vahtovik periodically with a systemd user timer")
-    p.add_argument("--every", default="15m",
-                   help="how often to start a cycle; must divide an hour or a day (default 15m)")
+    p.add_argument("--every", default="5m",
+                   help="how often to start a cycle, which also checks the sessions; must divide an hour or a day "
+                        "(default 5m)")
     p.set_defaults(func=cmd_install_timer)
 
     p = sub.add_parser("uninstall-timer", help="remove the systemd user timer")

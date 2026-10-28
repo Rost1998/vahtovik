@@ -1,9 +1,7 @@
-"""The watchdog looks after the group sessions: at the start of every run, and while a run waits for a group
-turn. Every `watchdog.every` it closes the windows of failed groups, fails the turns whose window is gone, and
-sends notices. At the start of every run and every `watchdog.check_every` it asks an AI session to check the
-group sessions that need it, and carries out the action the AI picks from a fixed list
-(skills/watchdog/SKILL.md). vahtovik checks every pick before it acts, and closes a done window only after
-such a check."""
+"""The watchdog looks after the group sessions at the start of every run: it closes the windows of failed groups,
+fails the turns whose window is gone, and sends notices. It asks an AI session to check the group sessions that
+need it, and carries out the action the AI picks from a fixed list (skills/watchdog/SKILL.md). vahtovik checks
+every pick before it acts, and closes a done window only after such a check. The run timer sets its pace."""
 
 from __future__ import annotations
 
@@ -33,11 +31,9 @@ EPOCH = datetime.min.replace(tzinfo=timezone.utc)
 DONE_WHAT = {"press": "Pressed keys", "nudge": "Nudged", "resume": "Resumed", "retry": "Retrying", "failed": "Failed"}
 
 
-def tick(cfg: Config, state: State, tmux: Tmux, claude: Claude | None = None, run_id: str | None = None,
-         check_sessions: bool = True) -> None:
+def tick(cfg: Config, state: State, tmux: Tmux, claude: Claude | None = None, run_id: str | None = None) -> None:
     tidy(cfg, state, tmux)
-    if check_sessions:
-        check(cfg, state, tmux, claude or Claude(cfg), run_id)
+    check(cfg, state, tmux, claude or Claude(cfg), run_id)
     notify(cfg, state, tmux)
     warn_long_turns(cfg, state, tmux)
     warn_given_up_reports(cfg, state)
@@ -433,22 +429,3 @@ def warn_given_up_reports(cfg: Config, state: State) -> None:
                 f"The report, \"{row['subject']}\":\n{row['body'][:2000]}")
         _send(cfg, state, watch, row["group_key"], [c for c in watch.channels if c != row["channel"]],
               f"Report not delivered: {row['subject'] or ref}", body)
-
-
-class Ticker:
-    """`tick` at most every `watchdog.every`, and with the AI check at most every `watchdog.check_every`, for
-    the loop that waits for a turn. The run's start has just ticked with a check."""
-
-    def __init__(self, cfg: Config, state: State, tmux: Tmux, claude: Claude, run_id: str):
-        self.cfg, self.state, self.tmux, self.claude, self.run_id = cfg, state, tmux, claude, run_id
-        self.last = self.last_check = time.monotonic()
-
-    def __call__(self) -> None:
-        now = time.monotonic()
-        if now - self.last < self.cfg.watchdog.every.total_seconds():
-            return
-        check_sessions = now - self.last_check >= self.cfg.watchdog.check_every.total_seconds()
-        self.last = now
-        if check_sessions:
-            self.last_check = now
-        tick(self.cfg, self.state, self.tmux, self.claude, self.run_id, check_sessions)

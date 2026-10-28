@@ -74,3 +74,11 @@ def test_parallel_turns_is_5_unless_set(project):
     path.write_text(yaml.safe_dump(data))
     with pytest.raises(ConfigError, match="claude.parallel_turns must be a whole number, 1 or more"):
         config_mod.load(project.root)
+
+
+def test_old_watchdog_timing_settings_are_ignored(project):
+    path = project.root / "vahtovik.yaml"
+    data = yaml.safe_load(path.read_text())
+    data["watchdog"] = {"every": "1m", "check_every": "5m", "notify_every": "2h"}
+    path.write_text(yaml.safe_dump(data))
+    assert config_mod.load(project.root).watchdog.notify_every == timedelta(hours=2)

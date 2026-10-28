@@ -24,7 +24,7 @@ def real_check(approving_watchdog, monkeypatch):
 def _setup(project, **settings):
     config = project.root / "vahtovik.yaml"
     data = yaml.safe_load(config.read_text())
-    data["watchdog"] = {"every": 0, "check_every": 0, **settings}
+    data["watchdog"] = settings
     config.write_text(yaml.safe_dump(data))
     path = project.root / "watches/w1/watch.yaml"
     data = yaml.safe_load(path.read_text())
@@ -337,21 +337,6 @@ def test_failed_watchdog_session_changes_nothing(project, caplog):
     assert (cost["stage"], cost["ok"]) == ("watchdog", 0)
 
 
-def test_ticker_checks_only_every_check_every(project):
-    cfg, state, claude, tmux = _setup(project, check_every="1h")
-    project.queue({"mode": "interactive", "hang": True})
-    launch_turn(cfg, state, claude, tmux)
-    until(lambda: project.hook_answers("UserPromptSubmit"))
-    ticker = watchdog.Ticker(cfg, state, tmux, claude, "run1")
-    ticker()
-    ticker()
-    assert _watchdog_calls(project) == []
-    ticker.last_check -= 3600
-    project.queue(_answer("none", "Works."))
-    ticker()
-    assert len(_watchdog_calls(project)) == 1
-
-
 @pytest.fixture
 def kyiv_summer_time(monkeypatch):
     monkeypatch.setenv("TZ", "Etc/GMT-3")  # three hours ahead of UTC
@@ -386,10 +371,10 @@ def test_long_turn_is_reported_once(project, caplog):
     cfg, state, claude, tmux = _setup(project, long_turn_after="3h")
     project.queue({"mode": "interactive", "hang": True})
     launch_turn(cfg, state, claude, tmux)
-    watchdog.tick(cfg, state, tmux, claude, "run1", check_sessions=False)
+    watchdog.warn_long_turns(cfg, state, tmux)
     state.execute("UPDATE group_turns SET started_at = datetime('now', '-4 hours') || '+00:00'")
-    watchdog.tick(cfg, state, tmux, claude, "run1", check_sessions=False)
-    watchdog.tick(cfg, state, tmux, claude, "run1", check_sessions=False)
+    watchdog.warn_long_turns(cfg, state, tmux)
+    watchdog.warn_long_turns(cfg, state, tmux)
     notice, = state.rows("SELECT * FROM deliveries WHERE origin = 'notice'")
     assert notice["subject"] == "WATCHDOG: Long turn: G" and notice["body"].startswith("w1/g has been working on one turn for 4h00m")
     assert "w1/g: Long group turn: running for 4h00m" in caplog.messages
