@@ -288,6 +288,11 @@ class State:
         self.execute("UPDATE artifacts SET status = 'new', processed_at = NULL WHERE watch = ? AND status = 'processed' "
                      "AND id IN (SELECT value FROM json_each(?))", turn["watch"], turn["artifact_ids"] or "[]")
 
+    def working_turns(self) -> int:
+        """Unfinished turns whose agent works: not those that wait for their background work or for a person."""
+        return self.row("SELECT COUNT(*) AS n FROM group_turns t JOIN groups g ON g.watch = t.watch AND "
+                        "g.key = t.group_key WHERE t.finished_at IS NULL AND g.status = 'running'")["n"]
+
     def unfinished_turns(self) -> list[sqlite3.Row]:
         return self.rows("SELECT * FROM group_turns WHERE finished_at IS NULL ORDER BY started_at")
 

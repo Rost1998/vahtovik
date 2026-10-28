@@ -64,3 +64,13 @@ def test_parse_interval(value, expected):
 def test_parse_interval_rejects_garbage():
     with pytest.raises(ConfigError):
         config_mod.parse_interval("hourly")
+
+
+def test_parallel_turns_is_5_unless_set(project):
+    assert config_mod.load(project.root).claude.parallel_turns == 5
+    path = project.root / "vahtovik.yaml"
+    data = yaml.safe_load(path.read_text())
+    data["claude"]["parallel_turns"] = 0
+    path.write_text(yaml.safe_dump(data))
+    with pytest.raises(ConfigError, match="claude.parallel_turns must be a whole number, 1 or more"):
+        config_mod.load(project.root)

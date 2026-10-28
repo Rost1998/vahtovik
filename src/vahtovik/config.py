@@ -34,6 +34,7 @@ class ClaudeSettings:
     config_dir: Path | None = None
     model: str = "claude-opus-5-5"
     stages: dict[str, dict] = field(default_factory=dict)
+    parallel_turns: int = 5  # the most group turns that work at once; the rest start at a later run
 
 
 @dataclass
@@ -229,6 +230,10 @@ def _load_claude(raw: dict, root: Path) -> ClaudeSettings:
         settings.config_dir = (root / Path(raw["config_dir"]).expanduser()).resolve()
     settings.model = str(raw.get("model", settings.model))
     settings.stages = _stage_overrides(raw.get("stages"), "claude.stages")
+    parallel = raw.get("parallel_turns", settings.parallel_turns)
+    if isinstance(parallel, bool) or not isinstance(parallel, int) or parallel < 1:
+        raise ConfigError("claude.parallel_turns must be a whole number, 1 or more")
+    settings.parallel_turns = parallel
     return settings
 
 

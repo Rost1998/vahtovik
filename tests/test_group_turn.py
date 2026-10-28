@@ -1,6 +1,8 @@
 import json
+import logging
 import shutil
 
+import yaml
 from conftest import artifact, report_action, run_turns, turn_answer, until, work_log
 
 from vahtovik import artifacts, groups, watchdog
@@ -128,3 +130,21 @@ def test_agent_added_artifacts_are_registered_when_the_window_ends_by_itself(pro
     _cfg, state = _turns(project)
     assert state.row("SELECT ok FROM group_turns")["ok"] == 0
     assert state.row("SELECT * FROM artifacts WHERE id = 'extra'")["group_key"] == "g"
+
+
+def test_parallel_turns_are_limited_and_the_rest_start_at_a_later_run(project, caplog):
+    caplog.set_level(logging.INFO, logger="vahtovik")
+    path = project.root / "vahtovik.yaml"
+    data = yaml.safe_load(path.read_text())
+    data["claude"]["parallel_turns"] = 2
+    path.write_text(yaml.safe_dump(data))
+    cfg, state = _monitor(project, artifact("a1", "g1"), artifact("a2", "g2"), artifact("a3", "g3"))
+    project.queue(*[turn_answer([work_log()]) for _ in range(3)])
+    _cfg, _state, claude = project.load()
+    assert len(group_turn.run(cfg, state, claude, Tmux(cfg), cfg.watch("w1"), "run1")) == 2
+    assert ("w1: Held back 1 group turn: 2 group turns work already, the most at once (claude.parallel_turns); "
+            "a later run starts them") in caplog.messages
+    until(lambda: state.working_turns() == 0)
+    left, = state.pending_groups("w1", group_turn.MAX_ATTEMPTS)
+    assert len(group_turn.run(cfg, state, claude, Tmux(cfg), cfg.watch("w1"), "run2")) == 1
+    until(lambda: state.group("w1", left)["status"] == "finished")

@@ -8,6 +8,7 @@ claude:
     monitor: {effort: medium, max_budget_usd: 0.50}
     group:   {effort: high}     # group sessions are interactive: max_budget_usd does not apply to them
     watchdog: {model: claude-haiku-5-5, effort: low, max_budget_usd: 0.20}
+  parallel_turns: 5           # the most group turns that work at once; the rest start at a later run
 
 tmux:                         # group sessions run in windows of this tmux session; `vahtovik open` shows you one
   session: vahtovik-agents

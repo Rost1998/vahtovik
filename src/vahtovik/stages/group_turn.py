@@ -29,7 +29,14 @@ def run(cfg: Config, state: State, claude: Claude, tmux: Tmux, watch: Watch, run
         log.error("%s: Skipped group turns: tmux is not installed", watch.name)
         return []
     started = []
-    for key in state.pending_groups(watch.name, MAX_ATTEMPTS):
+    pending = state.pending_groups(watch.name, MAX_ATTEMPTS)
+    for index, key in enumerate(pending):
+        working = state.working_turns()
+        if working >= cfg.claude.parallel_turns:
+            log.info("%s: Held back %s: %s work already, the most at once (claude.parallel_turns); "
+                     "a later run starts them", watch.name, plural(len(pending) - index, "group turn"),
+                     plural(working, "group turn"))
+            break
         ref = f"{watch.name}/{key}"
         if tmux.window(ref):
             log.warning("%s: Skipped group turn: its session window is open; a later run will process it", ref)
