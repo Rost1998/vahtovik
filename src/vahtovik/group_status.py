@@ -79,12 +79,14 @@ def declare(cfg: Config, state: State, watch: Watch, key: str, status: str, impo
         if context_file.fingerprint(context).work_log_entries <= (turn["work_log_before"] or 0):
             raise StatusError("add your Work log entry for this turn to context.md first, then run this again")
     context_file.replace_section(context, "Open questions", context_file.questions_text(questions), after="Summary")
-    state.set_status(watch.name, key, status, questions=questions)
-    if ends_turn:
-        output = {"status": status, "importance": importance, "summary": summary, "questions": questions}
-        state.finish_turn(turn_id, True, output, None)
-        state.mark_processed(watch.name, json.loads(turn["artifact_ids"] or "[]"))
-        state.touch_group(watch.name, key)
+    # A run starts turns by the status and the new artifacts: it must not see the one without the other.
+    with state.transaction():
+        state.set_status(watch.name, key, status, questions=questions)
+        if ends_turn:
+            output = {"status": status, "importance": importance, "summary": summary, "questions": questions}
+            state.finish_turn(turn_id, True, output, None)
+            state.mark_processed(watch.name, json.loads(turn["artifact_ids"] or "[]"))
+            state.touch_group(watch.name, key)
     what = status + (f" ({plural(len(questions), 'question')})" if questions else "")
     what += f", importance {importance}" if importance else ""
     log.info("%s/%s: Status %s%s", watch.name, key, what, f": {summary[:150]}" if summary else "")
@@ -135,9 +137,10 @@ def on_stop(state: State, watch: str, key: str, hook_data: dict | None = None,
     elif status in ("finished", "waiting") and work:
         reason = "Claude Code still runs background work for the agent: " + "; ".join(work)
         turn = state.turn(turn_id) if turn_id else None
-        if turn and turn["ok"] and turn["finished_at"] >= (group["prompt_at"] or ""):
-            state.reopen_turn(turn_id)
-        state.set_status(watch, key, "background", reason)
+        with state.transaction():
+            if turn and turn["ok"] and turn["finished_at"] >= (group["prompt_at"] or ""):
+                state.reopen_turn(turn_id)
+            state.set_status(watch, key, "background", reason)
         log.warning("%s/%s: Status background, not %s: %s", watch, key, status, reason)
     elif status == "background" and work == []:
         if state.add_stop_block(watch, key) <= MAX_STOP_BLOCKS:

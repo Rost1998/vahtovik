@@ -137,3 +137,17 @@ def test_older_database_gets_the_new_columns(tmp_path):
     assert group["checked_at"]  # the watchdog checks what changes from now on, not every older session
     state.execute("INSERT INTO groups (watch, key, title) VALUES ('w', 'new', 'N')")
     assert State(path).group("w", "new")["checked_at"] is None
+
+
+def test_other_processes_see_a_turns_end_all_at_once(project):
+    cfg, state, _ = _setup(project)
+    other = State(cfg.db_path)  # as a run in another process
+    state.set_status("w1", "g", "running")
+    with state.transaction():
+        state.set_status("w1", "g", "finished")
+        assert other.group("w1", "g")["status"] == "running"
+    assert other.group("w1", "g")["status"] == "finished"
+    with pytest.raises(ValueError), state.transaction():
+        state.set_status("w1", "g", "failed")
+        raise ValueError
+    assert other.group("w1", "g")["status"] == "finished"

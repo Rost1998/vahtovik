@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from .util import utc_iso
@@ -90,6 +92,17 @@ class State:
 
     def execute(self, sql: str, *args) -> sqlite3.Cursor:
         return self.db.execute(sql, args)
+
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        """Changes that other processes see all at once, or not at all."""
+        self.execute("BEGIN IMMEDIATE")
+        try:
+            yield
+        except BaseException:
+            self.execute("ROLLBACK")
+            raise
+        self.execute("COMMIT")
 
     # runs and watches
 
