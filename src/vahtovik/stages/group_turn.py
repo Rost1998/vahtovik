@@ -31,26 +31,37 @@ def run(cfg: Config, state: State, claude: Claude, tmux: Tmux, watch: Watch, run
     started = []
     pending = state.pending_groups(watch.name, MAX_ATTEMPTS)
     for index, key in enumerate(pending):
-        working = state.working_turns()
-        if working >= cfg.claude.parallel_turns:
-            log.info("%s: Held back %s: %s work already, the most at once (claude.parallel_turns); "
-                     "a later run starts them", watch.name, plural(len(pending) - index, "group turn"),
-                     plural(working, "group turn"))
+        if state.working_turns() >= cfg.claude.parallel_turns:
+            log.info("%s: Held back %s for a later run: already as many work as claude.parallel_turns (%d) "
+                     "allows", watch.name, plural(len(pending) - index, "group turn"), cfg.claude.parallel_turns)
             break
-        ref = f"{watch.name}/{key}"
-        if tmux.window(ref):
-            log.warning("%s: Skipped group turn: its session window is open; a later run will process it", ref)
-            continue
-        try:
-            with groups.lock(cfg.group_dir(watch.name, key)):
-                pass
-        except LockBusy:
-            log.warning("%s: Skipped group turn: the group is busy; a later run will process it", ref)
+        busy = _busy(cfg, tmux, watch, key)
+        if busy:
+            log.warning("%s/%s: Skipped group turn: %s; a later run will process it", watch.name, key, busy)
             continue
         turn_id = turn(cfg, state, claude, tmux, watch, key, run_id)
         if turn_id:
             started.append(turn_id)
     return started
+
+
+def can_start(cfg: Config, state: State, tmux: Tmux, watches: list[Watch]) -> bool:
+    """Whether a run would start a group turn of these watches now."""
+    if not Tmux.installed() or state.working_turns() >= cfg.claude.parallel_turns:
+        return False
+    return any(not _busy(cfg, tmux, watch, key)
+               for watch in watches for key in state.pending_groups(watch.name, MAX_ATTEMPTS))
+
+
+def _busy(cfg: Config, tmux: Tmux, watch: Watch, key: str) -> str | None:
+    """Why the group's turn cannot start now, or None."""
+    if tmux.window(f"{watch.name}/{key}"):
+        return "its session window is open"
+    try:
+        with groups.lock(cfg.group_dir(watch.name, key)):
+            return None
+    except LockBusy:
+        return "the group is busy"
 
 
 def _read(path: Path) -> str:

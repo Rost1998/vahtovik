@@ -41,6 +41,8 @@ def _due(state: State, watch, now: datetime) -> bool:
 def _nothing_due(state: State, watches, now: datetime, stage: str | None) -> str:
     if stage == "deliver":
         return "no failed reports to retry"
+    if stage == "group":
+        return "no group turn can start"
     if not watches:
         return "no enabled watches"
     waits = (datetime.fromisoformat(state.last_run(w.name)) + w.interval - now for w in watches)
@@ -82,27 +84,30 @@ def _run(cfg: Config, state: State, args, run_id: str) -> int:
     watchdog.tick(cfg, state, tmux, claude, run_id)
     now = datetime.now(timezone.utc)
     watches = [cfg.watch(args.watch)] if args.watch else [w for w in cfg.watches.values() if w.enabled]
-    due = [w for w in watches if args.force or _due(state, w, now)] if args.stage != "deliver" else []
+    due = [w for w in watches if args.force or _due(state, w, now)] if args.stage not in ("group", "deliver") else []
+    # Group turns start at every run, not only when their watch is due: groups left over by an earlier run
+    # (claude.parallel_turns, or an open window) start as soon as they can.
+    turns_wait = args.stage in (None, "group") and group_turn.can_start(cfg, state, tmux, watches)
     retry = args.stage in (None, "deliver") and bool(state.retryable_deliveries(delivery.MAX_ATTEMPTS))
-    if not due and not retry:
+    if not due and not turns_wait and not retry:
         log.info("Nothing due: %s", _nothing_due(state, watches, now, args.stage))
         return 0
     flags = [name for name, on in (("forced", args.force), ("dry run", args.dry_run)) if on]
     flags += [f"stage {args.stage}"] if args.stage else []
-    log.info("Started run: %s%s", ", ".join(w.name for w in due) or "retrying failed reports",
-             f" ({', '.join(flags)})" if flags else "")
+    what = ", ".join(w.name for w in due) or ("group turns" if turns_wait else "retrying failed reports")
+    log.info("Started run: %s%s", what, f" ({', '.join(flags)})" if flags else "")
     started = time.monotonic()
     raw_dir = cfg.runs_dir(run_id)
     new = turns = 0
     state.start_run(run_id)
     status = "ok"
     try:
-        for watch in due:
-            if args.stage in (None, "monitor"):
+        for watch in watches:
+            if watch in due and args.stage in (None, "monitor"):
                 new += monitor.run(cfg, state, claude, watch, run_id, raw_dir)
             if args.stage in (None, "group"):
                 turns += len(group_turn.run(cfg, state, claude, tmux, watch, run_id))
-            if args.stage is None:
+            if watch in due and args.stage is None:
                 state.set_last_run(watch.name)
         if args.stage in (None, "deliver"):
             delivery.retry_failed(cfg, state, args.dry_run)

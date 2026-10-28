@@ -1,9 +1,11 @@
 import re
 import time
 
+import yaml
 from conftest import artifact, monitor_answer, report_action, turn_answer, until, work_log
 
 from vahtovik import cli, journal, watchdog
+from vahtovik.stages import group_turn
 from vahtovik.tmux import Tmux
 from vahtovik.util import file_lock
 
@@ -41,6 +43,39 @@ def test_run_with_nothing_due_writes_one_line(project):
     cli.main(["run"])
     entries = _entries(project)
     assert len(entries) == before + 1 and entries[-1][1] in ("Nothing due: w1 in 59m59s", "Nothing due: w1 in 1h00m")
+
+
+def test_turns_held_back_start_at_the_next_run_though_the_watch_is_not_due(project):
+    path = project.root / "vahtovik.yaml"
+    data = yaml.safe_load(path.read_text())
+    data["claude"]["parallel_turns"] = 1
+    path.write_text(yaml.safe_dump(data))
+    project.queue(monitor_answer(artifact("a1", "g"), artifact("a2", "h")), monitor_answer(),
+                  turn_answer([work_log()]), turn_answer([work_log()]))
+    cli.main(["run"])
+    cfg, state, _ = project.load()
+    until(lambda: state.working_turns() == 0)
+    assert len(state.pending_groups("w1", group_turn.MAX_ATTEMPTS)) == 1
+    time.sleep(1.1)  # a run's id is its start time, to the second
+    cli.main(["run"])
+    until(lambda: state.pending_groups("w1", group_turn.MAX_ATTEMPTS) == [])
+    messages = [m for _, m in _entries(project)]
+    assert ("w1: Held back 1 group turn for a later run: already as many work as claude.parallel_turns (1) allows"
+            in messages)
+    assert "Started run: group turns" in messages
+    assert len([m for m in messages if m.startswith("w1/src-a: Started monitoring")]) == 1
+
+
+def test_run_whose_groups_cannot_start_writes_nothing_due(project):
+    project.queue(monitor_answer(artifact("a1", "g")), monitor_answer(), {"mode": "interactive", "hang": True})
+    cli.main(["run"])
+    until(lambda: project.hook_answers("UserPromptSubmit"))  # the turn works in its window
+    before = len(_entries(project))
+    time.sleep(1.1)  # a run's id is its start time, to the second
+    cli.main(["run"])
+    entries = _entries(project)
+    assert entries[-1][1].startswith("Nothing due: w1 in ")
+    assert not any(m.startswith("Started run") for _, m in entries[before:])
 
 
 def test_overlapping_run_is_skipped_and_names_the_running_one(project):

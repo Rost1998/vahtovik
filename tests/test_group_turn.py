@@ -142,8 +142,8 @@ def test_parallel_turns_are_limited_and_the_rest_start_at_a_later_run(project, c
     project.queue(*[turn_answer([work_log()]) for _ in range(3)])
     _cfg, _state, claude = project.load()
     assert len(group_turn.run(cfg, state, claude, Tmux(cfg), cfg.watch("w1"), "run1")) == 2
-    assert ("w1: Held back 1 group turn: 2 group turns work already, the most at once (claude.parallel_turns); "
-            "a later run starts them") in caplog.messages
+    assert ("w1: Held back 1 group turn for a later run: already as many work as claude.parallel_turns (2) "
+            "allows") in caplog.messages
     until(lambda: state.working_turns() == 0)
     left, = state.pending_groups("w1", group_turn.MAX_ATTEMPTS)
     assert len(group_turn.run(cfg, state, claude, Tmux(cfg), cfg.watch("w1"), "run2")) == 1
