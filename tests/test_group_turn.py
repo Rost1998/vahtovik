@@ -1,7 +1,7 @@
 import json
 import shutil
 
-from conftest import artifact, monitor_answer, report_action, turn_answer, work_log
+from conftest import artifact, report_action, run_turns, turn_answer, until, work_log
 
 from vahtovik import artifacts, groups, watchdog
 from vahtovik.stages import group_turn
@@ -20,7 +20,7 @@ def _turns(project):
     """A run's group stage, after the watchdog's check that starts every run (it closes done windows)."""
     cfg, state, claude = project.load()
     watchdog.check(cfg, state, Tmux(cfg), claude, "run1")
-    group_turn.run(cfg, state, claude, Tmux(cfg), cfg.watch("w1"), "run1")
+    run_turns(cfg, state, claude, Tmux(cfg))
     return cfg, state
 
 
@@ -96,15 +96,35 @@ def test_turn_without_status_is_retried_then_given_up(project):
     assert state.group("w1", "g")["status"] == "failed"
 
 
-def test_agent_added_artifacts_are_registered_after_the_turn(project):
+def test_run_starts_the_turn_and_does_not_wait_for_it(project):
+    cfg, state = _monitor(project, artifact("a1", "g"))
+    project.queue({"mode": "interactive", "hang": True})
+    _cfg, _state, claude = project.load()
+    turn_id, = group_turn.run(cfg, state, claude, Tmux(cfg), cfg.watch("w1"), "run1")
+    until(lambda: project.hook_answers("UserPromptSubmit"))  # the session works on, after the run went on
+    assert state.turn(turn_id)["finished_at"] is None and state.group("w1", "g")["status"] == "running"
+
+
+def test_agent_added_artifacts_are_registered_when_the_window_closes(project):
     _monitor(project, artifact("a1", "g"))
     found = {"id": "extra", "title": "Found by agent", "summary": "Extra."}
     elsewhere = {"id": "far", "title": "Belongs elsewhere", "summary": "Other.", "group_key": "h", "group_title": "H"}
     project.queue(turn_answer([work_log(), {"write": "artifacts/extra.json", "json": found},
                                {"write": "artifacts/far.json", "json": elsewhere}]))
     cfg, state = _turns(project)
+    assert state.row("SELECT * FROM artifacts WHERE id = 'extra'") is None  # the window is open until a check
+    watchdog.tick(cfg, state, Tmux(cfg), project.load()[2], "run2")
     assert state.row("SELECT * FROM artifacts WHERE id = 'extra'")["status"] == "processed"
     far = state.row("SELECT * FROM artifacts WHERE id = 'far'")
     assert far["group_key"] == "h" and far["status"] == "new"
     assert not (cfg.group_dir("w1", "g") / "artifacts/far.json").exists()
     assert (cfg.group_dir("w1", "h") / "context.md").is_file()
+
+
+def test_agent_added_artifacts_are_registered_when_the_window_ends_by_itself(project):
+    _monitor(project, artifact("a1", "g"))
+    found = {"id": "extra", "title": "Found by agent", "summary": "Extra."}
+    project.queue({"actions": [{"write": "artifacts/extra.json", "json": found}], "exit": 3})
+    _cfg, state = _turns(project)
+    assert state.row("SELECT ok FROM group_turns")["ok"] == 0
+    assert state.row("SELECT * FROM artifacts WHERE id = 'extra'")["group_key"] == "g"

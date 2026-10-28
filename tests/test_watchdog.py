@@ -86,14 +86,14 @@ def test_watchdog_presses_the_keys_of_a_known_screen(project, caplog):
                                      "The watchdog saw: It asks to trust the folder.")
 
 
-def test_stuck_turn_pauses_for_a_person_and_the_channels_hear_of_it(project, caplog):
+def test_stuck_turn_pauses_for_a_person_and_the_channels_hear_of_it(project):
     cfg, state, claude, tmux = _setup(project)
     project.queue({"mode": "interactive", "hang": True}, _answer("maintenance", "Claude Code asks to log in."))
-    group_turn.run(cfg, state, claude, tmux, cfg.watch("w1"), "run1", watchdog.Ticker(cfg, state, tmux, claude, "run1"))
+    group_turn.run(cfg, state, claude, tmux, cfg.watch("w1"), "run1")
+    until(lambda: project.hook_answers("UserPromptSubmit"))  # the session started its turn
+    watchdog.tick(cfg, state, tmux, claude, "run2")  # the next run's start
     group = state.group("w1", "g")
     assert (group["status"], group["status_reason"]) == ("maintenance", "Claude Code asks to log in.")
-    assert any(m.startswith("w1/g: Paused group turn after") and m.endswith(
-        "Claude Code asks to log in.; its window stays open for a person") for m in caplog.messages)
     assert tmux.window("w1/g") is not None and state.unfinished_turns()[0]["id"]
     notice, = _notices(state)  # one notice: the AI's pick sends the usual one at once
     assert notice["subject"] == "WATCHDOG: Needs attention: G"

@@ -3,10 +3,9 @@ import subprocess
 from datetime import datetime, timedelta, timezone
 
 import yaml
-from conftest import artifact, report_action, turn_answer, work_log
+from conftest import artifact, report_action, run_turns, turn_answer, work_log
 
 from vahtovik import artifacts, watchdog
-from vahtovik.stages import group_turn
 from vahtovik.tmux import Tmux, Window
 from vahtovik.util import utc_iso
 
@@ -28,7 +27,7 @@ def _setup(project, channels=("log",), notify_every="6h"):
 def _turn(project, *answers):
     project.queue(*answers)
     cfg, state, claude = project.load()
-    group_turn.run(cfg, state, claude, Tmux(cfg), cfg.watch("w1"), "run1")
+    run_turns(cfg, state, claude, Tmux(cfg))
 
 
 def _notices(state):

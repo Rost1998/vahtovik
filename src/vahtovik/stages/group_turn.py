@@ -1,16 +1,18 @@
-"""Group turns: resume each group's session in a tmux window to process its new artifacts and report."""
+"""Group turns: start each group's session in a tmux window to process its new artifacts and report.
+
+The run does not wait for a turn. The agent ends it with `vahtovik turn`, and the watchdog looks after the
+windows: it ends the turns whose window ended first, and closes the windows of done turns.
+"""
 
 from __future__ import annotations
 
 import json
 import logging
-import time
 import uuid
-from collections.abc import Callable
 from pathlib import Path
 
-from .. import artifacts, context_file, group_session, groups, skills, windows
-from ..claude_session import Claude, SessionResult
+from .. import context_file, group_session, groups, skills, windows
+from ..claude_session import Claude
 from ..config import Config, Watch
 from ..state import State
 from ..tmux import Tmux, TmuxError
@@ -21,11 +23,12 @@ log = logging.getLogger(__name__)
 MAX_ATTEMPTS = 3
 
 
-def run(cfg: Config, state: State, claude: Claude, tmux: Tmux, watch: Watch, run_id: str,
-        tick: Callable[[], None] | None = None) -> None:
+def run(cfg: Config, state: State, claude: Claude, tmux: Tmux, watch: Watch, run_id: str) -> list[str]:
+    """Start a turn for each group with new artifacts. Returns the ids of the turns started."""
     if not Tmux.installed():
         log.error("%s: Skipped group turns: tmux is not installed", watch.name)
-        return
+        return []
+    started = []
     for key in state.pending_groups(watch.name, MAX_ATTEMPTS):
         ref = f"{watch.name}/{key}"
         if tmux.window(ref):
@@ -37,7 +40,10 @@ def run(cfg: Config, state: State, claude: Claude, tmux: Tmux, watch: Watch, run
         except LockBusy:
             log.warning("%s: Skipped group turn: the group is busy; a later run will process it", ref)
             continue
-        turn(cfg, state, claude, tmux, watch, key, run_id, tick)
+        turn_id = turn(cfg, state, claude, tmux, watch, key, run_id)
+        if turn_id:
+            started.append(turn_id)
+    return started
 
 
 def _read(path: Path) -> str:
@@ -74,8 +80,8 @@ def _deliveries_text(rows) -> str:
     return "\n".join(lines) or "- none"
 
 
-def turn(cfg: Config, state: State, claude: Claude, tmux: Tmux, watch: Watch, key: str, run_id: str,
-         tick: Callable[[], None] | None = None) -> bool:
+def turn(cfg: Config, state: State, claude: Claude, tmux: Tmux, watch: Watch, key: str, run_id: str) -> str | None:
+    """Start the group's turn in a session window. Returns the turn's id, or None if the window did not start."""
     pending = state.pending_artifacts(watch.name, key, MAX_ATTEMPTS)
     ids = [r["id"] for r in pending]
     context = cfg.group_dir(watch.name, key) / "context.md"
@@ -94,41 +100,14 @@ def turn(cfg: Config, state: State, claude: Claude, tmux: Tmux, watch: Watch, ke
     spec.env.update(VAHTOVIK_TURN=turn_id, VAHTOVIK_RUN=run_id)
     state.start_turn(turn_id, run_id, watch.name, key, ids, context_file.fingerprint(context).work_log_entries)
     state.prompt_submitted(watch.name, key)  # running until the agent reports its status
-    started = time.monotonic()
     try:
         window_id = windows.launch(cfg, state, tmux, claude, spec, "turn", turn_id)
     except TmuxError as exc:
         fail(state, state.turn(turn_id), str(exc), 0)
-        return False
+        return None
     log.info("%s: Started group turn: %s, %s, tmux window %s", spec.scope, plural(len(ids), "artifact"),
              group_session.describe(spec, note), window_id)
-    outcome = windows.wait_for_turn(state, tmux, watch.name, key, turn_id, tick)
-    seconds = time.monotonic() - started
-    group_session.remember(claude, state, watch, key, spec)
-    state.log_session(run_id, "group", watch.name, key,
-                      SessionResult(ok=outcome == "done", duration_s=seconds, session_id=spec.session_id))
-    if outcome == "maintenance":
-        log.warning("%s: Paused group turn after %s: %s; its window stays open for a person", spec.scope,
-                    duration(seconds), state.group(watch.name, key)["status_reason"] or "it needs a person")
-        return False
-    if outcome == "background":
-        log.info("%s: Paused group turn after %s: the agent waits for its background work (%s); its window stays "
-                 "open, and the agent ends the turn when the work wakes it", spec.scope, duration(seconds),
-                 state.group(watch.name, key)["status_reason"])
-        return False
-    if outcome == "done":
-        output = json.loads(state.turn(turn_id)["output"])
-        status = output["status"] + (f" ({plural(len(output['questions']), 'question')})" if output["questions"] else "")
-        log.info("%s: Finished group turn in %s: status %s, %s", spec.scope, duration(seconds), status,
-                 plural(len(state.turn_deliveries(turn_id)), "report"))
-    else:
-        fail(state, state.turn(turn_id), windows.exit_error(state, watch.name, key) if outcome == "ended" else None,
-             seconds)
-    window = tmux.window(spec.scope)
-    if window and not window.clients and outcome != "done":
-        tmux.close(window.id)  # a done window stays until the watchdog's check confirms it (watchdog.py)
-    artifacts.register_agent_files(cfg, state, watch, key)
-    return outcome == "done"
+    return turn_id
 
 
 def fail(state: State, turn, error: str | None, seconds: float) -> None:

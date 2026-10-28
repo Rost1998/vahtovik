@@ -2,12 +2,11 @@ import logging
 from datetime import timedelta
 
 import pytest
-from conftest import artifact, launch_turn, status_action, turn_answer, until, work_log
+from conftest import artifact, launch_turn, run_turns, status_action, turn_answer, until, work_log
 
-from vahtovik import artifacts, group_session, groups, watchdog, windows
+from vahtovik import artifacts, group_session, groups, watchdog
 from vahtovik.claude_session import Claude
 from vahtovik.config import ConfigError
-from vahtovik.stages import group_turn
 from vahtovik.tmux import Tmux, Window
 from vahtovik.util import LockBusy
 
@@ -21,7 +20,7 @@ def _setup(project, *ids):
 
 def _turns(project):
     cfg, state, claude = project.load()
-    group_turn.run(cfg, state, claude, Tmux(cfg), cfg.watch("w1"), "run1")
+    run_turns(cfg, state, claude, Tmux(cfg))
     return cfg, state
 
 

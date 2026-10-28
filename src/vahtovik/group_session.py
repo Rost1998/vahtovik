@@ -54,12 +54,6 @@ def describe(spec: SessionSpec, note: str | None) -> str:
     return f"new session {spec.session_id[:8]}" + (" (the earlier one was lost or reset)" if note else "")
 
 
-def remember(claude: Claude, state: State, watch: Watch, key: str, spec: SessionSpec) -> None:
-    """Store a new session's identifier once Claude Code has saved the session."""
-    if spec.mode == "new" and claude.session_exists(spec.session_id):
-        state.set_session(watch.name, key, spec.session_id)
-
-
 def open_session(cfg: Config, state: State, ref: str, new_session: bool = False) -> int:
     """Show the group's session window to the person; start one if the session is not running."""
     watch_name, key = groups.parse_ref(ref)

@@ -15,6 +15,7 @@ from vahtovik import config as config_mod
 from vahtovik import skills, watchdog, windows
 from vahtovik.claude_session import Claude
 from vahtovik.group_session import spec_for
+from vahtovik.stages import group_turn
 from vahtovik.state import State
 from vahtovik.tmux import Tmux
 
@@ -84,7 +85,6 @@ def project(tmp_path, monkeypatch) -> Project:
     """A vahtovik project with one watch, a fake claude, and a tmux server of its own."""
     socket = f"vahtovik-test-{os.getpid()}-{tmp_path.name}"
     monkeypatch.setattr(Tmux, "use_systemd_run", False)
-    monkeypatch.setattr(windows, "POLL_SECONDS", 0.05)
     monkeypatch.setattr(watchdog, "GRACE", timedelta(0))
     yield _project(tmp_path, monkeypatch, socket)
     subprocess.run(["tmux", "-L", socket, "kill-server"], capture_output=True)
@@ -172,6 +172,26 @@ def until(condition, timeout: float = 15.0) -> None:
             return
         time.sleep(0.05)
     raise AssertionError("timed out")
+
+
+def run_turns(cfg, state, claude, tmux, watch: str = "w1", run_id: str = "run1") -> list[str]:
+    """A run's group stage, then the wait until each turn it started is done or paused, and the watchdog's
+    tidying, as at the next run's start: it ends the turns whose window ended, and closes failed windows."""
+    started = group_turn.run(cfg, state, claude, tmux, cfg.watch(watch), run_id)
+    for turn_id in started:
+        until(lambda: _settled(state, tmux, turn_id))
+    watchdog.tidy(cfg, state, tmux)
+    return started
+
+
+def _settled(state, tmux, turn_id: str) -> bool:
+    turn = state.turn(turn_id)
+    group = state.group(turn["watch"], turn["group_key"])
+    if turn["finished_at"] and (group["idle"] or not turn["ok"]):
+        return True
+    if group["status"] in ("failed", "maintenance") or (group["status"] == "background" and group["idle"]):
+        return True
+    return tmux.window(f"{turn['watch']}/{turn['group_key']}") is None
 
 
 def launch_turn(cfg, state, claude, tmux, turn_id: str = "t1") -> str:

@@ -99,16 +99,8 @@ class State:
     def finish_run(self, run_id: str, status: str) -> None:
         self.execute("UPDATE runs SET finished_at = ?, status = ? WHERE id = ?", utc_iso(), status, run_id)
 
-    def run_summary(self, run_id: str) -> dict:
-        turns = self.row("SELECT COUNT(*) AS n, COALESCE(SUM(ok = 1), 0) AS ok, COALESCE(SUM(ok = 0), 0) AS failed "
-                         "FROM group_turns WHERE run_id = ?", run_id)
-        reports = self.row(
-            "SELECT COALESCE(SUM(d.status = 'sent'), 0) AS sent, COALESCE(SUM(d.status != 'sent'), 0) AS failed "
-            "FROM deliveries d JOIN group_turns t ON d.turn_id = t.id WHERE t.run_id = ?", run_id)
-        cost = self.row("SELECT COALESCE(SUM(cost_usd), 0) AS c FROM sessions WHERE run_id = ?", run_id)["c"]
-        return {"turns_ok": turns["ok"], "turns_failed": turns["failed"],
-                "turns_paused": turns["n"] - turns["ok"] - turns["failed"],
-                "reports_sent": reports["sent"], "reports_failed": reports["failed"], "cost": cost}
+    def run_cost(self, run_id: str) -> float:
+        return self.row("SELECT COALESCE(SUM(cost_usd), 0) AS c FROM sessions WHERE run_id = ?", run_id)["c"]
 
     def last_run(self, watch: str) -> str | None:
         row = self.row("SELECT last_run_at FROM watch_state WHERE watch = ?", watch)

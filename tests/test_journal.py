@@ -1,9 +1,10 @@
 import re
 import time
 
-from conftest import artifact, monitor_answer, report_action, turn_answer, work_log
+from conftest import artifact, monitor_answer, report_action, turn_answer, until, work_log
 
-from vahtovik import cli, journal
+from vahtovik import cli, journal, watchdog
+from vahtovik.tmux import Tmux
 from vahtovik.util import file_lock
 
 
@@ -17,6 +18,7 @@ def test_run_writes_one_line_per_key_event(project):
     project.queue(monitor_answer(artifact("a1", "g")), monitor_answer(),
                   turn_answer([work_log(), report_action("log", "Hi.")], importance="high"))
     assert cli.main(["run", "--force"]) == 0
+    until(lambda: "w1/g: Status finished" in (project.root / "data/journal.log").read_text())  # the turn goes on
     entries = _entries(project)
     messages = [m for _, m in entries]
     assert len({who for who, _ in entries}) == 1 and entries[0][0].startswith("run ")  # report lines too
@@ -29,8 +31,7 @@ def test_run_writes_one_line_per_key_event(project):
     assert "w1/g: Status finished, importance high: All good." in messages
     assert any(re.fullmatch(r"w1/g: Started group turn: 1 artifact, new session \w{8}, tmux window @\d+", m)
                for m in messages)
-    assert any(re.fullmatch(r"w1/g: Finished group turn in \ds: status finished, 1 report", m) for m in messages)
-    assert re.fullmatch(r"Finished run in \ds: 1 new artifact, 1 group turn, 1 report sent, \$0.02", messages[-1])
+    assert any(re.fullmatch(r"Finished run in \ds: 1 new artifact, 1 group turn started, \$0.02", m) for m in messages)
 
 
 def test_run_with_nothing_due_writes_one_line(project):
@@ -62,13 +63,16 @@ def test_failures_are_logged_with_the_attempt(project):
     project.queue(monitor_answer(artifact("a1", "g")), {"exit": 1},
                   turn_answer([report_action("broken", "Hi.")]))
     cli.main(["run", "--force"])
+    cfg, state, _ = project.load()
+    until(lambda: state.group("w1", "g")["status"] == "failed")
+    watchdog.tick(cfg, state, Tmux(cfg))  # the next run's start ends the turn
     messages = [m for _, m in _entries(project)]
     assert any(m.startswith("w1/src-b: Failed monitoring after") for m in messages)
     assert any(m.startswith('w1/g: Failed report 1 to broken "Test report" (attempt 1 of 5): boom')
                for m in messages)
     assert any(re.fullmatch(r"w1/g: Failed group turn after \ds \(attempt 1 of 3\): "
                             r"the agent stopped 4 times without running `vahtovik turn`", m) for m in messages)
-    assert messages[-1].endswith("1 group turn (1 failed), 0 reports sent, 1 not sent, $0.01")
+    assert any(m.endswith(": 1 new artifact, 1 group turn started, $0.01") for m in messages)
 
 
 def test_read_filters_and_follows(tmp_path):

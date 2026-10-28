@@ -59,6 +59,7 @@ def tidy(cfg: Config, state: State, tmux: Tmux) -> None:
             started = datetime.fromisoformat(turn["started_at"])
             group_turn.fail(state, turn, windows.exit_error(state, turn["watch"], turn["group_key"]),
                             (datetime.now(timezone.utc) - started).total_seconds())
+            _register_agent_files(cfg, state, turn["watch"], turn["group_key"])
 
 
 def _close(cfg: Config, state: State, tmux: Tmux, window: Window, why: str) -> None:
@@ -68,6 +69,11 @@ def _close(cfg: Config, state: State, tmux: Tmux, window: Window, why: str) -> N
     deadline = time.monotonic() + 5  # the window's program lets go of the group lock as it ends
     while not _lock_free(cfg, watch, key) and time.monotonic() < deadline:
         time.sleep(0.1)
+    _register_agent_files(cfg, state, watch, key)
+
+
+def _register_agent_files(cfg: Config, state: State, watch: str, key: str) -> None:
+    """Register the artifacts the agent wrote into its folder, once its window has ended."""
     try:
         artifacts.register_agent_files(cfg, state, cfg.watch(watch), key)
     except ConfigError:  # the watch was removed from the config

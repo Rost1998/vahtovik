@@ -11,9 +11,7 @@ import os
 import signal
 import subprocess
 import sys
-import time
 import uuid
-from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -26,7 +24,6 @@ from .util import LockBusy
 
 log = logging.getLogger(__name__)
 
-POLL_SECONDS = 0.5
 BUSY_EXIT = 75
 TERMINAL_VARS = ("TERM", "COLORTERM", "TMUX", "TMUX_PANE")  # from the window, not from whoever started it
 
@@ -80,24 +77,6 @@ def exit_error(state: State, watch: str, key: str) -> str:
     if record["exit_code"] == 0:
         return "claude exited before the agent ran `vahtovik turn`"
     return f"claude exited with code {record['exit_code']}" + (f": {' / '.join(lines[-3:])}" if lines else "")
-
-
-def wait_for_turn(state: State, tmux: Tmux, watch: str, key: str, turn_id: str,
-                  tick: Callable[[], None] | None = None) -> str:
-    """Wait until the turn ends: "done", "failed", "maintenance", "background" (the agent waits for its own
-    background work), or "ended" (the window closed)."""
-    ref = f"{watch}/{key}"
-    while True:
-        group, turn = state.group(watch, key), state.turn(turn_id)
-        if turn["finished_at"] and (group["idle"] or not turn["ok"]):
-            return "done" if turn["ok"] else "failed"
-        if group["status"] in ("failed", "maintenance") or (group["status"] == "background" and group["idle"]):
-            return group["status"]
-        if tmux.window(ref) is None:
-            return "ended"
-        if tick:
-            tick()
-        time.sleep(POLL_SECONDS)
 
 
 def age(state: State, watch: str, key: str) -> timedelta:

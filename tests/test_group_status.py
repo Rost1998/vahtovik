@@ -2,11 +2,10 @@ import json
 import sqlite3
 
 import pytest
-from conftest import artifact, status_action, turn_answer, work_log
+from conftest import artifact, run_turns, status_action, turn_answer, work_log
 
 from vahtovik import artifacts, cli, context_file, group_status, watchdog
 from vahtovik.state import State
-from vahtovik.stages import group_turn
 from vahtovik.tmux import Tmux
 
 
@@ -21,7 +20,7 @@ def _turns(project):
     """A run's group stage, after the watchdog's check that starts every run (it closes done windows)."""
     cfg, state, claude = project.load()
     watchdog.check(cfg, state, Tmux(cfg), claude, "run1")
-    group_turn.run(cfg, state, claude, Tmux(cfg), cfg.watch("w1"), "run1")
+    run_turns(cfg, state, claude, Tmux(cfg))
     return cfg, state
 
 

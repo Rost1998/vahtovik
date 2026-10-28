@@ -1,9 +1,9 @@
 import pytest
 import yaml
-from conftest import artifact, monitor_answer, turn_answer, work_log
+from conftest import artifact, monitor_answer, run_turns, turn_answer, work_log
 
 from vahtovik import artifacts, cli, config as config_mod
-from vahtovik.stages import group_turn, monitor
+from vahtovik.stages import monitor
 from vahtovik.tmux import Tmux
 
 
@@ -29,7 +29,7 @@ def test_watch_secrets_reach_its_monitor_and_group_sessions(project, monkeypatch
 
     artifacts.register(cfg, state, cfg.watch("w1"), artifact("a1", "g"), "src-a")
     project.queue(turn_answer([work_log()]))
-    group_turn.run(cfg, state, claude, Tmux(cfg), cfg.watch("w1"), "r1")
+    run_turns(cfg, state, claude, Tmux(cfg), run_id="r1")
     assert project.calls()[-1]["env"]["ORG_B_TOKEN"] == "org-b"
     claude_md = (cfg.group_dir("w1", "g") / "CLAUDE.md").read_text()
     assert "set `A_TOKEN` to `$ORG_B_TOKEN`" in claude_md and "org-b" not in claude_md

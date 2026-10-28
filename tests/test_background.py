@@ -1,11 +1,8 @@
-import logging
-
 import pytest
 import yaml
-from conftest import artifact, status_action, until, work_log
+from conftest import artifact, run_turns, status_action, until, work_log
 
 from vahtovik import artifacts, cli, group_status, watchdog
-from vahtovik.stages import group_turn
 from vahtovik.tmux import Tmux
 
 BUILD = {"id": "b1", "type": "shell", "status": "running", "description": "make build"}
@@ -19,7 +16,7 @@ def _setup(project):
 
 def _turns(project):
     cfg, state, claude = project.load()
-    group_turn.run(cfg, state, claude, Tmux(cfg), cfg.watch("w1"), "run1")
+    run_turns(cfg, state, claude, Tmux(cfg))
     return state
 
 
@@ -32,23 +29,20 @@ def _artifact_status(state) -> str:
     return state.row("SELECT status FROM artifacts WHERE id = 'a1'")["status"]
 
 
-def test_agent_waits_for_its_background_work_then_ends_the_turn(project, caplog):
-    caplog.set_level(logging.INFO, logger="vahtovik")
+def test_agent_waits_for_its_background_work_then_ends_the_turn(project):
     cfg, _, _, tmux = _setup(project)
     project.queue({"mode": "interactive", "actions": [work_log(), background_action()], "background_tasks": [BUILD],
                    "wake": {"after": 1, "actions": [work_log("Built."), status_action()]}})
     state = _turns(project)
     group = state.group("w1", "g")
     assert (group["status"], group["status_reason"]) == ("background", "the build runs") and group["check_after"]
-    assert any("Paused group turn" in m and "background work (the build runs)" in m for m in caplog.messages)
     assert state.row("SELECT finished_at FROM group_turns")["finished_at"] is None and _artifact_status(state) == "new"
-    assert (state.run_summary("run1")["turns_paused"], state.run_summary("run1")["turns_failed"]) == (1, 0)
     watchdog.tick(cfg, state, tmux)
     assert tmux.window("w1/g") is not None  # the window keeps the background work alive
 
     until(lambda: state.group("w1", "g")["status"] == "finished" and state.group("w1", "g")["idle"] == 1)
     assert state.row("SELECT ok FROM group_turns")["ok"] == 1 and _artifact_status(state) == "processed"
-    assert state.group("w1", "g")["check_after"] is None and state.run_summary("run1")["turns_ok"] == 1
+    assert state.group("w1", "g")["check_after"] is None
     until(lambda: len(project.hook_answers()) == 2)  # the fake logs a hook's answer after the hook has ended
     assert [a.get("decision") for a in project.hook_answers()] == [None, None]
     watchdog.tick(cfg, state, tmux)

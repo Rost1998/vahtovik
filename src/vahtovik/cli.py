@@ -93,7 +93,7 @@ def _run(cfg: Config, state: State, args, run_id: str) -> int:
              f" ({', '.join(flags)})" if flags else "")
     started = time.monotonic()
     raw_dir = cfg.runs_dir(run_id)
-    new = 0
+    new = turns = 0
     state.start_run(run_id)
     status = "ok"
     try:
@@ -101,8 +101,7 @@ def _run(cfg: Config, state: State, args, run_id: str) -> int:
             if args.stage in (None, "monitor"):
                 new += monitor.run(cfg, state, claude, watch, run_id, raw_dir)
             if args.stage in (None, "group"):
-                ticker = watchdog.Ticker(cfg, state, tmux, claude, run_id)
-                group_turn.run(cfg, state, claude, tmux, watch, run_id, ticker)
+                turns += len(group_turn.run(cfg, state, claude, tmux, watch, run_id))
             if args.stage is None:
                 state.set_last_run(watch.name)
         if args.stage in (None, "deliver"):
@@ -113,14 +112,9 @@ def _run(cfg: Config, state: State, args, run_id: str) -> int:
         raise
     finally:
         state.finish_run(run_id, status)
-    summary = state.run_summary(run_id)
-    turns = plural(summary["turns_ok"] + summary["turns_failed"] + summary["turns_paused"], "group turn")
-    notes = [f"{summary[k]} {what}" for k, what in (("turns_failed", "failed"), ("turns_paused", "paused")) if summary[k]]
-    turns += f" ({', '.join(notes)})" if notes else ""
-    reports = plural(summary["reports_sent"], "report") + " sent"
-    reports += f", {summary['reports_failed']} not sent" if summary["reports_failed"] else ""
-    log.info("Finished run in %s: %s, %s, %s, $%.2f", duration(time.monotonic() - started),
-             plural(new, "new artifact"), turns, reports, summary["cost"])
+    # The turns go on in their windows: their results come to the journal as the agents report them.
+    log.info("Finished run in %s: %s, %s started, $%.2f", duration(time.monotonic() - started),
+             plural(new, "new artifact"), plural(turns, "group turn"), state.run_cost(run_id))
     return 0
 
 
