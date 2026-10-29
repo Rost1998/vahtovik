@@ -71,7 +71,7 @@ The watchdog looks after the group sessions at the start of every run, so the ti
 - it warns once about a group turn that runs longer than `watchdog.long_turn_after` (3 hours), since sessions have no time limit;
 - when vahtovik stops retrying a report (after 5 failed attempts), it tells the watch's other channels, with the report itself.
 
-It also asks an AI session (the `watchdog` stage, a cheap model by default) to check the group sessions: every `running` or `background` one, and every other one that changed since the last check: with an open window, or `finished` or `waiting` with a window that ended before a check. It skips the call when there is nothing to check, and the cost shows in `vahtovik status -v`. The AI gets the facts of each session (status, turn, window, lock, the screen and the end of the conversation), follows the strict skill `skills/watchdog/SKILL.md`, and picks one action per session from a fixed list. vahtovik checks each pick before it acts:
+It also asks an AI session (the `watchdog` stage, a cheap model by default) to check the group sessions: every `running` or `background` one, and every other one that changed since the last check: with an open window, or `finished` or `waiting` with a window that ended before a check. It skips the call when there is nothing to check, and the cost shows in `vahtovik status`. The AI gets the facts of each session (status, turn, window, lock, the screen and the end of the conversation), follows the strict skill `skills/watchdog/SKILL.md`, and picks one action per session from a fixed list. vahtovik checks each pick before it acts:
 
 - `none`: all is right. A done window (`finished` or `waiting`) closes only after this answer;
 - `press`: press the keys of a known screen, such as Claude Code's "trust this folder" question. The screens and their keys are listed in the skill, and vahtovik presses the keys, never the AI;
@@ -128,7 +128,7 @@ vahtovik keeps your personal `~/.claude/CLAUDE.md` and parent-folder `CLAUDE.md`
 | `report --channel C [--subject S]` | send a report, body on stdin (inside a session, the group comes from the environment) |
 | `turn finished\|waiting\|background [--importance I] [--summary S] [--question Q ...] [--reason R] [--check-after 30m]` | for agents: end a turn with the group's status |
 | `log [TEXT] [-n N] [-f]` | the last N journal lines (default 40, 0 for all) that contain TEXT; `-f` keeps showing new lines |
-| `status [--watch W] [-v]` | a table of watches and their groups: each group's status, artifacts and cost, each watch's total cost, and undelivered reports; `-v` gives all details as text instead: sources, sessions, status reasons, and the cost of monitor and watchdog sessions in the last 24 hours |
+| `status [--watch W] [-v]` | a table of watches and their groups: each group's status, artifacts and cost, each watch's total cost, and undelivered reports; then the cost of monitor and watchdog sessions in the last 24 hours. `-v` gives all details as text instead: sources, sessions, status reasons |
 | `install-timer [--every 5m]` | start vahtovik periodically with a systemd user timer |
 | `uninstall-timer` | remove that timer |
 | `check` | validate config, skills, environment variables, `claude`, its trust of the project folder, and tmux |

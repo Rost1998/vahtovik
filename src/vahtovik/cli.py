@@ -218,6 +218,13 @@ def _status_table(cfg: Config, state: State, names: list[str]) -> None:
     footer = ["all", "", plural(failed, "undelivered report"), f"${total:.2f}"]
     for line in _table(["watch", "groups", "status", "stat"], rows, footer):
         print(line)
+    print(f"monitor and watchdog sessions in the last 24 hours: ${_day_cost(state):.2f}")
+
+
+def _day_cost(state: State) -> float:
+    """What monitor and watchdog sessions cost in the last 24 hours."""
+    day_ago = utc_iso(datetime.now(timezone.utc) - timedelta(days=1))
+    return state.row("SELECT COALESCE(SUM(cost_usd), 0) AS c FROM sessions WHERE started_at >= ?", day_ago)["c"]
 
 
 def _table(header: list[str], rows: list[list[str]], footer: list[str]) -> list[str]:
@@ -268,10 +275,8 @@ def _status_details(cfg: Config, state: State, names: list[str]) -> None:
             print(f"  group {g['key']}: {g['title']} | {status} | {summary} | "
                   f"session {g['session_id'] or 'none yet'}, ${group_costs.get((name, g['key']), 0):.2f}")
     failed = state.row("SELECT COUNT(*) AS n FROM deliveries WHERE status != 'sent'")["n"]
-    day_ago = utc_iso(datetime.now(timezone.utc) - timedelta(days=1))
-    cost = state.row("SELECT COALESCE(SUM(cost_usd), 0) AS c FROM sessions WHERE started_at >= ?", day_ago)["c"]
     print(f"undelivered reports: {failed} · group sessions in all watches: ${sum(group_costs.values()):.2f} · "
-          f"monitor and watchdog sessions in the last 24 hours: ${cost:.2f}")
+          f"monitor and watchdog sessions in the last 24 hours: ${_day_cost(state):.2f}")
 
 
 def cmd_check(args) -> int:

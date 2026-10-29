@@ -2,6 +2,7 @@ import json
 import os
 
 from vahtovik import cli, costs
+from vahtovik.util import utc_iso
 
 
 def _conversation(claude, session_id: str, *totals: float, other: str = ""):
@@ -32,6 +33,8 @@ def test_status_shows_the_cost_of_each_group_its_watch_and_all(project, capsys):
     state.set_status("w1", "h", "waiting", questions=["Why?", "When?"])
     state.execute("UPDATE groups SET updated_at = '2026-10-29T10:00:00+00:00' WHERE key = 'g'")
     state.execute("UPDATE groups SET updated_at = '2026-10-29T11:00:00+00:00' WHERE key = 'h'")  # latest first
+    state.execute("INSERT INTO sessions (stage, watch, started_at, cost_usd) VALUES "
+                  "('monitor', 'w1', '2000-01-01T00:00:00+00:00', 9.0), ('monitor', 'w1', ?, 0.4)", utc_iso())
     assert cli.main(["status"]) == 0
     assert capsys.readouterr().out.splitlines() == [
         "watch | groups | status                | stat",
@@ -41,6 +44,7 @@ def test_status_shows_the_cost_of_each_group_its_watch_and_all(project, capsys):
         "      | total  | enabled, every 1h     | $3.25",
         "------+--------+-----------------------+--------------------------",
         "all   |        | 0 undelivered reports | $3.25",
+        "monitor and watchdog sessions in the last 24 hours: $0.40",
     ]
     assert cli.main(["status", "-v"]) == 0
     out = capsys.readouterr().out
