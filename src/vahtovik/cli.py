@@ -191,8 +191,62 @@ def cmd_hook(args) -> int:
 def cmd_status(args) -> int:
     cfg, state = _load()
     costs.update(state, Claude(cfg))
-    group_costs = state.group_costs()
     names = [args.watch] if args.watch else sorted(cfg.watches)
+    (_status_details if args.verbose else _status_table)(cfg, state, names)
+    return 0
+
+
+def _status_table(cfg: Config, state: State, names: list[str]) -> None:
+    """One row per group and a total row per watch."""
+    group_costs = state.group_costs()
+    rows = []
+    for name in names:
+        watch = cfg.watch(name)
+        watch_rows = []
+        for g in state.groups(name):
+            questions = json.loads(g["questions"] or "[]") if g["status"] == "waiting" else []
+            status = g["status"] + (f", {plural(len(questions), 'question')}" if questions else "")
+            stat = [_artifact_counts(state, name, g["key"]), f"${group_costs.get((name, g['key']), 0):.2f}"]
+            watch_rows.append(["", g["key"], status, ", ".join(s for s in stat if s)])
+        watch_cost = sum(c for (w, _), c in group_costs.items() if w == name)
+        status = f"{'enabled' if watch.enabled else 'disabled'}, every {_every(watch.interval)}"
+        watch_rows.append(["", "total" if watch_rows else "-", status, f"${watch_cost:.2f}"])
+        watch_rows[0][0] = name
+        rows += watch_rows
+    failed = state.row("SELECT COUNT(*) AS n FROM deliveries WHERE status != 'sent'")["n"]
+    total = sum(c for (w, _), c in group_costs.items() if w in names)
+    footer = ["all", "", plural(failed, "undelivered report"), f"${total:.2f}"]
+    for line in _table(["watch", "groups", "status", "stat"], rows, footer):
+        print(line)
+
+
+def _table(header: list[str], rows: list[list[str]], footer: list[str]) -> list[str]:
+    widths = [max(len(row[i]) for row in (header, *rows, footer)) for i in range(len(header))]
+    rule = "-+-".join("-" * width for width in widths)
+
+    def line(row: list[str]) -> str:
+        return " | ".join(cell.ljust(width) for cell, width in zip(row, widths)).rstrip()
+
+    return [line(header), rule, *map(line, rows), rule, line(footer)]
+
+
+def _every(interval: timedelta) -> str:
+    """An interval as watch.yaml writes it: 30m, 6h, 1d."""
+    seconds = int(interval.total_seconds())
+    for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
+        if seconds and seconds % size == 0:
+            return f"{seconds // size}{unit}"
+    return f"{seconds}s"
+
+
+def _artifact_counts(state: State, watch: str, key: str) -> str:
+    counts = {r["status"]: r["n"] for r in state.rows(
+        "SELECT status, COUNT(*) AS n FROM artifacts WHERE watch = ? AND group_key = ? GROUP BY status", watch, key)}
+    return ", ".join(f"{n} {s}" for s, n in sorted(counts.items()))
+
+
+def _status_details(cfg: Config, state: State, names: list[str]) -> None:
+    group_costs = state.group_costs()
     for name in names:
         watch = cfg.watch(name)
         last = state.last_run(name)
@@ -206,10 +260,7 @@ def cmd_status(args) -> int:
                 not row["last_ok_at"] or row["last_error_at"] > row["last_ok_at"]) else ""
             print(f"  source {src.id} ({src.skill}){error}")
         for g in state.groups(name):
-            counts = {r["status"]: r["n"] for r in state.rows(
-                "SELECT status, COUNT(*) AS n FROM artifacts WHERE watch = ? AND group_key = ? GROUP BY status",
-                name, g["key"])}
-            summary = ", ".join(f"{n} {s}" for s, n in sorted(counts.items()))
+            summary = _artifact_counts(state, name, g["key"])
             status = g["status"] + (f": {g['status_reason']}" if g["status_reason"] else "")
             status += f", check after {human(datetime.fromisoformat(g['check_after']))}" if g["check_after"] else ""
             questions = json.loads(g["questions"] or "[]") if g["status"] == "waiting" else []
@@ -221,7 +272,6 @@ def cmd_status(args) -> int:
     cost = state.row("SELECT COALESCE(SUM(cost_usd), 0) AS c FROM sessions WHERE started_at >= ?", day_ago)["c"]
     print(f"undelivered reports: {failed} · group sessions in all watches: ${sum(group_costs.values()):.2f} · "
           f"monitor and watchdog sessions in the last 24 hours: ${cost:.2f}")
-    return 0
 
 
 def cmd_check(args) -> int:
@@ -375,6 +425,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("status", help="show watches, groups and deliveries")
     p.add_argument("--watch")
+    p.add_argument("-v", "--verbose", action="store_true",
+                   help="all details as text: sources, sessions, status reasons")
     p.set_defaults(func=cmd_status)
 
     p = sub.add_parser("log", help="show the journal of what vahtovik did")

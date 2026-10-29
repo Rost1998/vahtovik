@@ -27,7 +27,22 @@ def test_status_shows_the_cost_of_each_group_its_watch_and_all(project, capsys):
     _conversation(claude, "s2", 2.0)
     state.set_session("w1", "h", "s3")  # no window has ended yet
     _conversation(claude, "s3")
+    state.execute("INSERT INTO artifacts (watch, id, group_key, status) VALUES "
+                  "('w1', 'a1', 'g', 'processed'), ('w1', 'a2', 'g', 'new')")
+    state.set_status("w1", "h", "waiting", questions=["Why?", "When?"])
+    state.execute("UPDATE groups SET updated_at = '2026-10-29T10:00:00+00:00' WHERE key = 'g'")
+    state.execute("UPDATE groups SET updated_at = '2026-10-29T11:00:00+00:00' WHERE key = 'h'")  # latest first
     assert cli.main(["status"]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "watch | groups | status                | stat",
+        "------+--------+-----------------------+--------------------------",
+        "w1    | h      | waiting, 2 questions  | $0.00",
+        "      | g      | idle                  | 1 new, 1 processed, $3.25",
+        "      | total  | enabled, every 1h     | $3.25",
+        "------+--------+-----------------------+--------------------------",
+        "all   |        | 0 undelivered reports | $3.25",
+    ]
+    assert cli.main(["status", "-v"]) == 0
     out = capsys.readouterr().out
     assert "last run never, group sessions $3.25\n" in out
     assert "session s2, $3.25" in out and "session s3, $0.00" in out
