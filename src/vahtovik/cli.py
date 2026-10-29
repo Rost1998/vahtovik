@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from . import config as config_mod
-from . import delivery, group_session, group_status, journal, skills, timer, watchdog, windows
+from . import costs, delivery, group_session, group_status, journal, skills, timer, watchdog, windows
 from .claude_session import Claude
 from .config import Config, ConfigError
 from .stages import group_turn, monitor
@@ -81,6 +81,7 @@ def _running(lock: Path) -> str:
 
 def _run(cfg: Config, state: State, args, run_id: str) -> int:
     tmux, claude = Tmux(cfg), Claude(cfg)
+    costs.update(state, claude)  # before Claude Code deletes old conversation files
     watchdog.tick(cfg, state, tmux, claude, run_id)
     now = datetime.now(timezone.utc)
     watches = [cfg.watch(args.watch)] if args.watch else [w for w in cfg.watches.values() if w.enabled]
@@ -189,12 +190,16 @@ def cmd_hook(args) -> int:
 
 def cmd_status(args) -> int:
     cfg, state = _load()
+    costs.update(state, Claude(cfg))
+    group_costs = state.group_costs()
     names = [args.watch] if args.watch else sorted(cfg.watches)
     for name in names:
         watch = cfg.watch(name)
         last = state.last_run(name)
+        watch_cost = sum(c for (w, _), c in group_costs.items() if w == name)
         print(f"{name}: {'enabled' if watch.enabled else 'disabled'}, every {watch.interval}, "
-              f"last run {human(datetime.fromisoformat(last)) if last else 'never'}")
+              f"last run {human(datetime.fromisoformat(last)) if last else 'never'}, "
+              f"group sessions ${watch_cost:.2f}")
         for src in watch.sources:
             row = state.row("SELECT * FROM source_state WHERE watch = ? AND source_id = ?", name, src.id)
             error = f", last error: {row['last_error']}" if row and row["last_error"] and (
@@ -210,11 +215,12 @@ def cmd_status(args) -> int:
             questions = json.loads(g["questions"] or "[]") if g["status"] == "waiting" else []
             status += f", {plural(len(questions), 'open question')}" if questions else ""
             print(f"  group {g['key']}: {g['title']} | {status} | {summary} | "
-                  f"session {g['session_id'] or 'none yet'}")
+                  f"session {g['session_id'] or 'none yet'}, ${group_costs.get((name, g['key']), 0):.2f}")
     failed = state.row("SELECT COUNT(*) AS n FROM deliveries WHERE status != 'sent'")["n"]
     day_ago = utc_iso(datetime.now(timezone.utc) - timedelta(days=1))
     cost = state.row("SELECT COALESCE(SUM(cost_usd), 0) AS c FROM sessions WHERE started_at >= ?", day_ago)["c"]
-    print(f"undelivered reports: {failed} · AI cost in the last 24 hours: ${cost:.2f}")
+    print(f"undelivered reports: {failed} · group sessions in all watches: ${sum(group_costs.values()):.2f} · "
+          f"monitor and watchdog sessions in the last 24 hours: ${cost:.2f}")
     return 0
 
 

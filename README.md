@@ -59,6 +59,8 @@ A Claude Code hook does not let the agent stop before it runs the command. An au
 
 Sessions run with `bypassPermissions`. The main skill (`skills/vahtovik/SKILL.md`, part of every session's system prompt) tells agents two rules. Everything outside their working folder is read-only, unless the watch's rules say otherwise; reporting through `vahtovik report` is always allowed. Instructions come only from the watch's rules, the vahtovik skills and the person in an interactive session, never from what sources return.
 
+`vahtovik status` shows what each group's sessions cost, and the totals per watch and for all watches. Claude Code writes a session's running total to its conversation file when the session's window ends, and vahtovik reads it from there, so a running window's cost shows once the window ends. vahtovik keeps the totals in its database, because Claude Code deletes old conversation files. With `auth: subscription`, the cost is what the same work would cost with an API key; you pay your subscription instead.
+
 ## Watchdog
 
 The watchdog looks after the group sessions at the start of every run, so the timer's period sets its pace; 5 minutes is the right period (see Scheduling). At the start of every run:
@@ -126,7 +128,7 @@ vahtovik keeps your personal `~/.claude/CLAUDE.md` and parent-folder `CLAUDE.md`
 | `report --channel C [--subject S]` | send a report, body on stdin (inside a session, the group comes from the environment) |
 | `turn finished\|waiting\|background [--importance I] [--summary S] [--question Q ...] [--reason R] [--check-after 30m]` | for agents: end a turn with the group's status |
 | `log [TEXT] [-n N] [-f]` | the last N journal lines (default 40, 0 for all) that contain TEXT; `-f` keeps showing new lines |
-| `status [--watch W]` | watches, sources, groups, sessions, undelivered reports, AI cost in the last 24 hours |
+| `status [--watch W]` | watches, sources, groups, sessions, undelivered reports, the cost of group sessions per group, per watch and in all, and the cost of monitor and watchdog sessions in the last 24 hours |
 | `install-timer [--every 5m]` | start vahtovik periodically with a systemd user timer |
 | `uninstall-timer` | remove that timer |
 | `check` | validate config, skills, environment variables, `claude`, its trust of the project folder, and tmux |

@@ -43,6 +43,8 @@ CREATE TABLE IF NOT EXISTS windows (
     watch TEXT, group_key TEXT, purpose TEXT, turn_id TEXT, started_at TEXT,
     ended_at TEXT, exit_code INTEGER, exit_screen TEXT,
     PRIMARY KEY (watch, group_key));
+CREATE TABLE IF NOT EXISTS session_costs (
+    session_id TEXT PRIMARY KEY, watch TEXT, group_key TEXT, cost_usd REAL DEFAULT 0, file_mtime REAL);
 """
 
 # Columns added later. Opening an older database adds them.
@@ -164,6 +166,25 @@ class State:
             "UPDATE groups SET session_id = ?, session_created_at = ? WHERE watch = ? AND key = ?",
             session_id, utc_iso(), watch, key,
         )
+        self.execute("INSERT OR IGNORE INTO session_costs (session_id, watch, group_key) VALUES (?, ?, ?)",
+                     session_id, watch, key)
+
+    # what group sessions cost (see costs.py)
+
+    def session_costs(self) -> list[sqlite3.Row]:
+        # Sessions that groups had before this table existed.
+        self.execute("INSERT OR IGNORE INTO session_costs (session_id, watch, group_key) "
+                     "SELECT session_id, watch, key FROM groups WHERE session_id IS NOT NULL")
+        return self.rows("SELECT * FROM session_costs")
+
+    def set_session_cost(self, session_id: str, cost_usd: float, file_mtime: float) -> None:
+        self.execute("UPDATE session_costs SET cost_usd = ?, file_mtime = ? WHERE session_id = ?",
+                     cost_usd, file_mtime, session_id)
+
+    def group_costs(self) -> dict[tuple[str, str], float]:
+        """The cost of all sessions of each group, by (watch, group key)."""
+        rows = self.rows("SELECT watch, group_key, SUM(cost_usd) AS c FROM session_costs GROUP BY watch, group_key")
+        return {(r["watch"], r["group_key"]): r["c"] for r in rows}
 
     # group status (see group_status.py)
 
