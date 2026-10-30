@@ -128,7 +128,7 @@ vahtovik keeps your personal `~/.claude/CLAUDE.md` and parent-folder `CLAUDE.md`
 | `report --channel C [--subject S]` | send a report, body on stdin (inside a session, the group comes from the environment) |
 | `turn finished\|waiting\|background [--importance I] [--summary S] [--question Q ...] [--reason R] [--check-after 30m]` | for agents: end a turn with the group's status |
 | `log [TEXT] [-n N] [-f]` | the last N journal lines (default 40, 0 for all) that contain TEXT; `-f` keeps showing new lines |
-| `status [--watch W] [-v]` | a table of watches and their groups: each group's status, artifacts and cost, each watch's total cost, and undelivered reports; then the cost of monitor and watchdog sessions in the last 24 hours. `-v` gives all details as text instead: sources, sessions, status reasons |
+| `status [--watch W] [-v]` | a table of watches and their groups: each watch's state (enabled or disabled) and period; each group's status, processed artifacts and cost; the totals per watch and for all; and undelivered reports; then the cost of monitor and watchdog sessions in the last 24 hours. `-v` gives all details as text instead: sources, sessions, status reasons |
 | `install-timer [--every 5m]` | start vahtovik periodically with a systemd user timer |
 | `uninstall-timer` | remove that timer |
 | `check` | validate config, skills, environment variables, `claude`, its trust of the project folder, and tmux |

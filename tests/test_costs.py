@@ -37,13 +37,13 @@ def test_status_shows_the_cost_of_each_group_its_watch_and_all(project, capsys):
                   "('monitor', 'w1', '2000-01-01T00:00:00+00:00', 9.0), ('monitor', 'w1', ?, 0.4)", utc_iso())
     assert cli.main(["status"]) == 0
     assert capsys.readouterr().out.splitlines() == [
-        "watch | groups | status                | stat",
-        "------+--------+-----------------------+--------------------------",
-        "w1    | h      | waiting, 2 questions  | $0.00",
-        "      | g      | idle                  | 1 new, 1 processed, $3.25",
-        "      | total  | enabled, every 1h     | $3.25",
-        "------+--------+-----------------------+--------------------------",
-        "all   |        | 0 undelivered reports | $3.25",
+        "watch        | period | groups | status                | artifacts |  cost",
+        "-------------+--------+--------+-----------------------+-----------+------",
+        "w1 (enabled) | 1h     | h      | waiting, 2 questions  |         0 | $0.00",
+        "             |        | g      | idle                  |         1 | $3.25",
+        "             |        | total  |                       |         1 | $3.25",
+        "-------------+--------+--------+-----------------------+-----------+------",
+        "all          |        |        | 0 undelivered reports |         1 | $3.25",
         "monitor and watchdog sessions in the last 24 hours: $0.40",
     ]
     assert cli.main(["status", "-v"]) == 0

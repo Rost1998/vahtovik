@@ -197,26 +197,30 @@ def cmd_status(args) -> int:
 
 
 def _status_table(cfg: Config, state: State, names: list[str]) -> None:
-    """One row per group and a total row per watch."""
+    """One row per group and a total row per watch. Artifacts are the processed ones."""
     group_costs = state.group_costs()
-    rows = []
+    rows, all_processed = [], 0
     for name in names:
         watch = cfg.watch(name)
+        processed = {r["group_key"]: r["n"] for r in state.rows(
+            "SELECT group_key, COUNT(*) AS n FROM artifacts WHERE watch = ? AND status = 'processed' "
+            "GROUP BY group_key", name)}
         watch_rows = []
         for g in state.groups(name):
             questions = json.loads(g["questions"] or "[]") if g["status"] == "waiting" else []
             status = g["status"] + (f", {plural(len(questions), 'question')}" if questions else "")
-            stat = [_artifact_counts(state, name, g["key"]), f"${group_costs.get((name, g['key']), 0):.2f}"]
-            watch_rows.append(["", g["key"], status, ", ".join(s for s in stat if s)])
+            watch_rows.append(["", "", g["key"], status, str(processed.get(g["key"], 0)),
+                               f"${group_costs.get((name, g['key']), 0):.2f}"])
         watch_cost = sum(c for (w, _), c in group_costs.items() if w == name)
-        status = f"{'enabled' if watch.enabled else 'disabled'}, every {_every(watch.interval)}"
-        watch_rows.append(["", "total" if watch_rows else "-", status, f"${watch_cost:.2f}"])
-        watch_rows[0][0] = name
+        all_processed += sum(processed.values())
+        watch_rows.append(["", "", "total" if watch_rows else "-", "", str(sum(processed.values())),
+                           f"${watch_cost:.2f}"])
+        watch_rows[0][:2] = f"{name} ({'enabled' if watch.enabled else 'disabled'})", _every(watch.interval)
         rows += watch_rows
     failed = state.row("SELECT COUNT(*) AS n FROM deliveries WHERE status != 'sent'")["n"]
-    total = sum(c for (w, _), c in group_costs.items() if w in names)
-    footer = ["all", "", plural(failed, "undelivered report"), f"${total:.2f}"]
-    for line in _table(["watch", "groups", "status", "stat"], rows, footer):
+    footer = ["all", "", "", plural(failed, "undelivered report"), str(all_processed),
+              f"${sum(c for (w, _), c in group_costs.items() if w in names):.2f}"]
+    for line in _table(["watch", "period", "groups", "status", "artifacts", "cost"], rows, footer, right=(4, 5)):
         print(line)
     print(f"monitor and watchdog sessions in the last 24 hours: ${_day_cost(state):.2f}")
 
@@ -227,12 +231,15 @@ def _day_cost(state: State) -> float:
     return state.row("SELECT COALESCE(SUM(cost_usd), 0) AS c FROM sessions WHERE started_at >= ?", day_ago)["c"]
 
 
-def _table(header: list[str], rows: list[list[str]], footer: list[str]) -> list[str]:
+def _table(header: list[str], rows: list[list[str]], footer: list[str], right: tuple[int, ...] = ()) -> list[str]:
+    """An ASCII table; the columns in `right` hold numbers and are aligned to the right."""
     widths = [max(len(row[i]) for row in (header, *rows, footer)) for i in range(len(header))]
     rule = "-+-".join("-" * width for width in widths)
 
     def line(row: list[str]) -> str:
-        return " | ".join(cell.ljust(width) for cell, width in zip(row, widths)).rstrip()
+        cells = [cell.rjust(width) if i in right else cell.ljust(width)
+                 for i, (cell, width) in enumerate(zip(row, widths))]
+        return " | ".join(cells).rstrip()
 
     return [line(header), rule, *map(line, rows), rule, line(footer)]
 
