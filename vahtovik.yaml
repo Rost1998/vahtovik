@@ -3,11 +3,12 @@
 claude:
   auth: subscription          # subscription (your Claude login) or api-key (ANTHROPIC_API_KEY, runs with --bare)
   config_dir: null            # optional separate CLAUDE_CONFIG_DIR for vahtovik sessions
-  model: claude-opus-5-5
-  stages:                     # defaults per stage; a watch can override them in its watch.yaml
-    monitor: {effort: medium, max_budget_usd: 0.50}
-    group:   {effort: high}     # group sessions are interactive: max_budget_usd does not apply to them
-    watchdog: {model: claude-haiku-5-5, effort: low, max_budget_usd: 0.20}
+  model: opus                 # an alias: Claude Code uses the newest Opus
+  effort: high                # low, medium, high, xhigh or max
+  stages:                     # settings per stage; a watch can set its own model and effort, and override these
+    monitor: {max_budget_usd: 1.00}   # per monitor session: one per source per run
+    # group: {effort: xhigh}  # group sessions are interactive: max_budget_usd does not apply to them
+    watchdog: {model: sonnet, effort: medium, max_budget_usd: 1.00}   # belongs to no watch
   parallel_turns: 5           # the most group turns that work at once; the rest start at a later run
 
 tmux:                         # group sessions run in windows of this tmux session; `vahtovik open` shows you one

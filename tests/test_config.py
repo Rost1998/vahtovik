@@ -13,8 +13,48 @@ def test_loads_project_and_merges_stage_settings(project):
     assert [s.id for s in watch.sources] == ["src-a", "src-b"]
     assert watch.interval == timedelta(hours=1)
     group = cfg.stage(watch, "group")
-    assert (group.model, group.effort, group.max_budget_usd) == ("claude-opus-5-5", "xhigh", 1.0)
+    assert (group.model, group.effort, group.max_budget_usd) == ("opus", "xhigh", 1.0)
     assert cfg.stage(watch, "monitor").effort == "low"
+
+
+def _edit_yaml(path, change) -> None:
+    data = yaml.safe_load(path.read_text())
+    change(data)
+    path.write_text(yaml.safe_dump(data))
+
+
+def test_sessions_get_the_newest_opus_and_high_effort_unless_set(project):
+    _edit_yaml(project.root / "vahtovik.yaml", lambda d: d["claude"].pop("stages"))
+    _edit_yaml(project.root / "watches/w1/watch.yaml", lambda d: d.pop("claude"))
+    cfg = config_mod.load(project.root)
+    for watch, stage in ((cfg.watch("w1"), "monitor"), (cfg.watch("w1"), "group"), (None, "watchdog")):
+        settings = cfg.stage(watch, stage)
+        assert (settings.model, settings.effort) == ("opus", "high")
+
+
+def test_a_watchs_model_and_effort_reach_all_its_sessions(project):
+    _edit_yaml(project.root / "vahtovik.yaml",
+               lambda d: d["claude"]["stages"].update(watchdog={"model": "sonnet", "effort": "medium"}))
+    _edit_yaml(project.root / "watches/w1/watch.yaml",
+               lambda d: d["claude"].update(model="claude-fable-5-1", effort="medium"))
+    cfg = config_mod.load(project.root)
+    watch = cfg.watch("w1")
+    monitor, group, watchdog = cfg.stage(watch, "monitor"), cfg.stage(watch, "group"), cfg.stage(None, "watchdog")
+    assert (monitor.model, monitor.effort) == ("claude-fable-5-1", "medium")  # wins over vahtovik.yaml's stage
+    assert (group.model, group.effort, group.max_budget_usd) == ("claude-fable-5-1", "xhigh", 1.0)  # the watch's stage wins
+    assert (watchdog.model, watchdog.effort) == ("sonnet", "medium")  # belongs to no watch
+
+
+@pytest.mark.parametrize("file, change", [
+    ("vahtovik.yaml", lambda d: d["claude"].update(effort="hihg")),
+    ("vahtovik.yaml", lambda d: d["claude"]["stages"]["monitor"].update(effort="hihg")),
+    ("watches/w1/watch.yaml", lambda d: d["claude"].update(effort="hihg")),
+    ("watches/w1/watch.yaml", lambda d: d["claude"]["group"].update(effort="hihg")),
+])
+def test_an_unknown_effort_is_a_config_error(project, file, change):
+    _edit_yaml(project.root / file, change)
+    with pytest.raises(ConfigError, match="unknown effort 'hihg'"):
+        config_mod.load(project.root)
 
 
 

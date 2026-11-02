@@ -71,7 +71,7 @@ The watchdog looks after the group sessions at the start of every run, so the ti
 - it warns once about a group turn that runs longer than `watchdog.long_turn_after` (3 hours), since sessions have no time limit;
 - when vahtovik stops retrying a report (after 5 failed attempts), it tells the watch's other channels, with the report itself.
 
-It also asks an AI session (the `watchdog` stage, a cheap model by default) to check the group sessions: every `running` or `background` one, and every other one that changed since the last check: with an open window, or `finished` or `waiting` with a window that ended before a check. It skips the call when there is nothing to check, and the cost shows in `vahtovik status`. The AI gets the facts of each session (status, turn, window, lock, the screen and the end of the conversation), follows the strict skill `skills/watchdog/SKILL.md`, and picks one action per session from a fixed list. vahtovik checks each pick before it acts:
+It also asks an AI session (the `watchdog` stage: Sonnet with medium effort by default) to check the group sessions: every `running` or `background` one, and every other one that changed since the last check: with an open window, or `finished` or `waiting` with a window that ended before a check. It skips the call when there is nothing to check, and the cost shows in `vahtovik status`. The AI gets the facts of each session (status, turn, window, lock, the screen and the end of the conversation), follows the strict skill `skills/watchdog/SKILL.md`, and picks one action per session from a fixed list. vahtovik checks each pick before it acts:
 
 - `none`: all is right. A done window (`finished` or `waiting`) closes only after this answer;
 - `press`: press the keys of a known screen, such as Claude Code's "trust this folder" question. The screens and their keys are listed in the skill, and vahtovik presses the keys, never the AI;
@@ -109,7 +109,7 @@ The second column says who wrote the line: a timer run, an `interactive` session
 
 ## Configuration
 
-- `vahtovik.yaml`: Claude login mode (`subscription` or `api-key`), model, effort and dollar cap per stage, how many group turns work at once (`claude.parallel_turns`), and channels. A watch can override stage settings.
+- `vahtovik.yaml`: Claude login mode (`subscription` or `api-key`), the default model and effort (`opus`, the newest Opus, and `high`), model, effort and dollar cap per stage, how many group turns work at once (`claude.parallel_turns`), and channels. A watch can set its own model and effort in `watch.yaml` (`claude: {model: ..., effort: ...}`), and override the settings of a stage (`claude: {group: {effort: xhigh}}`). Later ones win: `vahtovik.yaml`'s model and effort, its stage settings, the watch's model and effort, the watch's stage settings. The watchdog belongs to no watch, so only `vahtovik.yaml` sets it.
 - `.env`: shared secrets, such as channel tokens and `ANTHROPIC_API_KEY`; see `.env.example`.
 - `watches/<name>/`: `watch.yaml` (interval, sources, channels), `monitor.md`, `process/*.md` (used in name order), `report.md`. See `watches/example/`.
 - `watches/<name>/.env`: the watch's own secrets, such as source tokens. Only this watch's sessions get them, so two watches can each have their own `GITHUB_TOKEN`. If one watch has two sources of the same type with different tokens, give a source `env: {GITHUB_TOKEN: GITHUB_TOKEN_ORG_B}`: its scripts then get `GITHUB_TOKEN` set to the value of `GITHUB_TOKEN_ORG_B`.

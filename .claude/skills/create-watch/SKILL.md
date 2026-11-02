@@ -70,8 +70,10 @@ sources:
     env: {GITHUB_TOKEN: GITHUB_TOKEN_ORG_A}   # optional: fill a variable from a secret with another name
 channels: [team-telegram]       # channels from vahtovik.yaml this watch may use
 claude:                         # optional overrides of vahtovik.yaml
-  group: {effort: xhigh}
-  monitor: {max_budget_usd: 1}
+  model: opus                   # the model of all the watch's sessions; opus, the newest Opus, by default
+  effort: high                  # low, medium, high, xhigh or max; high by default
+  group: {effort: xhigh}        # a stage's own settings win over the two above
+  monitor: {max_budget_usd: 2}
 ```
 
 `monitor.md`, given to every source of the watch:

@@ -13,6 +13,7 @@ import yaml
 CONFIG_FILE = "vahtovik.yaml"
 WATCH_FILE = "watch.yaml"
 STAGES = ("monitor", "group", "watchdog")
+EFFORTS = ("low", "medium", "high", "xhigh", "max")  # what `claude --effort` takes
 AUTH_MODES = ("subscription", "api-key")
 
 
@@ -32,7 +33,8 @@ class ClaudeSettings:
     auth: str = "subscription"
     binary: str = "claude"
     config_dir: Path | None = None
-    model: str = "claude-opus-5-5"
+    model: str = "opus"  # an alias: Claude Code uses the newest Opus
+    effort: str = "high"
     stages: dict[str, dict] = field(default_factory=dict)
     parallel_turns: int = 5  # the most group turns that work at once; the rest start at a later run
 
@@ -72,7 +74,9 @@ class Watch:
     interval: timedelta
     sources: list[Source]
     channels: list[str]
-    claude: dict[str, dict]
+    claude: dict[str, dict]  # stage settings that override vahtovik.yaml, by stage
+    model: str | None = None  # the model and effort of all the watch's sessions, unless a stage sets its own
+    effort: str | None = None
 
     @property
     def watch_yaml(self) -> Path:
@@ -126,9 +130,12 @@ class Config:
     watchdog: WatchdogSettings = field(default_factory=WatchdogSettings)
 
     def stage(self, watch: Watch | None, stage: str) -> StageSettings:
-        merged: dict = {"model": self.claude.model}
+        """A stage's settings. Later ones win: vahtovik.yaml's model and effort, its settings for the stage,
+        the watch's model and effort, the watch's settings for the stage."""
+        merged: dict = {"model": self.claude.model, "effort": self.claude.effort}
         merged.update(self.claude.stages.get(stage, {}))
         if watch is not None:
+            merged.update({k: v for k, v in (("model", watch.model), ("effort", watch.effort)) if v})
             merged.update(watch.claude.get(stage, {}))
         budget = merged.get("max_budget_usd")
         return StageSettings(
@@ -208,6 +215,14 @@ def _read_yaml(path: Path) -> dict:
     return data
 
 
+def _effort(value: object, where: str) -> str | None:
+    if value is None:
+        return None
+    if str(value) not in EFFORTS:
+        raise ConfigError(f"{where}: unknown effort {value!r}; efforts: {', '.join(EFFORTS)}")
+    return str(value)
+
+
 def _stage_overrides(raw: object, where: str) -> dict[str, dict]:
     raw = raw or {}
     if not isinstance(raw, dict) or any(not isinstance(v, dict) for v in raw.values()):
@@ -215,6 +230,8 @@ def _stage_overrides(raw: object, where: str) -> dict[str, dict]:
     unknown = set(raw) - set(STAGES)
     if unknown:
         raise ConfigError(f"{where}: unknown stage {', '.join(sorted(unknown))}; stages: {', '.join(STAGES)}")
+    for stage, settings in raw.items():
+        _effort(settings.get("effort"), f"{where}.{stage}")
     return raw
 
 
@@ -227,6 +244,7 @@ def _load_claude(raw: dict, root: Path) -> ClaudeSettings:
     if raw.get("config_dir"):
         settings.config_dir = (root / Path(raw["config_dir"]).expanduser()).resolve()
     settings.model = str(raw.get("model", settings.model))
+    settings.effort = _effort(raw.get("effort", settings.effort), "claude") or settings.effort
     settings.stages = _stage_overrides(raw.get("stages"), "claude.stages")
     parallel = raw.get("parallel_turns", settings.parallel_turns)
     if isinstance(parallel, bool) or not isinstance(parallel, int) or parallel < 1:
@@ -293,6 +311,10 @@ def _load_watch(path: Path, channels: dict[str, Channel]) -> Watch:
     unknown = [c for c in watch_channels if c not in channels]
     if unknown:
         raise ConfigError(f"{where}: unknown channel {', '.join(unknown)}; define it in {CONFIG_FILE}")
+    claude = raw.get("claude") or {}
+    if not isinstance(claude, dict):
+        raise ConfigError(f"{where} claude: must be a mapping")
+    stages = {k: v for k, v in claude.items() if k not in ("model", "effort")}
     return Watch(
         name=path.name,
         dir=path,
@@ -300,7 +322,9 @@ def _load_watch(path: Path, channels: dict[str, Channel]) -> Watch:
         interval=parse_interval(raw.get("interval", "1h")),
         sources=sources,
         channels=watch_channels,
-        claude=_stage_overrides(raw.get("claude"), f"{where} claude"),
+        claude=_stage_overrides(stages, f"{where} claude"),
+        model=str(claude["model"]) if claude.get("model") else None,
+        effort=_effort(claude.get("effort"), f"{where} claude"),
     )
 
 
