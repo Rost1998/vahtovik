@@ -1,5 +1,6 @@
 import json
 import os
+from datetime import datetime, timedelta, timezone
 
 from vahtovik import cli, costs
 from vahtovik.util import utc_iso
@@ -37,13 +38,13 @@ def test_status_shows_the_cost_of_each_group_its_watch_and_all(project, capsys):
                   "('monitor', 'w1', '2000-01-01T00:00:00+00:00', 9.0), ('monitor', 'w1', ?, 0.4)", utc_iso())
     assert cli.main(["status"]) == 0
     assert capsys.readouterr().out.splitlines() == [
-        "watch        | period | groups | status                | artifacts |  cost",
-        "-------------+--------+--------+-----------------------+-----------+------",
-        "w1 (enabled) | 1h     | h      | waiting, 2 questions  |         0 | $0.00",
-        "             |        | g      | idle                  |         1 | $3.25",
-        "             |        | total  |                       |         1 | $3.25",
-        "-------------+--------+--------+-----------------------+-----------+------",
-        "all          |        |        | 0 undelivered reports |         1 | $3.25",
+        "watch        | period   | groups | status                | artifacts |  cost",
+        "-------------+----------+--------+-----------------------+-----------+------",
+        "w1 (enabled) | 1h (now) | h      | waiting, 2 questions  |         0 | $0.00",
+        "             |          | g      | idle                  |         1 | $3.25",
+        "             |          | total  |                       |         1 | $3.25",
+        "-------------+----------+--------+-----------------------+-----------+------",
+        "all          |          |        | 0 undelivered reports |         1 | $3.25",
         "monitor and watchdog sessions in the last 24 hours: $0.40",
     ]
     assert cli.main(["status", "-v"]) == 0
@@ -74,3 +75,12 @@ def test_sessions_from_before_cost_tracking_count_too(project):
     _conversation(claude, "s0", 0.75)
     costs.update(state, claude)
     assert state.group_costs() == {("w1", "g"): 0.75}
+
+
+def test_status_shows_when_a_watch_is_monitored_next(project, capsys):
+    _cfg, state, _claude = project.load()
+    state.execute("INSERT INTO watch_state (watch, last_run_at) VALUES ('w1', ?)",
+                  utc_iso(datetime.now(timezone.utc) - timedelta(minutes=30)))
+    assert cli.main(["status"]) == 0
+    period = capsys.readouterr().out.splitlines()[2].split(" | ")[1].strip()
+    assert period in ("1h (in 30m00s)", "1h (in 29m59s)")

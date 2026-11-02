@@ -215,7 +215,7 @@ def _status_table(cfg: Config, state: State, names: list[str]) -> None:
         all_processed += sum(processed.values())
         watch_rows.append(["", "", "total" if watch_rows else "-", "", str(sum(processed.values())),
                            f"${watch_cost:.2f}"])
-        watch_rows[0][:2] = f"{name} ({'enabled' if watch.enabled else 'disabled'})", _every(watch.interval)
+        watch_rows[0][:2] = f"{name} ({'enabled' if watch.enabled else 'disabled'})", _period(state, watch)
         rows += watch_rows
     failed = state.row("SELECT COUNT(*) AS n FROM deliveries WHERE status != 'sent'")["n"]
     footer = ["all", "", "", plural(failed, "undelivered report"), str(all_processed),
@@ -242,6 +242,16 @@ def _table(header: list[str], rows: list[list[str]], footer: list[str], right: t
         return " | ".join(cells).rstrip()
 
     return [line(header), rule, *map(line, rows), rule, line(footer)]
+
+
+def _period(state: State, watch) -> str:
+    """The watch's period and, if it is enabled, the time left until a run monitors it: "6h (in 4h12m)"."""
+    period = _every(watch.interval)
+    if not watch.enabled:
+        return period
+    last = state.last_run(watch.name)
+    left = (datetime.fromisoformat(last) + watch.interval - datetime.now(timezone.utc)) if last else None
+    return f"{period} (in {duration(left.total_seconds())})" if left and left > timedelta(0) else f"{period} (now)"
 
 
 def _every(interval: timedelta) -> str:
