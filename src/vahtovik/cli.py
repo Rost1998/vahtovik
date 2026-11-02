@@ -196,9 +196,21 @@ def cmd_status(args) -> int:
     return 0
 
 
+PERIODS = {"24 hours": timedelta(days=1), "30 days": timedelta(days=30)}
+
+
+def _since(period: timedelta) -> str:
+    return utc_iso(datetime.now(timezone.utc) - period)
+
+
+def _money(costs: dict, test=lambda key: True) -> str:
+    return f"${sum(c for key, c in costs.items() if test(key)):.2f}"
+
+
 def _status_table(cfg: Config, state: State, names: list[str]) -> None:
-    """One row per group and a total row per watch. Artifacts are the processed ones."""
-    group_costs = state.group_costs()
+    """One row per group and a total row per watch, with what the groups cost in the last 24 hours and 30 days.
+    Artifacts are the processed ones. Then what the sessions of each kind cost in all watches."""
+    group_costs = [state.group_costs(_since(period)) for period in PERIODS.values()]
     rows, all_processed = [], 0
     for name in names:
         watch = cfg.watch(name)
@@ -210,25 +222,33 @@ def _status_table(cfg: Config, state: State, names: list[str]) -> None:
             questions = json.loads(g["questions"] or "[]") if g["status"] == "waiting" else []
             status = g["status"] + (f", {plural(len(questions), 'question')}" if questions else "")
             watch_rows.append(["", "", g["key"], status, str(processed.get(g["key"], 0)),
-                               f"${group_costs.get((name, g['key']), 0):.2f}"])
-        watch_cost = sum(c for (w, _), c in group_costs.items() if w == name)
+                               *(_money(c, lambda k: k == (name, g["key"])) for c in group_costs)])
         all_processed += sum(processed.values())
         watch_rows.append(["", "", "total" if watch_rows else "-", "", str(sum(processed.values())),
-                           f"${watch_cost:.2f}"])
+                           *(_money(c, lambda k: k[0] == name) for c in group_costs)])
         watch_rows[0][:2] = f"{name} ({'enabled' if watch.enabled else 'disabled'})", _period(state, watch)
         rows += watch_rows
     failed = state.row("SELECT COUNT(*) AS n FROM deliveries WHERE status != 'sent'")["n"]
     footer = ["all", "", "", plural(failed, "undelivered report"), str(all_processed),
-              f"${sum(c for (w, _), c in group_costs.items() if w in names):.2f}"]
-    for line in _table(["watch", "period", "groups", "status", "artifacts", "cost"], rows, footer, right=(4, 5)):
+              *(_money(c, lambda k: k[0] in names) for c in group_costs)]
+    for line in _table(["watch", "period", "groups", "status", "artifacts", *PERIODS], rows, footer,
+                       right=(4, 5, 6)):
         print(line)
-    print(f"monitor and watchdog sessions in the last 24 hours: ${_day_cost(state):.2f}")
+    print()
+    for line in _cost_summary(state, dict(PERIODS)):
+        print(line)
 
 
-def _day_cost(state: State) -> float:
-    """What monitor and watchdog sessions cost in the last 24 hours."""
-    day_ago = utc_iso(datetime.now(timezone.utc) - timedelta(days=1))
-    return state.row("SELECT COALESCE(SUM(cost_usd), 0) AS c FROM sessions WHERE started_at >= ?", day_ago)["c"]
+def _cost_summary(state: State, periods: dict[str, timedelta | None]) -> list[str]:
+    """A table of what group, monitor and watchdog sessions in all watches cost in each period;
+    None is all time."""
+    since = [_since(period) if period else None for period in periods.values()]
+    kinds = {"groups": [state.group_costs(s) for s in since]}
+    stages = [state.stage_costs(s) for s in since]
+    kinds |= {stage: [{stage: c.get(stage, 0)} for c in stages] for stage in ("monitor", "watchdog")}
+    rows = [[kind, *map(_money, costs)] for kind, costs in kinds.items()]
+    footer = ["all", *(_money(groups | stage) for groups, stage in zip(kinds["groups"], stages))]
+    return _table(["sessions", *periods], rows, footer, right=tuple(range(1, len(periods) + 1)))
 
 
 def _table(header: list[str], rows: list[list[str]], footer: list[str], right: tuple[int, ...] = ()) -> list[str]:
@@ -269,15 +289,22 @@ def _artifact_counts(state: State, watch: str, key: str) -> str:
     return ", ".join(f"{n} {s}" for s, n in sorted(counts.items()))
 
 
+DETAIL_PERIODS = {**PERIODS, "all time": None}
+
+
+def _spent(group_costs: list[dict], test) -> str:
+    """What the matching groups cost in each period: "$0.40 in 24 hours, $1.10 in 30 days, $3.25 in all time"."""
+    return ", ".join(f"{_money(c, test)} in {label}" for c, label in zip(group_costs, DETAIL_PERIODS))
+
+
 def _status_details(cfg: Config, state: State, names: list[str]) -> None:
-    group_costs = state.group_costs()
+    group_costs = [state.group_costs(_since(p) if p else None) for p in DETAIL_PERIODS.values()]
     for name in names:
         watch = cfg.watch(name)
         last = state.last_run(name)
-        watch_cost = sum(c for (w, _), c in group_costs.items() if w == name)
         print(f"{name}: {'enabled' if watch.enabled else 'disabled'}, every {watch.interval}, "
               f"last run {human(datetime.fromisoformat(last)) if last else 'never'}, "
-              f"group sessions ${watch_cost:.2f}")
+              f"group sessions {_spent(group_costs, lambda k: k[0] == name)}")
         for src in watch.sources:
             row = state.row("SELECT * FROM source_state WHERE watch = ? AND source_id = ?", name, src.id)
             error = f", last error: {row['last_error']}" if row and row["last_error"] and (
@@ -290,10 +317,13 @@ def _status_details(cfg: Config, state: State, names: list[str]) -> None:
             questions = json.loads(g["questions"] or "[]") if g["status"] == "waiting" else []
             status += f", {plural(len(questions), 'open question')}" if questions else ""
             print(f"  group {g['key']}: {g['title']} | {status} | {summary} | "
-                  f"session {g['session_id'] or 'none yet'}, ${group_costs.get((name, g['key']), 0):.2f}")
+                  f"session {g['session_id'] or 'none yet'} | "
+                  f"{_spent(group_costs, lambda k: k == (name, g['key']))}")
     failed = state.row("SELECT COUNT(*) AS n FROM deliveries WHERE status != 'sent'")["n"]
-    print(f"undelivered reports: {failed} · group sessions in all watches: ${sum(group_costs.values()):.2f} · "
-          f"monitor and watchdog sessions in the last 24 hours: ${_day_cost(state):.2f}")
+    print(f"undelivered reports: {failed}")
+    print()
+    for line in _cost_summary(state, DETAIL_PERIODS):
+        print(line)
 
 
 def cmd_check(args) -> int:

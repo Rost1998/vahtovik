@@ -45,6 +45,8 @@ CREATE TABLE IF NOT EXISTS windows (
     PRIMARY KEY (watch, group_key));
 CREATE TABLE IF NOT EXISTS session_costs (
     session_id TEXT PRIMARY KEY, watch TEXT, group_key TEXT, cost_usd REAL DEFAULT 0, file_mtime REAL);
+CREATE TABLE IF NOT EXISTS cost_points (
+    session_id TEXT, total_usd REAL, at TEXT, PRIMARY KEY (session_id, total_usd));
 """
 
 # Columns added later. Opening an older database adds them.
@@ -181,10 +183,32 @@ class State:
         self.execute("UPDATE session_costs SET cost_usd = ?, file_mtime = ? WHERE session_id = ?",
                      cost_usd, file_mtime, session_id)
 
-    def group_costs(self) -> dict[tuple[str, str], float]:
-        """The cost of all sessions of each group, by (watch, group key)."""
-        rows = self.rows("SELECT watch, group_key, SUM(cost_usd) AS c FROM session_costs GROUP BY watch, group_key")
+    def cost_tops(self) -> dict[str, float]:
+        """The highest running total stored for each group session."""
+        return {r["session_id"]: r["t"] for r in self.rows(
+            "SELECT session_id, MAX(total_usd) AS t FROM cost_points GROUP BY session_id")}
+
+    def add_cost_points(self, session_id: str, points: list[tuple[str, float]]) -> None:
+        """Running totals of a group session and when they were reached: (time, total)."""
+        for at, total in points:
+            self.execute("INSERT OR IGNORE INTO cost_points (session_id, total_usd, at) VALUES (?, ?, ?)",
+                         session_id, total, at)
+
+    def group_costs(self, since: str | None = None) -> dict[tuple[str, str], float]:
+        """What the sessions of each group cost since a time, or in all, by (watch, group key):
+        each session's last total minus its last total before that time."""
+        rows = self.rows(
+            "SELECT watch, group_key, SUM(c) AS c FROM ("
+            "  SELECT session_id, MAX(total_usd) - COALESCE(MAX(CASE WHEN at < ? THEN total_usd END), 0) AS c"
+            "  FROM cost_points GROUP BY session_id"
+            ") JOIN session_costs USING (session_id) GROUP BY watch, group_key", since or "")
         return {(r["watch"], r["group_key"]): r["c"] for r in rows}
+
+    def stage_costs(self, since: str | None = None) -> dict[str, float]:
+        """What monitor and watchdog sessions that started since a time, or all of them, cost, by stage."""
+        rows = self.rows("SELECT stage, SUM(cost_usd) AS c FROM sessions WHERE started_at >= ? GROUP BY stage",
+                         since or "")
+        return {r["stage"]: r["c"] for r in rows}
 
     # group status (see group_status.py)
 
