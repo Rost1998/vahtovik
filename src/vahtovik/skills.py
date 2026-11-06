@@ -1,4 +1,4 @@
-"""Find and read skills: skills/shared (rules for every session), skills/watchdog, skills/sources/*, skills/channels/*."""
+"""Find and read skills: skills/shared, skills/watchdog, skills/sources/*, skills/channels/*."""
 
 from __future__ import annotations
 

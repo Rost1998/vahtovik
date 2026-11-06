@@ -85,7 +85,7 @@ def declare(cfg: Config, state: State, watch: Watch, key: str, status: str, impo
         if ends_turn:
             output = {"status": status, "importance": importance, "summary": summary, "questions": questions}
             state.finish_turn(turn_id, True, output, None)
-            state.mark_processed(watch.name, json.loads(turn["artifact_ids"] or "[]"))
+            state.mark_processed(watch.name, key, json.loads(turn["artifact_ids"] or "[]"))
             state.touch_group(watch.name, key)
     what = status + (f" ({plural(len(questions), 'question')})" if questions else "")
     what += f", importance {importance}" if importance else ""

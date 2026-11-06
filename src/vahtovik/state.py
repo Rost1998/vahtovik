@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS artifacts (
     watch TEXT, id TEXT, group_key TEXT, source_id TEXT, title TEXT, url TEXT,
     origin TEXT, status TEXT, attempts INTEGER DEFAULT 0, file TEXT,
     first_seen_at TEXT, processed_at TEXT,
-    PRIMARY KEY (watch, id));
+    PRIMARY KEY (watch, id, group_key));
 CREATE TABLE IF NOT EXISTS group_turns (
     id TEXT PRIMARY KEY, run_id TEXT, watch TEXT, group_key TEXT,
     started_at TEXT, finished_at TEXT, ok INTEGER, output TEXT, error TEXT);
@@ -71,6 +71,7 @@ class State:
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(SCHEMA)
+        self._artifacts_in_many_groups()
         for table, columns in COLUMNS.items():
             have = {r["name"] for r in self.rows(f"PRAGMA table_info({table})")}
             for name, kind in columns.items():
@@ -84,6 +85,24 @@ class State:
                     if (table, name) == ("groups", "checked_at"):
                         # The watchdog checks what changes from now on, not every older session at once.
                         self.execute("UPDATE groups SET checked_at = ?", utc_iso())
+
+    def _artifact_key(self) -> list[str]:
+        return [r["name"] for r in sorted(self.rows("PRAGMA table_info(artifacts)"), key=lambda r: r["pk"]) if r["pk"]]
+
+    def _artifacts_in_many_groups(self) -> None:
+        """Older databases key artifacts by (watch, id), so an artifact could be in one group only.
+        Rebuild the table with the key (watch, id, group_key); the rows stay as they are."""
+        if self._artifact_key() != ["watch", "id"]:
+            return
+        definition = SCHEMA.split("CREATE TABLE IF NOT EXISTS artifacts", 1)[1].split(";", 1)[0]
+        with self.transaction():
+            if self._artifact_key() != ["watch", "id"]:
+                return  # another process rebuilt it meanwhile
+            columns = ", ".join(r["name"] for r in self.rows("PRAGMA table_info(artifacts)"))
+            self.execute(f"CREATE TABLE artifacts_rebuilt {definition}")
+            self.execute(f"INSERT INTO artifacts_rebuilt ({columns}) SELECT {columns} FROM artifacts")
+            self.execute("DROP TABLE artifacts")
+            self.execute("ALTER TABLE artifacts_rebuilt RENAME TO artifacts")
 
     def close(self) -> None:
         self.db.close()
@@ -254,8 +273,10 @@ class State:
 
     # artifacts
 
-    def artifact_exists(self, watch: str, artifact_id: str) -> bool:
-        return self.row("SELECT 1 FROM artifacts WHERE watch = ? AND id = ?", watch, artifact_id) is not None
+    def artifact_exists(self, watch: str, artifact_id: str, key: str | None = None) -> bool:
+        """Whether the watch has the artifact: in any group, or in the group `key` if given."""
+        return self.row("SELECT 1 FROM artifacts WHERE watch = ? AND id = ? AND (? IS NULL OR group_key = ?)",
+                        watch, artifact_id, key, key) is not None
 
     def add_artifact(self, watch: str, artifact_id: str, group_key: str, source_id: str, title: str,
                      url: str, origin: str, status: str, file: str) -> None:
@@ -291,17 +312,17 @@ class State:
             watch, key, max_attempts,
         )
 
-    def mark_processed(self, watch: str, ids: list[str]) -> None:
+    def mark_processed(self, watch: str, key: str, ids: list[str]) -> None:
         self.db.executemany(
-            "UPDATE artifacts SET status = 'processed', processed_at = ? WHERE watch = ? AND id = ?",
-            [(utc_iso(), watch, i) for i in ids],
+            "UPDATE artifacts SET status = 'processed', processed_at = ? WHERE watch = ? AND group_key = ? AND id = ?",
+            [(utc_iso(), watch, key, i) for i in ids],
         )
 
-    def mark_attempt_failed(self, watch: str, ids: list[str], max_attempts: int) -> None:
+    def mark_attempt_failed(self, watch: str, key: str, ids: list[str], max_attempts: int) -> None:
         self.db.executemany(
-            "UPDATE artifacts SET attempts = attempts + 1, "
-            "status = CASE WHEN attempts + 1 >= ? THEN 'failed' ELSE status END WHERE watch = ? AND id = ?",
-            [(max_attempts, watch, i) for i in ids],
+            "UPDATE artifacts SET attempts = attempts + 1, status = CASE WHEN attempts + 1 >= ? THEN 'failed' "
+            "ELSE status END WHERE watch = ? AND group_key = ? AND id = ?",
+            [(max_attempts, watch, key, i) for i in ids],
         )
 
     # sessions and turns
@@ -336,15 +357,17 @@ class State:
         turn = self.turn(turn_id)
         self.execute("UPDATE group_turns SET finished_at = NULL, ok = NULL, output = NULL, error = NULL WHERE id = ?",
                      turn_id)
-        self.execute("UPDATE artifacts SET status = 'new', processed_at = NULL WHERE watch = ? AND status = 'processed' "
-                     "AND id IN (SELECT value FROM json_each(?))", turn["watch"], turn["artifact_ids"] or "[]")
+        self.execute("UPDATE artifacts SET status = 'new', processed_at = NULL WHERE watch = ? AND group_key = ? "
+                     "AND status = 'processed' AND id IN (SELECT value FROM json_each(?))",
+                     turn["watch"], turn["group_key"], turn["artifact_ids"] or "[]")
 
     def retry_turn(self, turn_id: str, error: str) -> None:
         """Count a finished turn as failed, so a later run repeats it: its artifacts wait again."""
         turn = self.turn(turn_id)
         self.execute("UPDATE group_turns SET ok = 0, error = ? WHERE id = ?", error, turn_id)
-        self.execute("UPDATE artifacts SET status = 'new', processed_at = NULL WHERE watch = ? AND status = 'processed' "
-                     "AND id IN (SELECT value FROM json_each(?))", turn["watch"], turn["artifact_ids"] or "[]")
+        self.execute("UPDATE artifacts SET status = 'new', processed_at = NULL WHERE watch = ? AND group_key = ? "
+                     "AND status = 'processed' AND id IN (SELECT value FROM json_each(?))",
+                     turn["watch"], turn["group_key"], turn["artifact_ids"] or "[]")
 
     def working_turns(self) -> int:
         """Unfinished turns whose agent works: not those that wait for their background work or for a person."""

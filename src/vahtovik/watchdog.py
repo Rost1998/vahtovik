@@ -321,7 +321,7 @@ def _act(cfg: Config, state: State, tmux: Tmux, claude: Claude, session: Session
             group_turn.fail(state, turn, error, 0)
         else:
             state.retry_turn(turn["id"], error)
-            state.mark_attempt_failed(watch, json.loads(turn["artifact_ids"] or "[]"), group_turn.MAX_ATTEMPTS)
+            state.mark_attempt_failed(watch, key, json.loads(turn["artifact_ids"] or "[]"), group_turn.MAX_ATTEMPTS)
             state.set_status(watch, key, "failed", error)
         log.warning("%s: Watchdog asked to repeat the latest turn: %s", ref, reason)
         return _debug(cfg, state, session, action, "vahtovik counted the latest turn as failed, so a later run "

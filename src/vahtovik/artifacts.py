@@ -18,12 +18,13 @@ FIELDS = ("id", "title", "url", "summary", "details")
 
 
 def register(cfg: Config, state: State, watch: Watch, data: dict, source_id: str,
-             origin: str = "monitor", status: str = "new") -> bool:
-    """Store a new artifact in its group. Returns False if it was seen before."""
+             origin: str = "monitor", status: str = "new", any_group: bool = True) -> bool:
+    """Store a new artifact in its group. Returns False if it was seen before: in any group of the watch,
+    or with `any_group=False` in this group, so that one artifact can go to several groups."""
     artifact_id = str(data["id"]).strip()
-    if not artifact_id or state.artifact_exists(watch.name, artifact_id):
-        return False
     key = group_key(data.get("group_key"))
+    if not artifact_id or state.artifact_exists(watch.name, artifact_id, None if any_group else key):
+        return False
     group_dir = groups.ensure_group(cfg, state, watch, key, str(data.get("group_title") or data.get("title") or key))
     record = {f: data.get(f, "") for f in FIELDS}
     record.update(id=artifact_id, group_key=key, source_id=source_id, origin=origin, first_seen=utc_iso())

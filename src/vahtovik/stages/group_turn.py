@@ -139,9 +139,9 @@ def fail(state: State, turn, error: str | None, seconds: float) -> None:
     error = error or "the session ended before the agent ran `vahtovik turn`"
     ids = json.loads(turn["artifact_ids"] or "[]")
     attempt = 1 + max((r["attempts"] for r in state.rows(
-        "SELECT attempts FROM artifacts WHERE watch = ? AND id IN (SELECT value FROM json_each(?))",
-        watch, turn["artifact_ids"] or "[]")), default=0)
-    state.mark_attempt_failed(watch, ids, MAX_ATTEMPTS)
+        "SELECT attempts FROM artifacts WHERE watch = ? AND group_key = ? AND id IN (SELECT value FROM json_each(?))",
+        watch, key, turn["artifact_ids"] or "[]")), default=0)
+    state.mark_attempt_failed(watch, key, ids, MAX_ATTEMPTS)
     state.finish_turn(turn["id"], False, None, error)
     state.set_status(watch, key, "failed", error)
     log.error("%s/%s: Failed group turn after %s (attempt %d of %d%s): %s", watch, key, duration(seconds),
