@@ -216,7 +216,8 @@ def merge(cfg: Config, state: State, tmux: Tmux, refs: list[str], into: str) -> 
         state.touch_group(watch_name, target)
     waiting = len(state.pending_artifacts(watch_name, target, MAX_ATTEMPTS))
     if waiting:
-        lines.append(f"{plural(waiting, 'artifact')} wait for the next turn of {watch_name}/{target}")
+        lines.append(f"{plural(waiting, 'artifact')} {'waits' if waiting == 1 else 'wait'} for the next turn of "
+                     f"{watch_name}/{target}")
     return lines
 
 
@@ -259,7 +260,8 @@ def split(cfg: Config, state: State, tmux: Tmux, ref: str, ids: list[str], into:
             state.touch_group(watch_name, k)
     log.info("%s: Moved %s to %s%s", ref, plural(len(ids), "artifact"), target, " (a new group)" if created else "")
     return [f"moved {plural(len(ids), 'artifact')} from {ref} to {watch_name}/{target}"
-            + (" (a new group)" if created else "") + f"; they wait for the next turn of {watch_name}/{target}"]
+            + (" (a new group)" if created else "")
+            + f"; {'it waits' if len(ids) == 1 else 'they wait'} for the next turn of {watch_name}/{target}"]
 
 
 # artifacts from the person
