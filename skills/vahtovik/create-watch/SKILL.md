@@ -5,7 +5,7 @@ description: Create or change a vahtovik watch with its sources, channels and se
 
 # Creating a vahtovik watch
 
-`README.md` explains how vahtovik works. This skill says what to create and where. Look at `watches/example/` and the existing skills under `skills/` before you write new ones.
+`README.md` explains how vahtovik works. This skill says what to create and where. Look at `watches/example/` and the existing source and channel skills under `skills/sources/` and `skills/channels/` before you write new ones.
 
 ## 1. Agree on the plan
 
@@ -109,6 +109,13 @@ Never edit `data/`: it is vahtovik's runtime state.
 
 ## Changing a watch later
 
+Read the watch's files and `uv run vahtovik status --watch <name> -v` first, and tell the person what you will change.
+
 - New rules in `monitor.md`, `process/` and `report.md` apply from the next run. Group sessions get them with their next turn.
-- A new source `id` is a new source: its "already seen" state starts empty, so old items can come back, and only exact id matches are dropped.
-- New grouping rules do not move artifacts that are already grouped.
+- `enabled: false` in `watch.yaml` stops the watch: no monitoring, no group turns, no scheduled turns. `enabled: true` starts it again.
+- `interval` is how often monitoring runs. A watch cannot run more often than the timer fires (5 minutes by default). After a change, the next monitoring comes `interval` after the last one; `uv run vahtovik run --watch <name> --force` monitors now (ask first: it starts AI sessions).
+- `claude:` sets the model and effort of the watch's sessions, or of one stage (`monitor`, `group`); see section 4.
+- A new source `id` is a new source: its "already seen" state starts empty, so old items can come back, and only exact id matches are dropped. A removed source keeps its state folder in `data/`; adding it back with the same id goes on from there.
+- A channel must be in `vahtovik.yaml` before a watch can list it.
+- New grouping rules do not move artifacts that are already grouped. To move them, use the groups skill (`skills/vahtovik/groups/SKILL.md`).
+- Turns of one group at set times, without new artifacts: the groups skill (`vahtovik group set`).

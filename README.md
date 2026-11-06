@@ -120,9 +120,26 @@ The second column says who wrote the line: a timer run, an `interactive` session
 - `watches/<name>/.env`: the watch's own secrets, such as source tokens. Only this watch's sessions get them, so two watches can each have their own `GITHUB_TOKEN`. If one watch has two sources of the same type with different tokens, give a source `env: {GITHUB_TOKEN: GITHUB_TOKEN_ORG_B}`: its scripts then get `GITHUB_TOKEN` set to the value of `GITHUB_TOKEN_ORG_B`.
 - `skills/`: see [skills/README.md](skills/README.md) for the source and channel contracts.
 
-To have an agent create a watch, ask Claude Code in this folder, for example "create a watch for new CVEs in our dependencies". It follows [.claude/skills/create-watch/SKILL.md](.claude/skills/create-watch/SKILL.md), which says what goes where.
 
 vahtovik keeps your personal `~/.claude/CLAUDE.md` and parent-folder `CLAUDE.md` files out of its sessions. Set `claude.config_dir` to give vahtovik a separate Claude Code profile.
+
+## The vahtovik agent
+
+Run `claude` in this folder, and you talk to the vahtovik agent: the agent that runs this installation for you. Ask it in plain words, for example:
+- "create a watch for new CVEs in our dependencies";
+- "merge the uv 0.9 and uv 0.10 groups";
+- "add this link to the groups it belongs to";
+- "ask every group of the example watch whether it still needs an answer from me".
+
+It knows vahtovik's parts and commands, and it reads the files of a watch before it works on it. It tells you its plan before it changes anything. It changes runtime state only with `vahtovik` commands, never by editing `data/`.
+
+The root `CLAUDE.md` makes it the vahtovik agent, and loads its skill, [skills/vahtovik/SKILL.md](skills/vahtovik/SKILL.md). That skill names a sub-skill for each kind of task:
+- `create-watch/`: set up and change watches, source types and channels;
+- `groups/`: create, merge, split and schedule groups;
+- `artifacts/`: add artifacts to groups;
+- `tell/`: pass messages to group agents.
+
+The sessions that vahtovik starts never load the root `CLAUDE.md`: monitoring, group and watchdog sessions keep parent-folder `CLAUDE.md` files out (see Configuration). Your own sessions in this folder load it, including the ones where you work on vahtovik's code; ask the agent for code changes, and it makes them.
 
 ## Commands
 

@@ -9,6 +9,8 @@ import yaml
 
 KINDS = ("sources", "channels")
 SHARED_SKILL = "shared"
+AGENT_SKILL = "vahtovik"
+AGENT_TASKS = ("create-watch", "groups", "artifacts", "tell")
 WATCHDOG_SKILL = "watchdog"
 
 
@@ -62,6 +64,12 @@ def load(skills_dir: Path, kind: str, name: str) -> Skill:
 
 def shared_skill(skills_dir: Path) -> Skill:
     return _read("shared", SHARED_SKILL, skills_dir / SHARED_SKILL)
+
+
+def agent_skills(skills_dir: Path) -> list[Skill]:
+    """The vahtovik agent's skill and its sub-skills, one per kind of task."""
+    return [_read("agent", AGENT_SKILL, skills_dir / AGENT_SKILL),
+            *(_read("agent", task, skills_dir / AGENT_SKILL / task) for task in AGENT_TASKS)]
 
 
 def watchdog_skill(skills_dir: Path) -> Skill:

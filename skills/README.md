@@ -3,6 +3,7 @@
 A skill is a folder with a `SKILL.md` file (front matter with `name` and `description`, then instructions for the agent) and optional scripts. To add a source type or a channel, add a folder; no Python changes are needed.
 
 - `shared/`: the shared skill. vahtovik puts it in the system prompt of every group and monitoring session.
+- `vahtovik/`: the skills of the vahtovik agent, which you talk to when you run `claude` in the project folder. The root `CLAUDE.md` loads `vahtovik/SKILL.md`, which names a sub-skill for each kind of task: `create-watch/`, `groups/`, `artifacts/` and `tell/`.
 - `watchdog/`: the rules of the watchdog AI session, and the screens it may get past (with their keys) in its front matter.
 - `sources/<name>/`: how to collect items from one kind of source.
 - `channels/<name>/`: how to format and send reports to one kind of channel.

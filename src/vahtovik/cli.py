@@ -394,10 +394,11 @@ def cmd_check(args) -> int:
     except (ConfigError, OSError) as exc:
         print(f"config: {exc}")
         return 1
-    try:
-        skills.shared_skill(cfg.skills_dir)
-    except skills.SkillError as exc:
-        problems.append(str(exc))
+    for read in (skills.shared_skill, skills.agent_skills):
+        try:
+            read(cfg.skills_dir)
+        except skills.SkillError as exc:
+            problems.append(str(exc))
     for name, channel in cfg.channels.items():
         try:
             skill = skills.load(cfg.skills_dir, "channels", channel.skill)
