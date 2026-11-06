@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from . import config as config_mod
-from . import costs, delivery, group_session, group_status, journal, skills, timer, watchdog, windows
+from . import costs, delivery, group_session, group_status, journal, operations, skills, timer, watchdog, windows
 from .claude_session import Claude
 from .config import Config, ConfigError
 from .stages import group_turn, monitor
@@ -46,7 +46,12 @@ def _nothing_due(state: State, watches, now: datetime, stage: str | None) -> str
     if not watches:
         return "no enabled watches"
     waits = (datetime.fromisoformat(state.last_run(w.name)) + w.interval - now for w in watches)
-    return ", ".join(f"{w.name} in {duration(wait.total_seconds())}" for w, wait in zip(watches, waits))
+    text = ", ".join(f"{w.name} in {duration(wait.total_seconds())}" for w, wait in zip(watches, waits))
+    scheduled = [g for g in (state.next_scheduled(w.name) for w in watches) if g]
+    if scheduled:
+        first = min(scheduled, key=lambda g: g["scheduled_at"])
+        text += f"; next scheduled turn: {first['watch']}/{first['key']} {_left(first['scheduled_at'])}"
+    return text
 
 
 def _describe(exc: BaseException) -> str:
@@ -165,12 +170,22 @@ def _session_group() -> tuple[str, str]:
 def cmd_turn(args) -> int:
     cfg, state = _load()
     watch, key = _session_group()
-    try:
-        check_after = config_mod.parse_interval(args.check_after) if args.check_after else None
-    except ConfigError as exc:
-        raise group_status.StatusError(f"--check-after: {exc}") from None
+    times = {}
+    for flag in ("check_after", "after"):
+        value = getattr(args, flag)
+        try:
+            times[flag] = config_mod.parse_interval(value) if value else None
+        except ConfigError as exc:
+            raise group_status.StatusError(f"--{flag.replace('_', '-')}: {exc}") from None
     print(group_status.declare(cfg, state, cfg.watch(watch), key, args.status, args.importance, args.summary,
-                               args.question, os.environ.get("VAHTOVIK_TURN"), args.reason, check_after))
+                               args.question, os.environ.get("VAHTOVIK_TURN"), args.reason, **times))
+    return 0
+
+
+def cmd_group_set(args) -> int:
+    cfg, state = _load()
+    for line in operations.set_schedule(cfg, state, args.ref, args.recheck, args.next, args.reason):
+        print(line)
     return 0
 
 
@@ -221,6 +236,7 @@ def _status_table(cfg: Config, state: State, names: list[str]) -> None:
         for g in state.groups(name):
             questions = json.loads(g["questions"] or "[]") if g["status"] == "waiting" else []
             status = g["status"] + (f", {plural(len(questions), 'question')}" if questions else "")
+            status += f" ({_left(g['scheduled_at'])})" if g["status"] == "scheduled" and g["scheduled_at"] else ""
             watch_rows.append(["", "", g["key"], status, str(processed.get(g["key"], 0)),
                                *(_money(c, lambda k: k == (name, g["key"])) for c in group_costs)])
         all_processed += sum(processed.values())
@@ -274,6 +290,12 @@ def _period(state: State, watch) -> str:
     return f"{period} (in {duration(left.total_seconds())})" if left and left > timedelta(0) else f"{period} (now)"
 
 
+def _left(at: str) -> str:
+    """The time left until a moment: "in 4h12m", or "now" once it has come."""
+    left = datetime.fromisoformat(at) - datetime.now(timezone.utc)
+    return f"in {duration(left.total_seconds())}" if left > timedelta(0) else "now"
+
+
 def _every(interval: timedelta) -> str:
     """An interval as watch.yaml writes it: 30m, 6h, 1d."""
     seconds = int(interval.total_seconds())
@@ -314,6 +336,9 @@ def _status_details(cfg: Config, state: State, names: list[str]) -> None:
             summary = _artifact_counts(state, name, g["key"])
             status = g["status"] + (f": {g['status_reason']}" if g["status_reason"] else "")
             status += f", check after {human(datetime.fromisoformat(g['check_after']))}" if g["check_after"] else ""
+            status += (f", next scheduled turn {human(datetime.fromisoformat(g['scheduled_at']))}"
+                       if g["scheduled_at"] else "")
+            status += f", standing check every {g['recheck_every']}" if g["recheck_every"] else ""
             questions = json.loads(g["questions"] or "[]") if g["status"] == "waiting" else []
             status += f", {plural(len(questions), 'open question')}" if questions else ""
             print(f"  group {g['key']}: {g['title']} | {status} | {summary} | "
@@ -456,16 +481,28 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_report)
 
     p = sub.add_parser("turn", help="end your turn with your status (for agents in group sessions)")
-    p.add_argument("status", choices=["finished", "waiting", "background"],
-                   help="finished: you need nothing from a person; waiting: you need an answer or action; "
+    p.add_argument("status", choices=["finished", "scheduled", "waiting", "background"],
+                   help="finished: you need nothing from a person; scheduled: the same, and the group gets another "
+                        "turn after --after, even without new artifacts; waiting: you need an answer or action; "
                         "background: you wait for background work you started, which wakes you when it ends")
     p.add_argument("--importance", choices=group_status.IMPORTANCE, help="required at the end of an automated turn")
     p.add_argument("--summary", help="the current state in one or two sentences; required at the end of an automated turn")
     p.add_argument("--question", action="append", default=[], help="an open question; repeat for each one")
-    p.add_argument("--reason", help="background: what you wait for")
+    p.add_argument("--reason", help="background: what you wait for; scheduled: what the next turn should check")
+    p.add_argument("--after", help="scheduled: when the group gets its next turn, for example 6h or 1d")
     p.add_argument("--check-after", help="background: when the watchdog should check on you if you are still "
                                          "waiting, for example 30m")
     p.set_defaults(func=cmd_turn)
+
+    p = sub.add_parser("group", help="change groups: their scheduled turns")
+    group_sub = p.add_subparsers(dest="group_command", required=True)
+    g = group_sub.add_parser("set", help="when a group gets turns without new artifacts")
+    g.add_argument("ref", help="<watch>/<group-key>")
+    g.add_argument("--recheck", help="a standing period, such as 1d: each finished turn is followed by a scheduled "
+                                     "turn this long after; off removes it")
+    g.add_argument("--next", help="when the next scheduled turn comes, such as 6h; off cancels it")
+    g.add_argument("--reason", help="what the scheduled turn should check")
+    g.set_defaults(func=cmd_group_set)
 
     p = sub.add_parser("window", help=argparse.SUPPRESS)
     p.add_argument("spec")

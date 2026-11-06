@@ -37,10 +37,11 @@ Your working folder is the folder the session starts in:
 Whenever you finish working, at the end of an automated turn and after each reply to a person, run exactly one command:
 
 - `vahtovik turn finished`: you need nothing from a person.
+- `vahtovik turn scheduled --after <6h, 1d, ...> [--reason "<what the next turn should check>"]`: you need nothing from a person, but the group should get another turn later, even without new artifacts, for example to see whether something announced has happened. If the group has a standing check (`CLAUDE.md` says so), `finished` is followed by a scheduled turn by itself. After `finished` in a reply to a person, a scheduled turn that has not started yet stays.
 - `vahtovik turn waiting --question "<question>" [--question "<question>" ...]`: you need a person's answer or action to go on. List every question that is still open, including earlier ones; they replace the Open questions in `context.md`. Put the questions in your report too, so the person sees them.
-- `vahtovik turn background --reason "<what you wait for>" [--check-after 30m]`: you started background work (a background command, a background agent or a scheduled prompt) and go on when it ends. Stop after this command. Claude Code wakes you when the work ends; then finish and end with `finished` or `waiting` as usual. `--check-after` tells the watchdog when to look at you if you still wait.
+- `vahtovik turn background --reason "<what you wait for>" [--check-after 30m]`: you started background work (a background command, a background agent or a scheduled prompt) and go on when it ends. Stop after this command. Claude Code wakes you when the work ends; then finish and end with `finished`, `scheduled` or `waiting` as usual. `--check-after` tells the watchdog when to look at you if you still wait.
 
-Use `finished` or `waiting` only when nothing you started still runs. vahtovik asks Claude Code about your background work when you stop, and treats such an end as `background`.
+Use `finished`, `scheduled` or `waiting` only when nothing you started still runs. vahtovik asks Claude Code about your background work when you stop, and treats such an end as `background`.
 
 At the end of an automated turn, also give `--importance <low|medium|high|critical>` and `--summary "<the current state in one or two sentences>"`, and write your Work log entry first. The command checks all this; if it prints an error, fix what it says and run it again. vahtovik does not let you stop before you run it.
 

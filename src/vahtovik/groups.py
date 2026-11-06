@@ -76,5 +76,8 @@ def write_claude_md(cfg: Config, state: State, watch: Watch, key: str) -> None:
         channels=channels,
         artifact_schema=schema_path("artifact"),
         journal=journal.path(cfg),
+        schedule=(f"This group has a standing check every {group['recheck_every']}: after each `finished` turn, "
+                  f"vahtovik gives it a scheduled turn {group['recheck_every']} later."
+                  if group and group["recheck_every"] else "This group has no standing check."),
     )
     (cfg.group_dir(watch.name, key) / "CLAUDE.md").write_text(text)

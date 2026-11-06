@@ -42,7 +42,7 @@ Group sessions run as interactive Claude Code, each in its own window of the tmu
 - `vahtovik open <watch>/<key>` shows you the group's window: a running turn, or the session started fresh if none is running. You see every earlier turn and can ask the agent anything: explain, research more, scan sources again, add artifacts, or send extra reports. It attaches your terminal to the window. Inside your own tmux this is tmux inside tmux, and Ctrl-b goes to your outer tmux: press Ctrl-b Ctrl-b d to leave the inner one. (With `socket: null`, inside tmux it switches your window instead.)
 - Leave whenever you like: detach, or switch back to your own window. The agent keeps working.
 - While the window is open, it holds the group's lock, and runs skip that group.
-- The watchdog (below) closes a window when nobody is looking at it and its agent is done: `failed`, or `finished` or `waiting` once its AI check confirms that the work is really done.
+- The watchdog (below) closes a window when nobody is looking at it and its agent is done: `failed`, or `finished`, `scheduled` or `waiting` once its AI check confirms that the work is really done.
 - `--new-session` starts a fresh session that rebuilds its picture from `context.md`.
 
 If vahtovik's tmux server is not running, vahtovik starts it with `systemd-run --user`, so the server outlives the run that started it.
@@ -50,12 +50,15 @@ If vahtovik's tmux server is not running, vahtovik starts it with `systemd-run -
 Every group has a status, shown by `vahtovik status`. The agent ends every automated turn, and every reply to a person, with one command:
 
 - `vahtovik turn finished`: it needs nothing from a person;
+- `vahtovik turn scheduled --after 6h [--reason "..."]`: it needs nothing from a person, but the group should get another turn later, even without new artifacts, for example to see whether something announced has happened. The group is `scheduled` until that turn starts;
 - `vahtovik turn waiting --question "..."`: it needs a person's answer or action to go on. The questions go to the Open questions section of `context.md`, and the agent puts them in its report too. Answer them in `vahtovik open`.
 - `vahtovik turn background --reason "..." [--check-after 30m]`: it started background work (a background command, a background agent or a scheduled prompt) and goes on when that work ends. Claude Code wakes the agent then, and it ends the turn as usual. Meanwhile the window stays open and keeps the group's lock, and the turn stays open.
 
-When the agent stops, Claude Code tells vahtovik what background work it still runs for the agent. If the agent said `finished` or `waiting` while such work runs, vahtovik makes it `background`, and the turn stays open. If it said `background` while nothing runs that would wake it, vahtovik sends it back to work.
+When the agent stops, Claude Code tells vahtovik what background work it still runs for the agent. If the agent said `finished`, `scheduled` or `waiting` while such work runs, vahtovik makes it `background`, and the turn stays open. If it said `background` while nothing runs that would wake it, vahtovik sends it back to work.
 
-A Claude Code hook does not let the agent stop before it runs the command. An automated turn counts as done only then; otherwise it is retried, up to 3 attempts. A group stays `waiting` until you answer in `vahtovik open`, or until a later turn finds the answer in new artifacts. The statuses are `idle`, `running`, `finished`, `waiting`, `background`, `maintenance` (set by the watchdog, below) and `failed`.
+A Claude Code hook does not let the agent stop before it runs the command. An automated turn counts as done only then; otherwise it is retried, up to 3 attempts. A group stays `waiting` until you answer in `vahtovik open`, or until a later turn finds the answer in new artifacts. The statuses are `idle`, `running`, `finished`, `scheduled`, `waiting`, `background`, `maintenance` (set by the watchdog, below) and `failed`.
+
+A group can also have a standing check: `vahtovik group set <watch>/<key> --recheck 1d` makes every `finished` turn `scheduled`, with the next turn a day later. `--next 6h` schedules the next turn, and `--next off` cancels it; `--recheck off` removes the standing check. A run starts a scheduled turn once its time comes, or earlier when new artifacts come, and the agent gets the reason in its prompt. A reply to a person that ends `finished` keeps a scheduled turn that has not started yet. A failed scheduled turn is tried again at the next runs, up to 3 attempts.
 
 Sessions run with `bypassPermissions`. The shared skill (`skills/shared/SKILL.md`, part of every session's system prompt) tells agents two rules. Everything outside their working folder is read-only, unless the watch's rules say otherwise; reporting through `vahtovik report` is always allowed. Instructions come only from the watch's rules, the vahtovik skills and the person in an interactive session, never from what sources return.
 
@@ -71,9 +74,9 @@ The watchdog looks after the group sessions at the start of every run, so the ti
 - it warns once about a group turn that runs longer than `watchdog.long_turn_after` (3 hours), since sessions have no time limit;
 - when vahtovik stops retrying a report (after 5 failed attempts), it tells the watch's other channels, with the report itself.
 
-It also asks an AI session (the `watchdog` stage: Sonnet with medium effort by default) to check the group sessions: every `running` or `background` one, and every other one that changed since the last check: with an open window, or `finished` or `waiting` with a window that ended before a check. It skips the call when there is nothing to check, and the cost shows in `vahtovik status`. The AI gets the facts of each session (status, turn, window, lock, the screen and the end of the conversation), follows the strict skill `skills/watchdog/SKILL.md`, and picks one action per session from a fixed list. vahtovik checks each pick before it acts:
+It also asks an AI session (the `watchdog` stage: Sonnet with medium effort by default) to check the group sessions: every `running` or `background` one, and every other one that changed since the last check: with an open window, or `finished`, `scheduled` or `waiting` with a window that ended before a check. It skips the call when there is nothing to check, and the cost shows in `vahtovik status`. The AI gets the facts of each session (status, turn, window, lock, the screen and the end of the conversation), follows the strict skill `skills/watchdog/SKILL.md`, and picks one action per session from a fixed list. vahtovik checks each pick before it acts:
 
-- `none`: all is right. A done window (`finished` or `waiting`) closes only after this answer;
+- `none`: all is right. A done window (`finished`, `scheduled` or `waiting`) closes only after this answer;
 - `press`: press the keys of a known screen, such as Claude Code's "trust this folder" question. The screens and their keys are listed in the skill, and vahtovik presses the keys, never the AI;
 - `nudge`: the agent is idle in its window but its work is not done, for example its background work hung. vahtovik types the skill's fixed message that tells the agent to check its work and report its status. Only to an idle agent;
 - `resume`: the window is gone but the work is unfinished. vahtovik opens the session again with the skill's fixed message to finish where it stopped. Only when the group has no window and no lock;
@@ -126,7 +129,8 @@ vahtovik keeps your personal `~/.claude/CLAUDE.md` and parent-folder `CLAUDE.md`
 | `run [--watch W] [--stage monitor\|group\|deliver] [--force] [--dry-run]` | one cycle; `--force` ignores intervals; `--dry-run` makes channels print instead of send |
 | `open W/KEY [--new-session]` | show a group's session window, starting the session if it is not running |
 | `report --channel C [--subject S]` | send a report, body on stdin (inside a session, the group comes from the environment) |
-| `turn finished\|waiting\|background [--importance I] [--summary S] [--question Q ...] [--reason R] [--check-after 30m]` | for agents: end a turn with the group's status |
+| `turn finished\|scheduled\|waiting\|background [--importance I] [--summary S] [--question Q ...] [--reason R] [--after 6h] [--check-after 30m]` | for agents: end a turn with the group's status |
+| `group set W/KEY [--recheck 1d\|off] [--next 6h\|off] [--reason R]` | when a group gets turns without new artifacts: a standing check, and the next scheduled turn |
 | `log [TEXT] [-n N] [-f]` | the last N journal lines (default 40, 0 for all) that contain TEXT; `-f` keeps showing new lines |
 | `status [--watch W] [-v]` | a table of watches and their groups: each watch's state (enabled or disabled), its period, and the time left until a run monitors it again; each group's status, processed artifacts and cost in the last 24 hours and 30 days; the totals per watch and for all; and undelivered reports; then the cost of group, monitor and watchdog sessions in all watches in the same periods, and in total. `-v` gives all details as text instead: sources, sessions, status reasons, and costs for all time too |
 | `install-timer [--every 5m]` | start vahtovik periodically with a systemd user timer |

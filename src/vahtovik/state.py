@@ -55,8 +55,11 @@ COLUMNS = {
         "status": "TEXT DEFAULT 'idle'", "status_at": "TEXT", "status_reason": "TEXT", "questions": "TEXT",
         "prompt_at": "TEXT", "idle": "INTEGER DEFAULT 1", "stop_blocks": "INTEGER DEFAULT 0", "notified_at": "TEXT",
         "check_after": "TEXT", "checked_at": "TEXT",
+        "recheck_every": "TEXT", "scheduled_at": "TEXT", "scheduled_reason": "TEXT",
+        "scheduled_attempts": "INTEGER DEFAULT 0",
     },
-    "group_turns": {"artifact_ids": "TEXT", "work_log_before": "INTEGER", "long_warned_at": "TEXT"},
+    "group_turns": {"artifact_ids": "TEXT", "work_log_before": "INTEGER", "long_warned_at": "TEXT",
+                    "scheduled_for": "TEXT"},
     "windows": {"checked_at": "TEXT"},
     "deliveries": {"given_up_warned_at": "TEXT"},
 }
@@ -256,6 +259,32 @@ class State:
         self.execute("UPDATE groups SET stop_blocks = stop_blocks + 1 WHERE watch = ? AND key = ?", watch, key)
         return self.group(watch, key)["stop_blocks"]
 
+    # scheduled turns: a turn at a set time, even without new artifacts
+
+    def set_schedule(self, watch: str, key: str, at: str | None, reason: str | None = None) -> None:
+        """The time of the group's next scheduled turn, or None for none."""
+        self.execute("UPDATE groups SET scheduled_at = ?, scheduled_reason = ?, scheduled_attempts = 0 "
+                     "WHERE watch = ? AND key = ?", at, reason if at else None, watch, key)
+
+    def set_recheck(self, watch: str, key: str, every: str | None) -> None:
+        """The group's standing period: a `finished` turn becomes `scheduled` this long after."""
+        self.execute("UPDATE groups SET recheck_every = ? WHERE watch = ? AND key = ?", every, watch, key)
+
+    def take_schedule(self, watch: str, key: str, turn_id: str, now: str) -> str | None:
+        """A turn starts: if the group's scheduled turn is due, this turn is it. Returns the reason or None."""
+        group = self.group(watch, key)
+        if not group["scheduled_at"] or group["scheduled_at"] > now:
+            return None
+        self.execute("UPDATE group_turns SET scheduled_for = ? WHERE id = ?", group["scheduled_at"], turn_id)
+        self.execute("UPDATE groups SET scheduled_at = NULL WHERE watch = ? AND key = ?", watch, key)
+        return group["scheduled_reason"] or "a scheduled check"
+
+    def restore_schedule(self, turn) -> None:
+        """A scheduled turn failed: it is due again, and counts one more failed attempt."""
+        if turn["scheduled_for"]:
+            self.execute("UPDATE groups SET scheduled_at = ?, scheduled_attempts = scheduled_attempts + 1 "
+                         "WHERE watch = ? AND key = ?", turn["scheduled_for"], turn["watch"], turn["group_key"])
+
     def group_checked(self, watch: str, key: str) -> None:
         """The watchdog AI checked the group's session."""
         self.execute("UPDATE groups SET checked_at = ? WHERE watch = ? AND key = ?", utc_iso(), watch, key)
@@ -298,12 +327,22 @@ class State:
         )
 
     def pending_groups(self, watch: str, max_attempts: int) -> list[str]:
+        """Groups with new artifacts, or with a scheduled turn that is due, the longest waiting first."""
         rows = self.rows(
-            "SELECT group_key, MIN(first_seen_at) AS first FROM artifacts "
-            "WHERE watch = ? AND status = 'new' AND attempts < ? GROUP BY group_key ORDER BY first",
-            watch, max_attempts,
+            "SELECT key, MIN(at) AS first FROM ("
+            "  SELECT group_key AS key, first_seen_at AS at FROM artifacts "
+            "  WHERE watch = ? AND status = 'new' AND attempts < ?"
+            "  UNION ALL SELECT key, scheduled_at FROM groups WHERE watch = ? AND scheduled_at <= ? "
+            "  AND scheduled_attempts < ? AND status IN ('scheduled', 'failed')"
+            ") GROUP BY key ORDER BY first",
+            watch, max_attempts, watch, utc_iso(), max_attempts,
         )
-        return [r["group_key"] for r in rows]
+        return [r["key"] for r in rows]
+
+    def next_scheduled(self, watch: str) -> sqlite3.Row | None:
+        """The group whose scheduled turn comes first."""
+        return self.row("SELECT * FROM groups WHERE watch = ? AND scheduled_at IS NOT NULL "
+                        "ORDER BY scheduled_at LIMIT 1", watch)
 
     def pending_artifacts(self, watch: str, key: str, max_attempts: int) -> list[sqlite3.Row]:
         return self.rows(
@@ -365,6 +404,7 @@ class State:
         """Count a finished turn as failed, so a later run repeats it: its artifacts wait again."""
         turn = self.turn(turn_id)
         self.execute("UPDATE group_turns SET ok = 0, error = ? WHERE id = ?", error, turn_id)
+        self.restore_schedule(turn)
         self.execute("UPDATE artifacts SET status = 'new', processed_at = NULL WHERE watch = ? AND group_key = ? "
                      "AND status = 'processed' AND id IN (SELECT value FROM json_each(?))",
                      turn["watch"], turn["group_key"], turn["artifact_ids"] or "[]")

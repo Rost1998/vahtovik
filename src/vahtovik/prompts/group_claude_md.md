@@ -43,10 +43,11 @@ EOF
 Whenever you finish working, at the end of an automated turn and after each reply to a person, run exactly one of:
 
 - `vahtovik turn finished`: you need nothing from a person;
+- `vahtovik turn scheduled --after <6h, 1d, ...> --reason "<what to check>"`: you need nothing from a person, but the group should get another turn later, even without new artifacts;
 - `vahtovik turn waiting --question "<question>" [--question ...]`: you need a person's answer or action to go on. List every question that is still open.
-- `vahtovik turn background --reason "<what you wait for>" [--check-after 30m]`: you wait for background work you started (a background command, a background agent or a scheduled prompt). Claude Code wakes you when it ends; then finish and end with `finished` or `waiting`.
+- `vahtovik turn background --reason "<what you wait for>" [--check-after 30m]`: you wait for background work you started (a background command, a background agent or a scheduled prompt). Claude Code wakes you when it ends; then finish and end with `finished`, `scheduled` or `waiting`.
 
-Use `finished` or `waiting` only when nothing you started still runs.
+Use `finished`, `scheduled` or `waiting` only when nothing you started still runs. $schedule
 
 At the end of an automated turn, add `--importance <low|medium|high|critical> --summary "<the current state>"`, and write your Work log entry first. vahtovik does not let you stop before you run the command.
 

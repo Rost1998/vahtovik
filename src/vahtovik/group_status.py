@@ -3,6 +3,7 @@
     idle         no turn yet
     running      the agent is working: a turn started, or a person sent a message
     finished     the agent is done and waits for nothing
+    scheduled    the agent is done; the group gets a turn at a set time, even without new artifacts
     waiting      the agent needs a person's answer; the questions are in context.md, Open questions
     background   the agent waits for its own background work, which wakes it when it ends
     maintenance  the session is stuck and needs a person
@@ -18,17 +19,19 @@ import sys
 from datetime import datetime, timedelta, timezone
 
 from . import context_file
-from .config import Config, Watch
+from .config import Config, Watch, parse_interval
 from .state import State
-from .util import duration, plural, utc_iso
+from .util import duration, human, plural, utc_iso
 
 log = logging.getLogger(__name__)
 
 IMPORTANCE = ("low", "medium", "high", "critical")
 MAX_STOP_BLOCKS = 3
-COMMAND = ('`vahtovik turn finished`, or `vahtovik turn waiting --question "..."` if you need a person\'s answer '
+COMMAND = ('`vahtovik turn finished`, or `vahtovik turn waiting --question "..."` if you need a person\'s answer, '
+           "or `vahtovik turn scheduled --after 6h` if the group needs another turn later "
            "(add `--importance` and `--summary` at the end of an automated turn), or "
            '`vahtovik turn background --reason "..."` if you wait for background work you started')
+DONE = ("finished", "scheduled", "waiting")  # statuses of an agent that says it is done
 DONE_TASKS = ("completed", "failed", "killed", "stopped", "cancelled", "canceled", "done", "error")
 
 
@@ -58,17 +61,21 @@ def background_work(hook_data: dict) -> list[str] | None:
 
 def declare(cfg: Config, state: State, watch: Watch, key: str, status: str, importance: str | None = None,
             summary: str | None = None, questions: list[str] | None = None, turn_id: str | None = None,
-            reason: str | None = None, check_after: timedelta | None = None) -> str:
+            reason: str | None = None, check_after: timedelta | None = None, after: timedelta | None = None) -> str:
     """Record the status the agent gives with `vahtovik turn`. Raises StatusError with what to fix."""
     questions = [q for q in (questions or []) if q.strip()]
     if status == "background":
         return _declare_background(state, watch.name, key, reason, check_after, questions)
     if status == "waiting" and not questions:
         raise StatusError('waiting needs at least one --question "..."')
-    if status == "finished" and questions:
-        raise StatusError("finished takes no questions; use `vahtovik turn waiting` when you need an answer")
-    if state.group(watch.name, key) is None:
+    if status in ("finished", "scheduled") and questions:
+        raise StatusError(f"{status} takes no questions; use `vahtovik turn waiting` when you need an answer")
+    group = state.group(watch.name, key)
+    if group is None:
         raise StatusError(f"unknown group {watch.name}/{key}")
+    schedule = _schedule(group, status, after, reason)
+    if schedule:
+        status = "scheduled"
     context = cfg.group_dir(watch.name, key) / "context.md"
     turn = state.turn(turn_id) if turn_id else None
     ends_turn = turn is not None and turn["finished_at"] is None
@@ -81,16 +88,40 @@ def declare(cfg: Config, state: State, watch: Watch, key: str, status: str, impo
     context_file.replace_section(context, "Open questions", context_file.questions_text(questions), after="Summary")
     # A run starts turns by the status and the new artifacts: it must not see the one without the other.
     with state.transaction():
-        state.set_status(watch.name, key, status, questions=questions)
+        state.set_status(watch.name, key, status, schedule[1] if schedule else None, questions=questions)
+        if status != "waiting":  # a waiting group keeps its scheduled turn for after the answer
+            state.set_schedule(watch.name, key, *(schedule or (None, None)))
         if ends_turn:
             output = {"status": status, "importance": importance, "summary": summary, "questions": questions}
             state.finish_turn(turn_id, True, output, None)
             state.mark_processed(watch.name, key, json.loads(turn["artifact_ids"] or "[]"))
             state.touch_group(watch.name, key)
     what = status + (f" ({plural(len(questions), 'question')})" if questions else "")
+    what += f" for {human(datetime.fromisoformat(schedule[0]))}" if schedule else ""
     what += f", importance {importance}" if importance else ""
     log.info("%s/%s: Status %s%s", watch.name, key, what, f": {summary[:150]}" if summary else "")
     return f"recorded: status {what}"
+
+
+def _schedule(group, status: str, after: timedelta | None, reason: str | None) -> tuple[str, str] | None:
+    """When and why the group gets its next scheduled turn, or None if it gets none.
+
+    `scheduled` sets the time, from `--after` or the group's standing period. `finished` keeps a scheduled
+    turn that has not started yet; without one it takes the standing period, if the group has one."""
+    every = group["recheck_every"]
+    if status == "scheduled":
+        if after is None and not every:
+            raise StatusError("scheduled needs --after, for example --after 6h: when the group should get its turn")
+        when = after if after is not None else parse_interval(every)
+        why = (reason or "").strip() or ("a check the agent scheduled" if after is not None
+                                         else f"the group's standing check every {every}")
+        return utc_iso(datetime.now(timezone.utc) + when), why
+    if status == "finished" and group["scheduled_at"]:
+        return group["scheduled_at"], group["scheduled_reason"] or "a scheduled check"
+    if status == "finished" and every:
+        when = datetime.now(timezone.utc) + parse_interval(every)
+        return utc_iso(when), f"the group's standing check every {every}"
+    return None
 
 
 def _declare_background(state: State, watch: str, key: str, reason: str | None, check_after: timedelta | None,
@@ -134,7 +165,7 @@ def on_stop(state: State, watch: str, key: str, hook_data: dict | None = None,
         reason = f"the agent stopped {MAX_STOP_BLOCKS + 1} times without running `vahtovik turn`"
         state.set_status(watch, key, "failed", reason)
         log.error("%s/%s: Failed: %s", watch, key, reason)
-    elif status in ("finished", "waiting") and work:
+    elif status in DONE and work:
         reason = "Claude Code still runs background work for the agent: " + "; ".join(work)
         turn = state.turn(turn_id) if turn_id else None
         with state.transaction():

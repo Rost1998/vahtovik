@@ -25,7 +25,7 @@ from .util import LockBusy, duration, human, load_schema, plural, render
 log = logging.getLogger(__name__)
 
 GRACE = timedelta(seconds=10)  # a window of `vahtovik open` is left alone this long, so the person can attach to it
-CLOSABLE = ("finished", "waiting", "idle")  # statuses of an agent that is done, once it is idle
+CLOSABLE = ("finished", "scheduled", "waiting", "idle")  # statuses of an agent that is done, once it is idle
 WORKING = ("running", "background")  # statuses the AI checks every time, changed or not
 EPOCH = datetime.min.replace(tzinfo=timezone.utc)
 DONE_WHAT = {"press": "Pressed keys", "nudge": "Nudged", "resume": "Resumed", "retry": "Retrying", "failed": "Failed"}
@@ -115,7 +115,7 @@ class Session:
 def sessions_to_check(cfg: Config, state: State, tmux: Tmux, claude: Claude) -> list[Session]:
     """The sessions the AI should check: every working one (`running` or `background`, with a window or
     without one, which means it was interrupted), and every other one that changed since the last check:
-    with an open window, or `finished` or `waiting` with a window that ended before a check. Not the ones a
+    with an open window, or `finished`, `scheduled` or `waiting` with a window that ended before a check. Not the ones a
     person looks at, nor the ones that wait for a person (`maintenance`) or are failed."""
     open_windows = {w.ref: w for w in tmux.windows()}
     found = []
@@ -353,7 +353,8 @@ def notify(cfg: Config, state: State, tmux: Tmux) -> None:
             key, status = group["key"], group["status"]
             if status not in ("waiting", "maintenance", "failed") or f"{watch.name}/{key}" in watched:
                 continue
-            if status == "failed" and state.pending_artifacts(watch.name, key, group_turn.MAX_ATTEMPTS):
+            if status == "failed" and (state.pending_artifacts(watch.name, key, group_turn.MAX_ATTEMPTS) or (
+                    group["scheduled_at"] and group["scheduled_attempts"] < group_turn.MAX_ATTEMPTS)):
                 continue  # a later run retries the turn
             last = group["notified_at"]
             if last is None and status == "waiting" and state.reported_since(watch.name, key, group["prompt_at"]):

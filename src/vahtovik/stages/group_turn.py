@@ -16,11 +16,13 @@ from ..claude_session import Claude
 from ..config import Config, Watch
 from ..state import State
 from ..tmux import Tmux, TmuxError
-from ..util import LockBusy, duration, human, plural, render
+from ..util import LockBusy, duration, human, plural, render, utc_iso
 
 log = logging.getLogger(__name__)
 
 MAX_ATTEMPTS = 3
+SCHEDULED_NOTE = ("This is a scheduled turn: {reason}. Do that check by your rules, even if there are no new "
+                  "artifacts.")
 
 
 def run(cfg: Config, state: State, claude: Claude, tmux: Tmux, watch: Watch, run_id: str) -> list[str]:
@@ -108,23 +110,25 @@ def turn(cfg: Config, state: State, claude: Claude, tmux: Tmux, watch: Watch, ke
     last = state.last_turn(watch.name, key)
     turn_id = uuid.uuid4().hex[:12]
     now = human()
+    state.start_turn(turn_id, run_id, watch.name, key, ids, context_file.fingerprint(context).work_log_entries)
+    scheduled = state.take_schedule(watch.name, key, turn_id, utc_iso())
+    notes = [note, SCHEDULED_NOTE.format(reason=scheduled) if scheduled else None]
     spec.prompt = render(
         "group_turn.md",
-        run_id=run_id, turn_id=turn_id, now=now, session_note=note or "",
-        artifacts=_artifacts_text(pending), process_rules=_process_text(watch),
+        run_id=run_id, turn_id=turn_id, now=now, session_note="\n\n".join(filter(None, notes)),
+        artifacts=_artifacts_text(pending) or "- none", process_rules=_process_text(watch),
         report_rules=_read(watch.report_md), channels=_channels_text(cfg, watch),
         deliveries=_deliveries_text(state.deliveries_since(watch.name, key, last["started_at"] if last else None)),
     )
     spec.env.update(VAHTOVIK_TURN=turn_id, VAHTOVIK_RUN=run_id)
-    state.start_turn(turn_id, run_id, watch.name, key, ids, context_file.fingerprint(context).work_log_entries)
     state.prompt_submitted(watch.name, key)  # running until the agent reports its status
     try:
         window_id = windows.launch(cfg, state, tmux, claude, spec, "turn", turn_id)
     except TmuxError as exc:
         fail(state, state.turn(turn_id), str(exc), 0)
         return None
-    log.info("%s: Started group turn: %s, %s, tmux window %s", spec.scope, plural(len(ids), "artifact"),
-             group_session.describe(spec, note), window_id)
+    log.info("%s: Started group turn: %s%s, %s, tmux window %s", spec.scope, plural(len(ids), "artifact"),
+             ", scheduled" if scheduled else "", group_session.describe(spec, note), window_id)
     return turn_id
 
 
@@ -142,6 +146,7 @@ def fail(state: State, turn, error: str | None, seconds: float) -> None:
         "SELECT attempts FROM artifacts WHERE watch = ? AND group_key = ? AND id IN (SELECT value FROM json_each(?))",
         watch, key, turn["artifact_ids"] or "[]")), default=0)
     state.mark_attempt_failed(watch, key, ids, MAX_ATTEMPTS)
+    state.restore_schedule(turn)
     state.finish_turn(turn["id"], False, None, error)
     state.set_status(watch, key, "failed", error)
     log.error("%s/%s: Failed group turn after %s (attempt %d of %d%s): %s", watch, key, duration(seconds),

@@ -30,6 +30,7 @@ vahtovik runs one Claude Code session per group of artifacts, each in its own tm
 
 - `running`: the agent works: a turn started, a person sent a message, or Claude Code woke the agent;
 - `finished`: the agent is done and waits for nothing;
+- `scheduled`: the agent is done; vahtovik gives the group another turn at a set time. For you it is the same as `finished`;
 - `waiting`: the agent needs a person's answer;
 - `background`: the agent waits for background work it started (a background command or agent, or a scheduled prompt). Claude Code wakes it when that work ends. `check after` is when the agent asked to be checked if it still waits;
 - `idle`: no turn yet.
