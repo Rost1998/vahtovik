@@ -1,4 +1,4 @@
-"""Find and read skills: skills/vahtovik (main), skills/watchdog, skills/sources/*, skills/channels/*."""
+"""Find and read skills: skills/shared (rules for every session), skills/watchdog, skills/sources/*, skills/channels/*."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from pathlib import Path
 import yaml
 
 KINDS = ("sources", "channels")
-MAIN_SKILL = "vahtovik"
+SHARED_SKILL = "shared"
 WATCHDOG_SKILL = "watchdog"
 
 
@@ -60,8 +60,8 @@ def load(skills_dir: Path, kind: str, name: str) -> Skill:
     return _read(kind, name, skills_dir / kind / name)
 
 
-def main_skill(skills_dir: Path) -> Skill:
-    return _read("main", MAIN_SKILL, skills_dir / MAIN_SKILL)
+def shared_skill(skills_dir: Path) -> Skill:
+    return _read("shared", SHARED_SKILL, skills_dir / SHARED_SKILL)
 
 
 def watchdog_skill(skills_dir: Path) -> Skill:

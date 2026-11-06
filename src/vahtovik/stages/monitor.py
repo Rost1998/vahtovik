@@ -31,7 +31,7 @@ def _restore(workdir: Path, backup: Path) -> None:
 
 
 def run(cfg: Config, state: State, claude: Claude, watch: Watch, run_id: str, raw_dir: Path) -> int:
-    main = skills.main_skill(cfg.skills_dir).body
+    shared = skills.shared_skill(cfg.skills_dir).body
     schema = load_schema("monitor")
     rules = watch.monitor_md.read_text() if watch.monitor_md.is_file() else "(monitor.md is missing)"
     total = 0
@@ -66,7 +66,7 @@ def run(cfg: Config, state: State, claude: Claude, watch: Watch, run_id: str, ra
         )
         spec = SessionSpec(
             stage="monitor", workdir=workdir, prompt=prompt, settings=cfg.stage(watch, "monitor"),
-            schema=schema, system_prompt=main, mode="throwaway",
+            schema=schema, system_prompt=shared, mode="throwaway",
             env={**watch.source_env(source),
                  "VAHTOVIK_WATCH": watch.name, "VAHTOVIK_SOURCE": source.id, "VAHTOVIK_RUN": run_id},
             scope=f"{watch.name}/{source.id}",

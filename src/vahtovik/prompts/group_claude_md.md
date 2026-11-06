@@ -1,6 +1,6 @@
 # vahtovik group: $title
 
-You are the agent of group `$key` in watch `$watch`. vahtovik regenerates this file before every turn and every interactive session; do not edit it. Your general rules are in the main skill: `$main_skill`.
+You are the agent of group `$key` in watch `$watch`. vahtovik regenerates this file before every turn and every interactive session; do not edit it. Your general rules are in the shared skill: `$shared_skill`.
 
 ## Your working folder (writable)
 

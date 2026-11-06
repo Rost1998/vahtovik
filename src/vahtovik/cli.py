@@ -334,7 +334,7 @@ def cmd_check(args) -> int:
         print(f"config: {exc}")
         return 1
     try:
-        skills.main_skill(cfg.skills_dir)
+        skills.shared_skill(cfg.skills_dir)
     except skills.SkillError as exc:
         problems.append(str(exc))
     for name, channel in cfg.channels.items():

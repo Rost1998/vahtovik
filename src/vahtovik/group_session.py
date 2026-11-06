@@ -43,7 +43,7 @@ def spec_for(cfg: Config, claude: Claude, state: State, watch: Watch, key: str,
         return spec, None
     spec.mode, spec.session_id = "new", str(uuid.uuid4())
     spec.name = f"vahtovik: {watch.name}/{key}"
-    spec.system_prompt = skills.main_skill(cfg.skills_dir).body
+    spec.system_prompt = skills.shared_skill(cfg.skills_dir).body
     return spec, NEW_FOR_EXISTING if stored else None
 
 

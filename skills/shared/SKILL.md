@@ -1,5 +1,5 @@
 ---
-name: vahtovik
+name: shared
 description: Rules for agents working inside vahtovik, an AI monitoring tool. Loaded into every vahtovik session.
 ---
 

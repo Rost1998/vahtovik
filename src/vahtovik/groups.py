@@ -67,7 +67,7 @@ def write_claude_md(cfg: Config, state: State, watch: Watch, key: str) -> None:
         key=key,
         group_dir=cfg.group_dir(watch.name, key),
         root=cfg.root,
-        main_skill=skills.main_skill(cfg.skills_dir).skill_md,
+        shared_skill=skills.shared_skill(cfg.skills_dir).skill_md,
         monitor_md=watch.monitor_md,
         process_files=process,
         report_md=watch.report_md,
