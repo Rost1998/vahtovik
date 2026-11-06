@@ -182,11 +182,47 @@ def cmd_turn(args) -> int:
     return 0
 
 
-def cmd_group_set(args) -> int:
-    cfg, state = _load()
-    for line in operations.set_schedule(cfg, state, args.ref, args.recheck, args.next, args.reason):
+def _print(lines: list[str]) -> int:
+    for line in lines:
         print(line)
     return 0
+
+
+def _stdin_text(what: str) -> str:
+    if sys.stdin.isatty():
+        raise ConfigError(f"pipe {what} on stdin")
+    return sys.stdin.read()
+
+
+def cmd_group_create(args) -> int:
+    cfg, state = _load()
+    return _print(operations.create_group(cfg, state, args.ref, args.title))
+
+
+def cmd_group_merge(args) -> int:
+    cfg, state = _load()
+    return _print(operations.merge(cfg, state, Tmux(cfg), args.refs, args.into))
+
+
+def cmd_group_split(args) -> int:
+    cfg, state = _load()
+    return _print(operations.split(cfg, state, Tmux(cfg), args.ref, args.artifact, args.into, args.title))
+
+
+def cmd_group_set(args) -> int:
+    cfg, state = _load()
+    return _print(operations.set_schedule(cfg, state, args.ref, args.recheck, args.next, args.reason))
+
+
+def cmd_artifact_add(args) -> int:
+    cfg, state = _load()
+    return _print(operations.add_artifacts(cfg, state, args.watch, args.group, _stdin_text("the artifacts as JSON")))
+
+
+def cmd_tell(args) -> int:
+    cfg, state = _load()
+    message = args.message if args.message is not None else _stdin_text("the message, or give --message")
+    return _print(operations.tell(cfg, state, Tmux(cfg), args.refs, message))
 
 
 def cmd_hook(args) -> int:
@@ -494,8 +530,23 @@ def build_parser() -> argparse.ArgumentParser:
                                          "waiting, for example 30m")
     p.set_defaults(func=cmd_turn)
 
-    p = sub.add_parser("group", help="change groups: their scheduled turns")
+    p = sub.add_parser("group", help="create, merge and split groups, and schedule their turns")
     group_sub = p.add_subparsers(dest="group_command", required=True)
+    g = group_sub.add_parser("create", help="create an empty group")
+    g.add_argument("ref", help="<watch>/<group-key>")
+    g.add_argument("--title", help="the group's title (default: its key)")
+    g.set_defaults(func=cmd_group_create)
+    g = group_sub.add_parser("merge", help="merge groups into another group of the same watch")
+    g.add_argument("refs", nargs="+", help="the groups to merge, <watch>/<group-key>")
+    g.add_argument("--into", required=True, help="the group they go into, <watch>/<group-key>")
+    g.set_defaults(func=cmd_group_merge)
+    g = group_sub.add_parser("split", help="move some artifacts of a group to another group, new or existing")
+    g.add_argument("ref", help="the group they are in, <watch>/<group-key>")
+    g.add_argument("--artifact", action="append", default=[], required=True,
+                   help="the id of an artifact to move; repeat for each one")
+    g.add_argument("--into", required=True, help="the group they go to, <watch>/<group-key>")
+    g.add_argument("--title", help="the title of the group they go to, if it is new")
+    g.set_defaults(func=cmd_group_split)
     g = group_sub.add_parser("set", help="when a group gets turns without new artifacts")
     g.add_argument("ref", help="<watch>/<group-key>")
     g.add_argument("--recheck", help="a standing period, such as 1d: each finished turn is followed by a scheduled "
@@ -503,6 +554,19 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--next", help="when the next scheduled turn comes, such as 6h; off cancels it")
     g.add_argument("--reason", help="what the scheduled turn should check")
     g.set_defaults(func=cmd_group_set)
+
+    p = sub.add_parser("artifact", help="add artifacts to groups")
+    artifact_sub = p.add_subparsers(dest="artifact_command", required=True)
+    a = artifact_sub.add_parser("add", help="add artifacts, as JSON on stdin (one object or a list), to groups")
+    a.add_argument("watch")
+    a.add_argument("--group", action="append", default=[], required=True,
+                   help="a group key of the watch to add them to; repeat for each group")
+    a.set_defaults(func=cmd_artifact_add)
+
+    p = sub.add_parser("tell", help="pass a message from the person to group sessions")
+    p.add_argument("refs", nargs="+", help="the groups, <watch>/<group-key>")
+    p.add_argument("--message", help="the message (default: stdin)")
+    p.set_defaults(func=cmd_tell)
 
     p = sub.add_parser("window", help=argparse.SUPPRESS)
     p.add_argument("spec")

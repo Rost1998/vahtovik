@@ -22,7 +22,7 @@ def register(cfg: Config, state: State, watch: Watch, data: dict, source_id: str
     """Store a new artifact in its group. Returns False if it was seen before: in any group of the watch,
     or with `any_group=False` in this group, so that one artifact can go to several groups."""
     artifact_id = str(data["id"]).strip()
-    key = group_key(data.get("group_key"))
+    key = state.resolve_group(watch.name, group_key(data.get("group_key")))  # a merged group's key leads on
     if not artifact_id or state.artifact_exists(watch.name, artifact_id, None if any_group else key):
         return False
     group_dir = groups.ensure_group(cfg, state, watch, key, str(data.get("group_title") or data.get("title") or key))
@@ -60,7 +60,7 @@ def register_agent_files(cfg: Config, state: State, watch: Watch, key: str) -> l
             notes.append(f"Rejected artifact file {path.name}: {message}; renamed to .invalid")
             continue
         path.unlink()
-        target = group_key(data.get("group_key") or key)
+        target = state.resolve_group(watch.name, group_key(data.get("group_key") or key))
         if register(cfg, state, watch, {**data, "group_key": target}, str(data.get("source_id") or "agent"),
                     origin="agent", status="processed" if target == key else "new"):
             notes.append(f"Registered artifact {data['id']!r} added by the agent"

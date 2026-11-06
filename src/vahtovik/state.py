@@ -47,6 +47,8 @@ CREATE TABLE IF NOT EXISTS session_costs (
     session_id TEXT PRIMARY KEY, watch TEXT, group_key TEXT, cost_usd REAL DEFAULT 0, file_mtime REAL);
 CREATE TABLE IF NOT EXISTS cost_points (
     session_id TEXT, total_usd REAL, at TEXT, PRIMARY KEY (session_id, total_usd));
+CREATE TABLE IF NOT EXISTS group_aliases (
+    watch TEXT, key TEXT, target TEXT, created_at TEXT, PRIMARY KEY (watch, key));
 """
 
 # Columns added later. Opening an older database adds them.
@@ -181,6 +183,37 @@ class State:
             "INSERT OR IGNORE INTO groups (watch, key, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
             watch, key, title, now, now,
         )
+
+    def resolve_group(self, watch: str, key: str) -> str:
+        """The key a group goes by now: the group it was merged into, or the key itself."""
+        row = self.row("SELECT target FROM group_aliases WHERE watch = ? AND key = ?", watch, key)
+        return row["target"] if row else key
+
+    def merge_group(self, watch: str, key: str, target: str) -> None:
+        """Move what the database keeps about a group to the target group, and forward the key to it.
+        Artifacts the target has already are dropped; the caller moves the files first."""
+        self.execute("DELETE FROM artifacts WHERE watch = ? AND group_key = ? AND id IN "
+                     "(SELECT id FROM artifacts WHERE watch = ? AND group_key = ?)", watch, key, watch, target)
+        for table in ("artifacts", "deliveries", "group_turns", "session_costs"):
+            self.execute(f"UPDATE {table} SET group_key = ? WHERE watch = ? AND group_key = ?", target, watch, key)
+        self.execute("DELETE FROM windows WHERE watch = ? AND group_key = ?", watch, key)
+        self.execute("DELETE FROM groups WHERE watch = ? AND key = ?", watch, key)
+        self.execute("UPDATE group_aliases SET target = ? WHERE watch = ? AND target = ?", target, watch, key)
+        self.execute("INSERT OR REPLACE INTO group_aliases (watch, key, target, created_at) VALUES (?, ?, ?, ?)",
+                     watch, key, target, utc_iso())
+
+    def move_artifact(self, watch: str, artifact_id: str, key: str, target: str) -> None:
+        """Move an artifact to another group, where it waits for the group's next turn. If the target has it
+        already, it is only removed here."""
+        if self.artifact_exists(watch, artifact_id, target):
+            self.execute("DELETE FROM artifacts WHERE watch = ? AND id = ? AND group_key = ?", watch, artifact_id, key)
+        else:
+            self.execute("UPDATE artifacts SET group_key = ?, status = 'new', attempts = 0, processed_at = NULL "
+                         "WHERE watch = ? AND id = ? AND group_key = ?", target, watch, artifact_id, key)
+
+    def group_artifacts(self, watch: str, key: str) -> list[sqlite3.Row]:
+        return self.rows("SELECT * FROM artifacts WHERE watch = ? AND group_key = ? ORDER BY first_seen_at, id",
+                         watch, key)
 
     def touch_group(self, watch: str, key: str) -> None:
         self.execute("UPDATE groups SET updated_at = ? WHERE watch = ? AND key = ?", utc_iso(), watch, key)

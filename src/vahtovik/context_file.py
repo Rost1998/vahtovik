@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from .util import human, write_atomic
@@ -17,8 +18,7 @@ _Not processed yet._
 _None._
 
 ## Artifacts
-| First seen | Source | Artifact | Link |
-|---|---|---|---|
+{artifacts_header}
 
 ## Work log
 
@@ -28,7 +28,8 @@ _None._
 
 def create(path: Path, title: str, watch: str, key: str) -> None:
     if not path.exists():
-        write_atomic(path, TEMPLATE.format(title=title, watch=watch, key=key, created=human()))
+        write_atomic(path, TEMPLATE.format(title=title, watch=watch, key=key, created=human(),
+                                           artifacts_header=ARTIFACTS_HEADER))
 
 
 def _section(lines: list[str], name: str) -> tuple[int, int] | None:
@@ -86,9 +87,26 @@ def _cell(text: str) -> str:
     return " ".join(str(text).split()).replace("|", "\\|")
 
 
-def artifact_row(source: str, title: str, url: str) -> str:
+ARTIFACTS_HEADER = "| First seen | Source | Artifact | Link |\n|---|---|---|---|"
+
+
+def artifact_row(source: str, title: str, url: str, seen: datetime | None = None) -> str:
     link = f"[link]({url})" if url else ""
-    return f"| {human()} | {_cell(source)} | {_cell(title)} | {link} |"
+    return f"| {human(seen)} | {_cell(source)} | {_cell(title)} | {link} |"
+
+
+def write_artifacts(path: Path, rows) -> None:
+    """Write the Artifacts section anew from the database rows of the group's artifacts."""
+    lines = [artifact_row(r["source_id"] or "", r["title"] or r["id"], r["url"] or "",
+                          datetime.fromisoformat(r["first_seen_at"]) if r["first_seen_at"] else None) for r in rows]
+    replace_section(path, "Artifacts", "\n".join([ARTIFACTS_HEADER, *lines]), after="Open questions")
+
+
+def section_text(path: Path, section: str) -> str:
+    """The text of a section, without its heading."""
+    lines = path.read_text().splitlines() if path.exists() else []
+    found = _section(lines, section)
+    return "\n".join(lines[found[0] + 1:found[1]]).strip() if found else ""
 
 
 def report_line(channel: str, ok: bool, detail: str, subject: str, dry_run: bool = False) -> str:
