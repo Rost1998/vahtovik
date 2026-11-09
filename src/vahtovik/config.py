@@ -47,6 +47,7 @@ class TmuxSettings:
 
 @dataclass
 class WatchdogSettings:
+    every: timedelta = timedelta(minutes=5)  # a run starts with the watchdog once this long has passed; 0: every run
     notify_every: timedelta = timedelta(hours=6)  # repeat a notice this often; 0 never repeats
     long_turn_after: timedelta = timedelta(hours=3)  # warn once about a turn running this long; 0 never warns
 
@@ -64,6 +65,7 @@ class Source:
     skill: str
     params: dict = field(default_factory=dict)
     env: dict[str, str] = field(default_factory=dict)  # variable the skill reads -> name of the secret to use
+    interval: timedelta = timedelta(hours=1)  # how often to monitor it; watch.yaml's default is the watch's interval
 
 
 @dataclass
@@ -71,7 +73,7 @@ class Watch:
     name: str
     dir: Path
     enabled: bool
-    interval: timedelta
+    interval: timedelta  # the default interval of its sources
     sources: list[Source]
     channels: list[str]
     claude: dict[str, dict]  # stage settings that override vahtovik.yaml, by stage
@@ -269,8 +271,8 @@ def _load_watchdog(raw: object) -> WatchdogSettings:
         raise ConfigError("watchdog must be a mapping")
     raw = raw or {}
     settings = WatchdogSettings()
-    for name in ("notify_every", "long_turn_after"):  # names it does not know, like the old `every`, are ignored
-        if name in raw:
+    for name in ("every", "notify_every", "long_turn_after"):  # names it does not know, like the old
+        if name in raw:                                          # `check_every`, are ignored
             value = raw[name]
             setattr(settings, name, timedelta(0) if value in (0, "0") else parse_interval(value))
     return settings
@@ -293,6 +295,7 @@ def _load_channels(raw: object) -> dict[str, Channel]:
 def _load_watch(path: Path, channels: dict[str, Channel]) -> Watch:
     raw = _read_yaml(path / WATCH_FILE)
     where = str(path / WATCH_FILE)
+    interval = parse_interval(raw.get("interval", "1h"))
     sources = []
     for item in raw.get("sources") or []:
         if not isinstance(item, dict) or not item.get("id") or not item.get("skill"):
@@ -303,7 +306,8 @@ def _load_watch(path: Path, channels: dict[str, Channel]) -> Watch:
         env = item.get("env") or {}
         if not isinstance(env, dict):
             raise ConfigError(f"{where}: env of source {item['id']!r} must be a mapping of variable to secret name")
-        sources.append(Source(str(item["id"]), str(item["skill"]), params, {str(k): str(v) for k, v in env.items()}))
+        sources.append(Source(str(item["id"]), str(item["skill"]), params, {str(k): str(v) for k, v in env.items()},
+                              parse_interval(item["interval"]) if item.get("interval") else interval))
     ids = [s.id for s in sources]
     if len(ids) != len(set(ids)):
         raise ConfigError(f"{where}: source ids must be unique")
@@ -319,7 +323,7 @@ def _load_watch(path: Path, channels: dict[str, Channel]) -> Watch:
         name=path.name,
         dir=path,
         enabled=bool(raw.get("enabled", True)),
-        interval=parse_interval(raw.get("interval", "1h")),
+        interval=interval,
         sources=sources,
         channels=watch_channels,
         claude=_stage_overrides(stages, f"{where} claude"),

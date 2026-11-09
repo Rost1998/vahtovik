@@ -58,3 +58,8 @@ def test_uneven_period_is_refused(project, systemd, capsys):
     assert cli.main(["install-timer", "--every", "45m"]) == 2
     assert "must divide an hour or a day" in capsys.readouterr().err
     assert systemd == [] and not timer.unit_dir().exists()
+
+
+def test_the_timer_fires_every_minute_by_default(project, systemd):
+    assert cli.main(["install-timer"]) == 0
+    assert "OnCalendar=*:0/1" in (timer.unit_dir() / "vahtovik.timer").read_text()

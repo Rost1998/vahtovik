@@ -49,6 +49,8 @@ CREATE TABLE IF NOT EXISTS cost_points (
     session_id TEXT, total_usd REAL, at TEXT, PRIMARY KEY (session_id, total_usd));
 CREATE TABLE IF NOT EXISTS group_aliases (
     watch TEXT, key TEXT, target TEXT, created_at TEXT, PRIMARY KEY (watch, key));
+CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY, value TEXT);
 """
 
 # Columns added later. Opening an older database adds them.
@@ -64,6 +66,7 @@ COLUMNS = {
                     "scheduled_for": "TEXT"},
     "windows": {"checked_at": "TEXT"},
     "deliveries": {"given_up_warned_at": "TEXT"},
+    "source_state": {"last_run_at": "TEXT"},
 }
 
 
@@ -90,6 +93,10 @@ class State:
                     if (table, name) == ("groups", "checked_at"):
                         # The watchdog checks what changes from now on, not every older session at once.
                         self.execute("UPDATE groups SET checked_at = ?", utc_iso())
+                    if (table, name) == ("source_state", "last_run_at"):
+                        # Sources had their watch's time before each source had its own.
+                        self.execute("UPDATE source_state SET last_run_at = (SELECT last_run_at FROM watch_state w "
+                                     "WHERE w.watch = source_state.watch)")
 
     def _artifact_key(self) -> list[str]:
         return [r["name"] for r in sorted(self.rows("PRAGMA table_info(artifacts)"), key=lambda r: r["pk"]) if r["pk"]]
@@ -143,15 +150,27 @@ class State:
     def run_cost(self, run_id: str) -> float:
         return self.row("SELECT COALESCE(SUM(cost_usd), 0) AS c FROM sessions WHERE run_id = ?", run_id)["c"]
 
-    def last_run(self, watch: str) -> str | None:
-        row = self.row("SELECT last_run_at FROM watch_state WHERE watch = ?", watch)
+    def get_meta(self, key: str) -> str | None:
+        row = self.row("SELECT value FROM meta WHERE key = ?", key)
+        return row["value"] if row else None
+
+    def set_meta(self, key: str, value: str) -> None:
+        self.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", key, value)
+
+    def source_last_run(self, watch: str, source_id: str) -> str | None:
+        """When the source was last monitored, or None if never."""
+        row = self.row("SELECT last_run_at FROM source_state WHERE watch = ? AND source_id = ?", watch, source_id)
         return row["last_run_at"] if row else None
 
-    def set_last_run(self, watch: str) -> None:
+    def watch_last_run(self, watch: str) -> str | None:
+        """When a source of the watch was last monitored, or None if never."""
+        return self.row("SELECT MAX(last_run_at) AS at FROM source_state WHERE watch = ?", watch)["at"]
+
+    def set_source_run(self, watch: str, source_id: str) -> None:
         self.execute(
-            "INSERT INTO watch_state (watch, last_run_at) VALUES (?, ?) "
-            "ON CONFLICT (watch) DO UPDATE SET last_run_at = excluded.last_run_at",
-            watch, utc_iso(),
+            "INSERT INTO source_state (watch, source_id, last_run_at) VALUES (?, ?, ?) "
+            "ON CONFLICT (watch, source_id) DO UPDATE SET last_run_at = excluded.last_run_at",
+            watch, source_id, utc_iso(),
         )
 
     def source_ok(self, watch: str, source_id: str) -> None:

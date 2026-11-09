@@ -23,10 +23,10 @@ uv run vahtovik open example/uv-0-13                 # talk to a group's agent
 
 ## How a run works
 
-`vahtovik run` does one cycle. It monitors every enabled watch whose `interval` has passed, and starts the turns of the groups with new artifacts:
+`vahtovik run` does one cycle. It monitors the sources of enabled watches whose `interval` has passed, and starts the turns of the groups with new artifacts:
 
-1. **Monitor**: one throwaway session per source. It follows the source skill and `monitor.md`, and returns new artifacts with a `group_key`. vahtovik drops artifacts it has seen, creates new groups, and saves the artifacts.
-2. **Group turn**: for each group with new artifacts, vahtovik resumes the group's session in a tmux window and goes on: it does not wait for the turn to end. The agent processes the artifacts by `process/*.md`, updates `context.md`, reports by `report.md` with `vahtovik report`, and ends the turn with its status (see below). At most `claude.parallel_turns` (5) turns work at once; turns that wait for their background work or for a person do not count. The rest start at a later run: every run starts the turns that can start, even when no watch's `interval` has passed.
+1. **Monitor**: one throwaway session per due source. Each source has its own `interval`; without one, it has its watch's `interval`. It follows the source skill and `monitor.md`, and returns new artifacts with a `group_key`. vahtovik drops artifacts it has seen, creates new groups, and saves the artifacts.
+2. **Group turn**: for each group with new artifacts, vahtovik resumes the group's session in a tmux window and goes on: it does not wait for the turn to end. The agent processes the artifacts by `process/*.md`, updates `context.md`, reports by `report.md` with `vahtovik report`, and ends the turn with its status (see below). At most `claude.parallel_turns` (5) turns work at once; turns that wait for their background work or for a person do not count. The rest start at a later run: every run starts the turns that can start, even when no source is due.
 3. **Deliver**: failed deliveries are retried, up to 5 attempts.
 
 ## Group sessions
@@ -68,7 +68,7 @@ Sessions run with `bypassPermissions`. The shared skill (`skills/shared/SKILL.md
 
 ## Watchdog
 
-The watchdog looks after the group sessions at the start of every run, so the timer's period sets its pace; 5 minutes is the right period (see Scheduling). At the start of every run:
+The watchdog looks after the group sessions at the start of a run, once `watchdog.every` (5 minutes) has passed since it last did. Then:
 
 - it closes the windows of failed groups that nobody looks at;
 - it fails the turns whose window closed before the agent reported its status, so they are retried;
@@ -104,7 +104,7 @@ vahtovik writes one short line per key event to `data/journal.log`: runs, monito
 2026-10-17 15:20:01 interactive         example/uv-0-13: Started interactive session, resumed session 1b2c3d4e
 ```
 
-The second column says who wrote the line: a timer run, an `interactive` session, or a `manual` command. A run does not wait for its group turns, so the lines of a turn's agent come after the run's last line, with the run's id. Problems start with "Failed" or "Skipped". A run with nothing due writes one line, such as `Nothing due: example in 4h12m`, so you can see the timer works.
+The second column says who wrote the line: a timer run, an `interactive` session, or a `manual` command. A run does not wait for its group turns, so the lines of a turn's agent come after the run's last line, with the run's id. Problems start with "Failed" or "Skipped". A run with nothing due writes one line, such as `Nothing due: example in 4h12m` (the time until the watch's next source is due), so you can see the timer works.
 
 - `vahtovik log -f`: watch what happens now.
 - `vahtovik log example/uv-0-13`: one group's history. Any text works as a filter: a watch, a run, a date.
@@ -114,9 +114,9 @@ The second column says who wrote the line: a timer run, an `interactive` session
 
 ## Configuration
 
-- `vahtovik.yaml`: Claude login mode (`subscription` or `api-key`), the default model and effort (`opus`, the newest Opus, and `high`), model, effort and dollar cap per stage, how many group turns work at once (`claude.parallel_turns`), and channels. A watch can set its own model and effort in `watch.yaml` (`claude: {model: ..., effort: ...}`), and override the settings of a stage (`claude: {group: {effort: xhigh}}`). Later ones win: `vahtovik.yaml`'s model and effort, its stage settings, the watch's model and effort, the watch's stage settings. The watchdog belongs to no watch, so only `vahtovik.yaml` sets it.
+- `vahtovik.yaml`: Claude login mode (`subscription` or `api-key`), the default model and effort (`opus`, the newest Opus, and `high`), model, effort and dollar cap per stage, how many group turns work at once (`claude.parallel_turns`), the watchdog's pace and notices, and channels. A watch can set its own model and effort in `watch.yaml` (`claude: {model: ..., effort: ...}`), and override the settings of a stage (`claude: {group: {effort: xhigh}}`). Later ones win: `vahtovik.yaml`'s model and effort, its stage settings, the watch's model and effort, the watch's stage settings. The watchdog belongs to no watch, so only `vahtovik.yaml` sets it.
 - `.env`: shared secrets, such as channel tokens and `ANTHROPIC_API_KEY`; see `.env.example`.
-- `watches/<name>/`: `watch.yaml` (interval, sources, channels), `monitor.md`, `process/*.md` (used in name order), `report.md`. See `watches/example/`.
+- `watches/<name>/`: `watch.yaml` (interval, sources, channels), `monitor.md`, `process/*.md` (used in name order), `report.md`. See `watches/example/`. A source may set its own `interval`; the watch's `interval` is the default for its sources.
 - `watches/<name>/.env`: the watch's own secrets, such as source tokens. Only this watch's sessions get them, so two watches can each have their own `GITHUB_TOKEN`. If one watch has two sources of the same type with different tokens, give a source `env: {GITHUB_TOKEN: GITHUB_TOKEN_ORG_B}`: its scripts then get `GITHUB_TOKEN` set to the value of `GITHUB_TOKEN_ORG_B`.
 - `skills/`: see [skills/README.md](skills/README.md) for the source and channel contracts.
 
@@ -145,7 +145,7 @@ The sessions that vahtovik starts never load the root `CLAUDE.md`: monitoring, g
 
 | Command | What it does |
 |---|---|
-| `run [--watch W] [--stage monitor\|group\|deliver] [--force] [--dry-run]` | one cycle; `--force` ignores intervals; `--dry-run` makes channels print instead of send |
+| `run [--watch W] [--stage monitor\|group\|deliver] [--force] [--dry-run]` | one cycle; `--force` monitors every source, whatever its interval; `--dry-run` makes channels print instead of send |
 | `open W/KEY [--new-session]` | show a group's session window, starting the session if it is not running |
 | `report --channel C [--subject S]` | send a report, body on stdin (inside a session, the group comes from the environment) |
 | `turn finished\|scheduled\|waiting\|background [--importance I] [--summary S] [--question Q ...] [--reason R] [--after 6h] [--check-after 30m]` | for agents: end a turn with the group's status |
@@ -156,19 +156,19 @@ The sessions that vahtovik starts never load the root `CLAUDE.md`: monitoring, g
 | `artifact add W --group KEY [--group KEY ...]` | add artifacts, as JSON on stdin (one object or a list, by `src/vahtovik/schemas/artifact.json`), to each group named; they wait for each group's next turn |
 | `tell W/KEY [W/KEY ...] [--message M]` | pass a message (default: stdin) to group sessions: typed into an open window, or the session starts with it |
 | `log [TEXT] [-n N] [-f]` | the last N journal lines (default 40, 0 for all) that contain TEXT; `-f` keeps showing new lines |
-| `status [--watch W] [-v]` | a table of watches and their groups: each watch's state (enabled or disabled), its period, and the time left until a run monitors it again; each group's status, processed artifacts and cost in the last 24 hours and 30 days; the totals per watch and for all; and undelivered reports; then the cost of group, monitor and watchdog sessions in all watches in the same periods, and in total. `-v` gives all details as text instead: sources, sessions, status reasons, and costs for all time too |
-| `install-timer [--every 5m]` | start vahtovik periodically with a systemd user timer |
+| `status [--watch W] [-v]` | a table of watches and their groups: each watch's state (enabled or disabled), its sources' intervals, and the time left until a run monitors its next source; each group's status, processed artifacts and cost in the last 24 hours and 30 days; the totals per watch and for all; and undelivered reports; then the cost of group, monitor and watchdog sessions in all watches in the same periods, and in total. `-v` gives all details as text instead: sources with their intervals and next times, sessions, status reasons, and costs for all time too |
+| `install-timer [--every 1m]` | start vahtovik periodically with a systemd user timer |
 | `uninstall-timer` | remove that timer |
 | `check` | validate config, skills, environment variables, `claude`, its trust of the project folder, and tmux |
 | `test-channel C [--dry-run]` | send a test message, no AI |
 
 ## Scheduling
 
-vahtovik has no background process. A timer starts one cycle at a fixed period. Each watch is monitored only when its own `interval` has passed, but every cycle checks the group sessions and starts the group turns that wait. Keep the period at 5 minutes, the default: the watchdog checks the sessions only at the start of a cycle.
+vahtovik has no background process. A timer starts one cycle at a fixed period, every minute by default. Each source is monitored only when its own `interval` has passed, and the watchdog runs only every `watchdog.every` (5 minutes), but every cycle starts the group turns that wait. Nothing runs more often than the timer fires, so keep the period at 1 minute, the default.
 
-Runs never overlap. Group turns go on in their windows after the run that started them, and have no time limit. A run that starts while another is still going does nothing and writes a line such as `Skipped run: run 20261020-140312 has been going for 47m00s`. Watches that are due stay due, so the first run after the long one picks them up. The systemd timer does not even start a run while one is going, so these fires leave no line.
+Runs never overlap. Group turns go on in their windows after the run that started them, and have no time limit. A run that starts while another is still going does nothing and writes a line such as `Skipped run: run 20261020-140312 has been going for 47m00s`. Sources that are due stay due, so the first run after the long one picks them up. The systemd timer does not even start a run while one is going, so these fires leave no line.
 
-`vahtovik install-timer [--every 5m]` sets up a systemd user timer and starts it. The period must divide an hour or a day: 5m, 15m, 30m, 1h, 6h, 1d. Run it again to change the period. `vahtovik uninstall-timer` removes the timer.
+`vahtovik install-timer [--every 1m]` sets up a systemd user timer and starts it. The period must divide an hour or a day: 1m, 5m, 15m, 30m, 1h, 6h, 1d. Run it again to change the period. `vahtovik uninstall-timer` removes the timer.
 
 - `systemctl --user list-timers vahtovik.timer` shows the next run.
 - `journalctl --user -u vahtovik` shows anything a run prints, such as a crash trace.
@@ -179,7 +179,7 @@ Runs never overlap. Group turns go on in their windows after the run that starte
 Without systemd, use cron with `bin/vahtovik-cron`. It writes anything a run prints to `data/logs/<date>.log`.
 
 ```cron
-*/5 * * * * /path/to/vahtovik/bin/vahtovik-cron
+* * * * * /path/to/vahtovik/bin/vahtovik-cron
 ```
 
 ## Development

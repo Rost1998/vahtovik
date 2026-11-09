@@ -119,6 +119,17 @@ def test_parallel_turns_is_5_unless_set(project):
 def test_old_watchdog_timing_settings_are_ignored(project):
     path = project.root / "vahtovik.yaml"
     data = yaml.safe_load(path.read_text())
+    assert config_mod.load(project.root).watchdog.every == timedelta(minutes=5)
     data["watchdog"] = {"every": "1m", "check_every": "5m", "notify_every": "2h"}
     path.write_text(yaml.safe_dump(data))
-    assert config_mod.load(project.root).watchdog.notify_every == timedelta(hours=2)
+    settings = config_mod.load(project.root).watchdog
+    assert settings.notify_every == timedelta(hours=2) and settings.every == timedelta(minutes=1)
+
+
+def test_a_source_has_the_watchs_interval_unless_it_sets_its_own(project):
+    path = project.root / "watches/w1/watch.yaml"
+    data = yaml.safe_load(path.read_text())
+    data["sources"][1]["interval"] = "1m"
+    path.write_text(yaml.safe_dump(data))
+    a, b = config_mod.load(project.root).watch("w1").sources
+    assert (a.interval, b.interval) == (timedelta(hours=1), timedelta(minutes=1))

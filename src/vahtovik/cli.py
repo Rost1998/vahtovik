@@ -33,9 +33,19 @@ def _load(who: str | None = None, echo: bool = False) -> tuple[Config, State]:
     return cfg, State(cfg.db_path)
 
 
-def _due(state: State, watch, now: datetime) -> bool:
-    last = state.last_run(watch.name)
-    return last is None or datetime.fromisoformat(last) + watch.interval <= now
+def _next_monitoring(state: State, watch, source) -> datetime | None:
+    """When the source is due: its interval after it was last monitored, or None if it never was."""
+    last = state.source_last_run(watch.name, source.id)
+    return datetime.fromisoformat(last) + source.interval if last else None
+
+
+def _due_sources(state: State, watch, now: datetime, force: bool) -> list:
+    return [s for s in watch.sources if force or (_next_monitoring(state, watch, s) or now) <= now]
+
+
+def _watch_next(state: State, watch, now: datetime) -> datetime | None:
+    """When the watch's next source is due, or None for a watch without sources."""
+    return min(((_next_monitoring(state, watch, s) or now) for s in watch.sources), default=None)
 
 
 def _nothing_due(state: State, watches, now: datetime, stage: str | None) -> str:
@@ -45,8 +55,8 @@ def _nothing_due(state: State, watches, now: datetime, stage: str | None) -> str
         return "no group turn can start"
     if not watches:
         return "no enabled watches"
-    waits = (datetime.fromisoformat(state.last_run(w.name)) + w.interval - now for w in watches)
-    text = ", ".join(f"{w.name} in {duration(wait.total_seconds())}" for w, wait in zip(watches, waits))
+    nexts = [(w, _watch_next(state, w, now)) for w in watches]
+    text = ", ".join(f"{w.name} in {duration((at - now).total_seconds())}" for w, at in nexts if at) or "no sources"
     scheduled = [g for g in (state.next_scheduled(w.name) for w in watches) if g]
     if scheduled:
         first = min(scheduled, key=lambda g: g["scheduled_at"])
@@ -75,6 +85,15 @@ def cmd_run(args) -> int:
         return 0
 
 
+def _watchdog(cfg: Config, state: State, tmux: Tmux, claude: Claude, run_id: str) -> None:
+    """The watchdog runs at a run's start once `watchdog.every` has passed since it last did."""
+    last = state.get_meta("watchdog_at")
+    if last and datetime.fromisoformat(last) + cfg.watchdog.every > datetime.now(timezone.utc):
+        return
+    state.set_meta("watchdog_at", utc_iso())
+    watchdog.tick(cfg, state, tmux, claude, run_id)
+
+
 def _running(lock: Path) -> str:
     """Which run holds the run lock, from what it wrote into the lock file."""
     try:
@@ -87,10 +106,12 @@ def _running(lock: Path) -> str:
 def _run(cfg: Config, state: State, args, run_id: str) -> int:
     tmux, claude = Tmux(cfg), Claude(cfg)
     costs.update(state, claude)  # before Claude Code deletes old conversation files
-    watchdog.tick(cfg, state, tmux, claude, run_id)
+    _watchdog(cfg, state, tmux, claude, run_id)
     now = datetime.now(timezone.utc)
     watches = [cfg.watch(args.watch)] if args.watch else [w for w in cfg.watches.values() if w.enabled]
-    due = [w for w in watches if args.force or _due(state, w, now)] if args.stage not in ("group", "deliver") else []
+    sources = {w.name: _due_sources(state, w, now, args.force) for w in watches} \
+        if args.stage in (None, "monitor") else {}
+    due = [w for w in watches if sources.get(w.name)]
     # Group turns start at every run, not only when their watch is due: groups left over by an earlier run
     # (claude.parallel_turns, or an open window) start as soon as they can.
     turns_wait = args.stage in (None, "group") and group_turn.can_start(cfg, state, tmux, watches)
@@ -109,12 +130,12 @@ def _run(cfg: Config, state: State, args, run_id: str) -> int:
     status = "ok"
     try:
         for watch in watches:
-            if watch in due and args.stage in (None, "monitor"):
-                new += monitor.run(cfg, state, claude, watch, run_id, raw_dir)
+            if watch in due:
+                new += monitor.run(cfg, state, claude, watch, run_id, raw_dir, sources[watch.name])
+                for source in sources[watch.name] if args.stage is None else []:
+                    state.set_source_run(watch.name, source.id)
             if args.stage in (None, "group"):
                 turns += len(group_turn.run(cfg, state, claude, tmux, watch, run_id))
-            if watch in due and args.stage is None:
-                state.set_last_run(watch.name)
         if args.stage in (None, "deliver"):
             delivery.retry_failed(cfg, state, args.dry_run)
     except BaseException as exc:
@@ -317,12 +338,15 @@ def _table(header: list[str], rows: list[list[str]], footer: list[str], right: t
 
 
 def _period(state: State, watch) -> str:
-    """The watch's period and, if it is enabled, the time left until a run monitors it: "6h (in 4h12m)"."""
-    period = _every(watch.interval)
+    """The intervals of the watch's sources and, if it is enabled, the time left until a run monitors the next
+    one: "6h (in 4h12m)", or "1m, 6h (now)"."""
+    intervals = sorted({s.interval for s in watch.sources}) or [watch.interval]
+    period = ", ".join(map(_every, intervals))
     if not watch.enabled:
         return period
-    last = state.last_run(watch.name)
-    left = (datetime.fromisoformat(last) + watch.interval - datetime.now(timezone.utc)) if last else None
+    now = datetime.now(timezone.utc)
+    at = _watch_next(state, watch, now)
+    left = at - now if at else None
     return f"{period} (in {duration(left.total_seconds())})" if left and left > timedelta(0) else f"{period} (now)"
 
 
@@ -359,15 +383,17 @@ def _status_details(cfg: Config, state: State, names: list[str]) -> None:
     group_costs = [state.group_costs(_since(p) if p else None) for p in DETAIL_PERIODS.values()]
     for name in names:
         watch = cfg.watch(name)
-        last = state.last_run(name)
-        print(f"{name}: {'enabled' if watch.enabled else 'disabled'}, every {watch.interval}, "
-              f"last run {human(datetime.fromisoformat(last)) if last else 'never'}, "
+        last = state.watch_last_run(name)
+        print(f"{name}: {'enabled' if watch.enabled else 'disabled'}, "
+              f"last monitored {human(datetime.fromisoformat(last)) if last else 'never'}, "
               f"group sessions {_spent(group_costs, lambda k: k[0] == name)}")
         for src in watch.sources:
             row = state.row("SELECT * FROM source_state WHERE watch = ? AND source_id = ?", name, src.id)
             error = f", last error: {row['last_error']}" if row and row["last_error"] and (
                 not row["last_ok_at"] or row["last_error_at"] > row["last_ok_at"]) else ""
-            print(f"  source {src.id} ({src.skill}){error}")
+            at = _next_monitoring(state, watch, src)
+            print(f"  source {src.id} ({src.skill}): every {_every(src.interval)}, next "
+                  f"{human(at) if at and at > datetime.now(timezone.utc) else 'now'}{error}")
         for g in state.groups(name):
             summary = _artifact_counts(state, name, g["key"])
             status = g["status"] + (f": {g['status_reason']}" if g["status_reason"] else "")
@@ -501,7 +527,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("run", help="run one monitoring cycle")
     p.add_argument("--watch", help="only this watch")
     p.add_argument("--stage", choices=["monitor", "group", "deliver"], help="only this stage")
-    p.add_argument("--force", action="store_true", help="ignore the watch interval")
+    p.add_argument("--force", action="store_true", help="ignore the sources' intervals")
     p.add_argument("--dry-run", action="store_true", help="channels print instead of sending")
     p.set_defaults(func=cmd_run)
 
@@ -591,9 +617,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_log)
 
     p = sub.add_parser("install-timer", help="start vahtovik periodically with a systemd user timer")
-    p.add_argument("--every", default="5m",
-                   help="how often to start a cycle, which also checks the sessions; must divide an hour or a day "
-                        "(default 5m)")
+    p.add_argument("--every", default="1m",
+                   help="how often to start a cycle; must divide an hour or a day (default 1m)")
     p.set_defaults(func=cmd_install_timer)
 
     p = sub.add_parser("uninstall-timer", help="remove the systemd user timer")

@@ -31,7 +31,7 @@ def on_calendar(every: timedelta) -> str:
         return f"*:0/{minutes}"
     if seconds % 3600 == 0 and 0 < hours <= 24 and 24 % hours == 0:
         return "daily" if hours == 24 else f"0/{hours}:00"
-    raise TimerError("the timer period must divide an hour or a day, for example 5m, 15m, 30m, 1h, 6h or 1d")
+    raise TimerError("the timer period must divide an hour or a day, for example 1m, 5m, 15m, 30m, 1h, 6h or 1d")
 
 
 def _escape(value: str) -> str:

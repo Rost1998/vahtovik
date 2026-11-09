@@ -15,7 +15,8 @@ tmux:                         # group sessions run in windows of this tmux sessi
   session: vahtovik-agents
   socket: vahtovik            # a tmux server of its own (tmux -L vahtovik); null: your default tmux server
 
-watchdog:                     # looks after the group session windows at the start of every run (see README)
+watchdog:                     # looks after the group session windows at the start of a run (see README)
+  every: 5m                   # how often; 0: at every run
   notify_every: 6h            # repeat a notice about a group that waits for you or needs attention; 0: never
   long_turn_after: 3h         # warn once about a group turn running this long; 0: never
 

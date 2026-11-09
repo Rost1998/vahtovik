@@ -10,7 +10,7 @@ import yaml
 
 from .. import artifacts, skills
 from ..claude_session import Claude, SessionSpec
-from ..config import Config, Watch
+from ..config import Config, Source, Watch
 from ..state import State
 from ..util import duration, human, load_schema, render
 
@@ -30,12 +30,14 @@ def _restore(workdir: Path, backup: Path) -> None:
     backup.rename(workdir)
 
 
-def run(cfg: Config, state: State, claude: Claude, watch: Watch, run_id: str, raw_dir: Path) -> int:
+def run(cfg: Config, state: State, claude: Claude, watch: Watch, run_id: str, raw_dir: Path,
+        sources: list[Source] | None = None) -> int:
+    """Monitor the sources (default: all of the watch's). Returns how many new artifacts they brought."""
     shared = skills.shared_skill(cfg.skills_dir).body
     schema = load_schema("monitor")
     rules = watch.monitor_md.read_text() if watch.monitor_md.is_file() else "(monitor.md is missing)"
     total = 0
-    for source in watch.sources:
+    for source in watch.sources if sources is None else sources:
         try:
             skill = skills.load(cfg.skills_dir, "sources", source.skill)
         except skills.SkillError as exc:

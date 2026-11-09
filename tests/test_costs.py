@@ -68,7 +68,7 @@ def test_status_shows_the_cost_of_each_group_its_watch_and_all(project, capsys):
     ]
     assert cli.main(["status", "-v"]) == 0
     out = capsys.readouterr().out
-    assert "last run never, group sessions $2.25 in 24 hours, $2.75 in 30 days, $3.25 in all time\n" in out
+    assert "last monitored never, group sessions $2.25 in 24 hours, $2.75 in 30 days, $3.25 in all time\n" in out
     assert "session s2 | $2.25 in 24 hours, $2.75 in 30 days, $3.25 in all time" in out
     assert "session s3 | $0.00 in 24 hours, $0.00 in 30 days, $0.00 in all time" in out
     assert out.endswith("sessions | 24 hours | 30 days | all time\n"
@@ -105,8 +105,9 @@ def test_sessions_from_before_cost_tracking_count_too(project):
 
 def test_status_shows_when_a_watch_is_monitored_next(project, capsys):
     _cfg, state, _claude = project.load()
-    state.execute("INSERT INTO watch_state (watch, last_run_at) VALUES ('w1', ?)",
-                  utc_iso(datetime.now(timezone.utc) - timedelta(minutes=30)))
+    for source_id, minutes in (("src-a", 30), ("src-b", 10)):
+        state.execute("INSERT INTO source_state (watch, source_id, last_run_at) VALUES ('w1', ?, ?)",
+                      source_id, utc_iso(datetime.now(timezone.utc) - timedelta(minutes=minutes)))
     assert cli.main(["status"]) == 0
     period = capsys.readouterr().out.splitlines()[2].split(" | ")[1].strip()
     assert period in ("1h (in 30m00s)", "1h (in 29m59s)")

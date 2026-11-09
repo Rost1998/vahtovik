@@ -14,7 +14,7 @@ Before you write files, settle with the person:
 - how to group artifacts;
 - how to process and analyze them;
 - what to report, when, and to which channels;
-- how often to check (the interval);
+- how often to check (the interval), for the whole watch or for each source;
 - which credentials the sources and channels need.
 
 Ask about anything unclear.
@@ -62,11 +62,12 @@ The folder name is the watch name. The file names are fixed.
 
 ```yaml
 enabled: true
-interval: 1h                    # how often to monitor: 30m, 6h, 1d
+interval: 1h                    # how often to monitor its sources: 30m, 6h, 1d
 sources:
   - id: org-a-releases          # unique within the watch
     skill: <source type>
     params: {...}               # no secrets here
+    interval: 10m               # optional: this source's own interval
     env: {GITHUB_TOKEN: GITHUB_TOKEN_ORG_A}   # optional: fill a variable from a secret with another name
 channels: [team-telegram]       # channels from vahtovik.yaml this watch may use
 claude:                         # optional overrides of vahtovik.yaml
@@ -103,7 +104,7 @@ Write the rules as plain instructions to an agent. Do not repeat what vahtovik a
 3. Ask the person before `uv run vahtovik run --watch <name> --force --dry-run`. It starts real AI sessions, which cost money; `--dry-run` only stops channels from sending.
 4. `uv run vahtovik log <name>` and `uv run vahtovik status --watch <name>` show the results.
 
-If the watch's interval is shorter than the timer period (`vahtovik install-timer --every`), tell the person: the watch can only run as often as the timer fires.
+If an interval is shorter than the timer period (`vahtovik install-timer --every`, 1 minute by default), tell the person: a source can only be monitored as often as the timer fires.
 
 Never edit `data/`: it is vahtovik's runtime state.
 
@@ -113,7 +114,7 @@ Read the watch's files and `uv run vahtovik status --watch <name> -v` first, and
 
 - New rules in `monitor.md`, `process/` and `report.md` apply from the next run. Group sessions get them with their next turn.
 - `enabled: false` in `watch.yaml` stops the watch: no monitoring, no group turns, no scheduled turns. `enabled: true` starts it again.
-- `interval` is how often monitoring runs. A watch cannot run more often than the timer fires (5 minutes by default). After a change, the next monitoring comes `interval` after the last one; `uv run vahtovik run --watch <name> --force` monitors now (ask first: it starts AI sessions).
+- `interval` is how often monitoring runs: the watch's `interval` is the default for its sources, and a source may set its own. A source cannot be monitored more often than the timer fires (1 minute by default). After a change, the next monitoring of a source comes its `interval` after the last one; `uv run vahtovik run --watch <name> --force` monitors every source of the watch now (ask first: it starts AI sessions).
 - `claude:` sets the model and effort of the watch's sessions, or of one stage (`monitor`, `group`); see section 4.
 - A new source `id` is a new source: its "already seen" state starts empty, so old items can come back, and only exact id matches are dropped. A removed source keeps its state folder in `data/`; adding it back with the same id goes on from there.
 - A channel must be in `vahtovik.yaml` before a watch can list it.

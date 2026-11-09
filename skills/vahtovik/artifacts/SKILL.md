@@ -29,6 +29,6 @@ The person brings items, such as a link, a document or a note. They want them in
    ```
 
    For each artifact and group, the command prints `added` or `there already`. Each group can have an artifact once.
-5. **Tell the person when it happens.** Each group processes its new artifacts at its next turn. The next run starts that turn, within the timer's period (5 minutes by default).
+5. **Tell the person when it happens.** Each group processes its new artifacts at its next turn. The next run starts that turn, within the timer's period (1 minute by default).
    - To start the turns now, run `uv run vahtovik run --watch <watch> --stage group`. Ask first: it starts AI sessions.
    - If the person wants a group agent to do something special with the artifacts, wait until that turn has ended (`vahtovik status`). Then tell the agent (`skills/vahtovik/tell/SKILL.md`).
