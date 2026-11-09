@@ -26,9 +26,11 @@ Run vahtovik as `uv run vahtovik ...` in the project folder.
 - **Group status**: `idle`, `running`, `finished`, `scheduled`, `waiting` (it needs a person's answer), `background`, `maintenance` (it needs a person to fix something) and `failed`.
 - **Runs**: a timer starts `vahtovik run` every minute. A run:
   1. lets the watchdog look after the group sessions, every 5 minutes (`watchdog.every`);
-  2. monitors each source whose `interval` has passed (a source's own, or its watch's), with one AI session per source;
-  3. starts a turn, in a tmux window, for each group with new artifacts or a scheduled turn that is due;
-  4. retries failed reports.
+  2. reads the channels with `input`, and lets you answer their new messages;
+  3. monitors each source whose `interval` has passed (a source's own, or its watch's), with one AI session per source;
+  4. starts a turn, in a tmux window, for each group with new artifacts or a scheduled turn that is due;
+  5. retries failed reports and replies.
+- **Channel-input**: a channel with `input` in `vahtovik.yaml` is read by its type's `receive` script, and you answer the person's messages from it (`channel/SKILL.md`).
 - **Configuration**: `vahtovik.yaml` holds the login mode, the model and effort per stage, how many turns work at once, and the channels. `.env` holds the shared secrets.
 - **Records**: `uv run vahtovik status [--watch W] [-v]` shows the state and costs. `uv run vahtovik log [text]` shows what happened. Each group's `context.md` has its history.
 
@@ -62,4 +64,5 @@ If the person asks you to change vahtovik's own code, work on it as a developer.
 | pass an instruction or a question to group agents | `skills/vahtovik/tell/SKILL.md` | `vahtovik tell` |
 | know what happens or happened | | `vahtovik status`, `vahtovik log`, the groups' `context.md` |
 | talk to a group agent themselves | | tell them to run `uv run vahtovik open <watch>/<key>` in their own terminal: it attaches the terminal, so you cannot run it for them |
-| run a cycle now | | `vahtovik run [--watch W] [--stage monitor\|group\|deliver] [--force] [--dry-run]`; ask first |
+| run a cycle now | | `vahtovik run [--watch W] [--stage input\|monitor\|group\|deliver] [--force] [--dry-run]`; ask first |
+| (your prompt says the person writes through a channel) | `skills/vahtovik/channel/SKILL.md` | answer by its rules |

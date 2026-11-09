@@ -143,3 +143,31 @@ def test_an_unknown_scan_mode_is_rejected(project):
     path.write_text(yaml.safe_dump(data))
     with pytest.raises(ConfigError, match="scan of source 'src-a' must be one of ai, script"):
         config_mod.load(project.root)
+
+
+def test_a_channel_with_input_is_read_every_minute_unless_set(project):
+    path = project.root / "vahtovik.yaml"
+    data = yaml.safe_load(path.read_text())
+    data["channels"]["log"]["input"] = {}
+    data["channels"]["other"]["input"] = {"interval": "5m"}
+    path.write_text(yaml.safe_dump(data))
+    channels = config_mod.load(project.root).channels
+    assert channels["log"].input.interval == timedelta(minutes=1)
+    assert channels["other"].input.interval == timedelta(minutes=5) and channels["broken"].input is None
+    data["channels"]["log"]["input"] = True
+    path.write_text(yaml.safe_dump(data))
+    with pytest.raises(ConfigError, match="input must be a mapping"):
+        config_mod.load(project.root)
+
+
+def test_input_sessions_get_opus_and_xhigh_unless_set(project):
+    cfg = config_mod.load(project.root)
+    assert cfg.stage(None, "input") == config_mod.StageSettings("opus", "xhigh")
+    path = project.root / "vahtovik.yaml"
+    data = yaml.safe_load(path.read_text())
+    data["claude"].update(model="sonnet", effort="low")
+    path.write_text(yaml.safe_dump(data))
+    assert config_mod.load(project.root).stage(None, "input") == config_mod.StageSettings("opus", "xhigh")
+    data["claude"]["stages"]["input"] = {"effort": "max"}
+    path.write_text(yaml.safe_dump(data))
+    assert config_mod.load(project.root).stage(None, "input") == config_mod.StageSettings("opus", "max")

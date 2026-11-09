@@ -3,10 +3,10 @@
 A skill is a folder with a `SKILL.md` file (front matter with `name` and `description`, then instructions for the agent) and optional scripts. To add a source type or a channel, add a folder; no Python changes are needed.
 
 - `shared/`: the shared skill. vahtovik puts it in the system prompt of every group and monitoring session.
-- `vahtovik/`: the skills of the vahtovik agent, which you talk to when you run `claude` in the project folder. The root `CLAUDE.md` loads `vahtovik/SKILL.md`, which names a sub-skill for each kind of task: `create-watch/`, `groups/`, `artifacts/` and `tell/`.
+- `vahtovik/`: the skills of the vahtovik agent, which you talk to when you run `claude` in the project folder, or through a channel with `input`. The root `CLAUDE.md` loads `vahtovik/SKILL.md`, which names a sub-skill for each kind of task: `create-watch/`, `groups/`, `artifacts/`, `tell/` and `channel/`.
 - `watchdog/`: the rules of the watchdog AI session, and the screens it may get past (with their keys) in its front matter.
 - `sources/<name>/`: how to collect items from one kind of source.
-- `channels/<name>/`: how to format and send reports to one kind of channel.
+- `channels/<name>/`: how to format and send reports to one kind of channel, and optionally how to read the person's messages from it.
 
 ## Source skill
 
@@ -39,9 +39,10 @@ A source in `watch.yaml` has `scan: ai` (the default) or `scan: script`:
 ```
 channels/<name>/SKILL.md       formatting rules for the agent
 channels/<name>/send           executable; only vahtovik runs it
+channels/<name>/receive        optional executable, for channels with `input`; only vahtovik runs it
 ```
 
-- Front matter: `name`, `description`, and optionally `required_env: [...]`, which `vahtovik check` verifies.
+- Front matter: `name`, `description`, and optionally `required_env: [...]`, which `vahtovik check` verifies, and `input_env: [...]`: the variables only `receive` needs, verified for channels with `input`.
 - `send` contract:
   - message body on stdin;
   - subject in `VAHTOVIK_SUBJECT`; also `VAHTOVIK_WATCH`, `VAHTOVIK_GROUP`, `VAHTOVIK_CHANNEL`;
@@ -49,5 +50,11 @@ channels/<name>/send           executable; only vahtovik runs it
   - exit code 0 means delivered; the last line of stdout may hold a delivery identifier;
   - any other exit code is a failure, and stderr holds the reason;
   - `VAHTOVIK_DRY_RUN=1` means do not send; print what would be sent to stderr and exit 0;
-  - `VAHTOVIK_PLAIN=1` means the body is plain text from vahtovik itself, such as a notice that a group waits for an answer: if the channel uses markup, escape the body.
+  - `VAHTOVIK_PLAIN=1` means the body is plain text from vahtovik itself, such as a notice that a group waits for an answer: if the channel uses markup, escape the body;
+  - `VAHTOVIK_REPLY_TO` is set when the message answers a message that `receive` read: its id. A channel that can reply to a message does so; others may ignore it. `VAHTOVIK_WATCH` and `VAHTOVIK_GROUP` are empty then.
 - `send` runs in the vahtovik project folder with a 60-second timeout.
+- `receive` contract:
+  - `VAHTOVIK_STATE_DIR` is the channel's state folder, for "last read" markers; also `VAHTOVIK_CHANNEL`, the channel's `env` from `vahtovik.yaml`, and the secrets from `.env`;
+  - it prints `{"messages": [{"id": "...", "text": "...", "from": "...", "time": "..."}], "error": null}`: only messages it has not printed before for this state folder, and only messages from people, never the ones vahtovik sent; `id` must be what `send` needs in `VAHTOVIK_REPLY_TO`;
+  - exit code 0 and `error` null mean success. Anything else fails the read, and vahtovik puts the state folder back;
+  - it runs in the vahtovik project folder with a 60-second timeout.

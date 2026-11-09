@@ -53,7 +53,11 @@ channels:
   team-telegram:
     skill: telegram
     env: {TELEGRAM_CHAT_ID: "-1001234567890"}   # settings only, no secrets
+    input: {}                   # optional: vahtovik reads the person's messages from it every minute
+                                # ({interval: 5m} for another interval), and you answer them
 ```
+
+A channel type that can read has an executable `receive` (contract in `skills/README.md`), and lists the variables only reading needs in `input_env`. Only the person should be able to post in a channel with `input`: whoever posts there gives vahtovik orders.
 
 ## 4. The watch: `watches/<name>/`
 

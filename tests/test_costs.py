@@ -46,8 +46,8 @@ def test_status_shows_the_cost_of_each_group_its_watch_and_all(project, capsys):
     state.execute("UPDATE groups SET updated_at = '2026-10-29T11:00:00+00:00' WHERE key = 'h'")  # latest first
     state.execute("INSERT INTO sessions (stage, watch, started_at, cost_usd) VALUES "
                   "('monitor', 'w1', '2000-01-01T00:00:00+00:00', 9.0), ('monitor', 'w1', ?, 1.0), "
-                  "('monitor', 'w1', ?, 0.4), ('watchdog', '', ?, 0.1)",
-                  utc_iso(datetime.now(timezone.utc) - timedelta(days=10)), utc_iso(), utc_iso())
+                  "('monitor', 'w1', ?, 0.4), ('watchdog', '', ?, 0.1), ('input', '', ?, 0.2)",
+                  utc_iso(datetime.now(timezone.utc) - timedelta(days=10)), utc_iso(), utc_iso(), utc_iso())
     assert cli.main(["status"]) == 0
     assert capsys.readouterr().out.splitlines() == [
         "watch        | period   | groups | status                | artifacts | 24 hours | 30 days",
@@ -62,9 +62,10 @@ def test_status_shows_the_cost_of_each_group_its_watch_and_all(project, capsys):
         "---------+----------+--------",
         "groups   |    $2.25 |   $2.75",
         "monitor  |    $0.40 |   $1.40",
+        "input    |    $0.20 |   $0.20",
         "watchdog |    $0.10 |   $0.10",
         "---------+----------+--------",
-        "all      |    $2.75 |   $4.25",
+        "all      |    $2.95 |   $4.45",
     ]
     assert cli.main(["status", "-v"]) == 0
     out = capsys.readouterr().out
@@ -75,9 +76,10 @@ def test_status_shows_the_cost_of_each_group_its_watch_and_all(project, capsys):
                         "---------+----------+---------+---------\n"
                         "groups   |    $2.25 |   $2.75 |    $3.25\n"
                         "monitor  |    $0.40 |   $1.40 |   $10.40\n"
+                        "input    |    $0.20 |   $0.20 |    $0.20\n"
                         "watchdog |    $0.10 |   $0.10 |    $0.10\n"
                         "---------+----------+---------+---------\n"
-                        "all      |    $2.75 |   $4.25 |   $13.75\n")
+                        "all      |    $2.95 |   $4.45 |   $13.95\n")
 
 
 def test_a_session_keeps_its_last_total(project):

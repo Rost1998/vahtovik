@@ -4,8 +4,13 @@ set -euo pipefail
 
 path="${FILE_CHANNEL_PATH:?FILE_CHANNEL_PATH is not set}"
 body="$(cat)"
+if [[ -n "${VAHTOVIK_REPLY_TO:-}" ]]; then
+    from="reply to message ${VAHTOVIK_REPLY_TO}"
+else
+    from="${VAHTOVIK_WATCH:-?}/${VAHTOVIK_GROUP:-?}"
+fi
 block="## $(date '+%Y-%m-%d %H:%M') · ${VAHTOVIK_SUBJECT:-report}
-_${VAHTOVIK_WATCH:-?}/${VAHTOVIK_GROUP:-?}_
+_${from}_
 
 ${body}
 "

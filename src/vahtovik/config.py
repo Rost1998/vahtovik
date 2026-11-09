@@ -12,7 +12,8 @@ import yaml
 
 CONFIG_FILE = "vahtovik.yaml"
 WATCH_FILE = "watch.yaml"
-STAGES = ("monitor", "group", "watchdog")
+STAGES = ("monitor", "group", "watchdog", "input")
+STAGE_DEFAULTS = {"input": {"model": "opus", "effort": "xhigh"}}  # over the claude model and effort, under its stages
 SCAN_MODES = ("ai", "script")  # who collects a source's items: an AI session, or the source type's scan script
 EFFORTS = ("low", "medium", "high", "xhigh", "max")  # what `claude --effort` takes
 AUTH_MODES = ("subscription", "api-key")
@@ -54,10 +55,16 @@ class WatchdogSettings:
 
 
 @dataclass
+class InputSettings:
+    interval: timedelta = timedelta(minutes=1)  # how often vahtovik reads the channel
+
+
+@dataclass
 class Channel:
     name: str
     skill: str
     env: dict[str, str] = field(default_factory=dict)
+    input: InputSettings | None = None  # set: vahtovik reads the person's messages from the channel and answers them
 
 
 @dataclass
@@ -134,9 +141,11 @@ class Config:
     watchdog: WatchdogSettings = field(default_factory=WatchdogSettings)
 
     def stage(self, watch: Watch | None, stage: str) -> StageSettings:
-        """A stage's settings. Later ones win: vahtovik.yaml's model and effort, its settings for the stage,
-        the watch's model and effort, the watch's settings for the stage."""
+        """A stage's settings. Later ones win: vahtovik.yaml's model and effort, the stage's own defaults
+        (STAGE_DEFAULTS), vahtovik.yaml's settings for the stage, the watch's model and effort, the watch's settings
+        for the stage."""
         merged: dict = {"model": self.claude.model, "effort": self.claude.effort}
+        merged.update(STAGE_DEFAULTS.get(stage, {}))
         merged.update(self.claude.stages.get(stage, {}))
         if watch is not None:
             merged.update({k: v for k, v in (("model", watch.model), ("effort", watch.effort)) if v})
@@ -162,6 +171,9 @@ class Config:
 
     def source_dir(self, watch: str, source_id: str) -> Path:
         return self.data_dir / "watches" / watch / "sources" / source_id
+
+    def channel_dir(self, channel: str) -> Path:
+        return self.data_dir / "channels" / channel
 
     def runs_dir(self, run_id: str) -> Path:
         return self.data_dir / "runs" / run_id
@@ -290,7 +302,15 @@ def _load_channels(raw: object) -> dict[str, Channel]:
         env = item.get("env") or {}
         if not isinstance(env, dict):
             raise ConfigError(f"channel {name!r}: env must be a mapping")
-        channels[name] = Channel(name, str(item["skill"]), {str(k): str(v) for k, v in env.items()})
+        reading = item.get("input")
+        if reading is not None and not isinstance(reading, dict):
+            raise ConfigError(f"channel {name!r}: input must be a mapping, such as {{}} or {{interval: 5m}}")
+        settings = None
+        if reading is not None:
+            settings = InputSettings()
+            if reading.get("interval"):
+                settings.interval = parse_interval(reading["interval"])
+        channels[name] = Channel(name, str(item["skill"]), {str(k): str(v) for k, v in env.items()}, settings)
     return channels
 
 

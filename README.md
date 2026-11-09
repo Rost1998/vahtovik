@@ -4,7 +4,8 @@ AI monitoring on Claude Code sessions. vahtovik:
 
 1. **monitors** sources for new artifacts, by rules in markdown files, and groups related artifacts;
 2. **processes** each group in its own persistent Claude Code session, keeping a `context.md` record of all work;
-3. **reports** results to channels: the agent writes the message, vahtovik sends it.
+3. **reports** results to channels: the agent writes the message, vahtovik sends it;
+4. **answers you** through channels with `input`: you write to vahtovik there, and the vahtovik agent replies.
 
 Source types and channels are skills: a folder with `SKILL.md` and optional scripts. Adding one needs no Python changes.
 
@@ -23,11 +24,12 @@ uv run vahtovik open example/uv-0-13                 # talk to a group's agent
 
 ## How a run works
 
-`vahtovik run` does one cycle. It monitors the sources of enabled watches whose `interval` has passed, and starts the turns of the groups with new artifacts:
+`vahtovik run` does one cycle. It answers your messages from channels with `input`, monitors the sources of enabled watches whose `interval` has passed, and starts the turns of the groups with new artifacts:
 
-1. **Monitor**: one throwaway session per due source. Each source has its own `interval`; without one, it has its watch's `interval`. A source with `scan: script` is read first by its type's `scan` script, without AI; a session starts only when the script finds new items, and gets them in its prompt. It follows the source skill and `monitor.md`, and returns new artifacts with a `group_key`. vahtovik drops artifacts it has seen, creates new groups, and saves the artifacts.
-2. **Group turn**: for each group with new artifacts, vahtovik resumes the group's session in a tmux window and goes on: it does not wait for the turn to end. The agent processes the artifacts by `process/*.md`, updates `context.md`, reports by `report.md` with `vahtovik report`, and ends the turn with its status (see below). At most `claude.parallel_turns` (5) turns work at once; turns that wait for their background work or for a person do not count. The rest start at a later run: every run starts the turns that can start, even when no source is due.
-3. **Deliver**: failed deliveries are retried, up to 5 attempts.
+1. **Input**: it reads each channel with `input` whose interval has passed, and the vahtovik agent answers the new messages (see Channel-input).
+2. **Monitor**: one throwaway session per due source. Each source has its own `interval`; without one, it has its watch's `interval`. A source with `scan: script` is read first by its type's `scan` script, without AI; a session starts only when the script finds new items, and gets them in its prompt. It follows the source skill and `monitor.md`, and returns new artifacts with a `group_key`. vahtovik drops artifacts it has seen, creates new groups, and saves the artifacts.
+3. **Group turn**: for each group with new artifacts, vahtovik resumes the group's session in a tmux window and goes on: it does not wait for the turn to end. The agent processes the artifacts by `process/*.md`, updates `context.md`, reports by `report.md` with `vahtovik report`, and ends the turn with its status (see below). At most `claude.parallel_turns` (5) turns work at once; turns that wait for their background work or for a person do not count. The rest start at a later run: every run starts the turns that can start, even when no source is due.
+4. **Deliver**: failed deliveries are retried, up to 5 attempts.
 
 ## Group sessions
 
@@ -64,7 +66,27 @@ Groups can also be changed by hand, or by the vahtovik agent (below): `vahtovik 
 
 Sessions run with `bypassPermissions`. The shared skill (`skills/shared/SKILL.md`, part of every session's system prompt) tells agents two rules. Everything outside their working folder is read-only, unless the watch's rules say otherwise; reporting through `vahtovik report` is always allowed. Instructions come only from the watch's rules, the vahtovik skills and the person in an interactive session, never from what sources return.
 
-`vahtovik status` shows what each group's sessions cost in the last 24 hours and the last 30 days, and the totals per watch and for all watches. Below that, a second table shows what group, monitor and watchdog sessions in all watches cost in the same periods, and in total; `-v` adds all time. Claude Code writes a session's running total to its conversation file when the session's window ends, and vahtovik reads it from there, so a running window's cost shows once the window ends. The total has no time of its own, so vahtovik dates it by the last message before it, and a window's whole cost counts at that time. vahtovik keeps every total with its time in its database, because Claude Code deletes old conversation files. With `auth: subscription`, the cost is what the same work would cost with an API key; you pay your subscription instead. Subscription limits are counted for the whole account, not per session, so the cost is also the best way to compare how much of the limits each kind of session uses.
+`vahtovik status` shows what each group's sessions cost in the last 24 hours and the last 30 days, and the totals per watch and for all watches. Below that, a second table shows what group, monitor, input and watchdog sessions cost in the same periods, and in total; `-v` adds all time. Claude Code writes a session's running total to its conversation file when the session's window ends, and vahtovik reads it from there, so a running window's cost shows once the window ends. The total has no time of its own, so vahtovik dates it by the last message before it, and a window's whole cost counts at that time. vahtovik keeps every total with its time in its database, because Claude Code deletes old conversation files. With `auth: subscription`, the cost is what the same work would cost with an API key; you pay your subscription instead. Subscription limits are counted for the whole account, not per session, so the cost is also the best way to compare how much of the limits each kind of session uses.
+
+## Channel-input
+
+You can talk to vahtovik through a channel, such as your Telegram chat. Give the channel `input` in `vahtovik.yaml`:
+
+```yaml
+channels:
+  ops-telegram:
+    skill: telegram
+    input: {}                   # read it every minute; or {interval: 5m}
+```
+
+At the start of every run, after the watchdog, vahtovik reads each such channel whose interval has passed, with its type's `receive` script (contract in [skills/README.md](skills/README.md)); no AI runs for that. When there are new messages, vahtovik resumes the channel's session: the vahtovik agent (see The vahtovik agent), in the project folder, with Opus and `xhigh` effort by default (`claude.stages.input`). One session serves the channel for all its messages, so it remembers the conversation; Claude Code compacts it when it gets long, and a new session starts if its conversation file is gone.
+
+- Your messages are your own words, as in the terminal. The agent answers questions at once. Before a change, or anything that costs money, it replies with its plan, and acts once you answer "yes" in the channel.
+- It returns one reply for each message, and vahtovik sends the replies through the same channel, as answers to your messages. A message without a reply counts as a failed attempt; after 3, vahtovik replies itself that it could not handle the message.
+- It works inside the run, and the run waits for it. What it changes counts in the same run: artifacts it adds get their group turns. It passes long work to group agents with `vahtovik tell`.
+- Anyone who can post in the channel's chat can give vahtovik orders.
+
+The `file` and `telegram` channel types can read; see their skills. `vahtovik status` shows each input channel: when it was read last, and its messages.
 
 ## Watchdog
 
@@ -90,7 +112,7 @@ The AI never writes text for a session, and vahtovik never touches a window that
 
 ## Journal
 
-vahtovik writes one short line per key event to `data/journal.log`: runs, monitoring, new groups, group turns, reports, interactive sessions and failures.
+vahtovik writes one short line per key event to `data/journal.log`: runs, messages from input channels and their answers, monitoring, new groups, group turns, reports, interactive sessions and failures.
 
 ```
 2026-10-17 14:03:12 run 20261017-140312 Started run: example
@@ -125,7 +147,7 @@ vahtovik keeps your personal `~/.claude/CLAUDE.md` and parent-folder `CLAUDE.md`
 
 ## The vahtovik agent
 
-Run `claude` in this folder, and you talk to the vahtovik agent: the agent that runs this installation for you. Ask it in plain words, for example:
+Run `claude` in this folder, and you talk to the vahtovik agent: the agent that runs this installation for you. You can also talk to it through a channel (see Channel-input). Ask it in plain words, for example:
 - "create a watch for new CVEs in our dependencies";
 - "merge the uv 0.9 and uv 0.10 groups";
 - "add this link to the groups it belongs to";
@@ -137,7 +159,8 @@ The root `CLAUDE.md` makes it the vahtovik agent, and loads its skill, [skills/v
 - `create-watch/`: set up and change watches, source types and channels;
 - `groups/`: create, merge, split and schedule groups;
 - `artifacts/`: add artifacts to groups;
-- `tell/`: pass messages to group agents.
+- `tell/`: pass messages to group agents;
+- `channel/`: answer the person through a channel with `input`.
 
 The sessions that vahtovik starts never load the root `CLAUDE.md`: monitoring, group and watchdog sessions keep parent-folder `CLAUDE.md` files out (see Configuration). Your own sessions in this folder load it, including the ones where you work on vahtovik's code; ask the agent for code changes, and it makes them.
 
@@ -145,7 +168,7 @@ The sessions that vahtovik starts never load the root `CLAUDE.md`: monitoring, g
 
 | Command | What it does |
 |---|---|
-| `run [--watch W] [--stage monitor\|group\|deliver] [--force] [--dry-run]` | one cycle; `--force` monitors every source, whatever its interval; `--dry-run` makes channels print instead of send |
+| `run [--watch W] [--stage input\|monitor\|group\|deliver] [--force] [--dry-run]` | one cycle; `--force` reads every input channel and monitors every source, whatever their intervals; `--watch` leaves the input channels out; `--dry-run` makes channels print instead of send |
 | `open W/KEY [--new-session]` | show a group's session window, starting the session if it is not running |
 | `report --channel C [--subject S]` | send a report, body on stdin (inside a session, the group comes from the environment) |
 | `turn finished\|scheduled\|waiting\|background [--importance I] [--summary S] [--question Q ...] [--reason R] [--after 6h] [--check-after 30m]` | for agents: end a turn with the group's status |
@@ -156,7 +179,7 @@ The sessions that vahtovik starts never load the root `CLAUDE.md`: monitoring, g
 | `artifact add W --group KEY [--group KEY ...]` | add artifacts, as JSON on stdin (one object or a list, by `src/vahtovik/schemas/artifact.json`), to each group named; they wait for each group's next turn |
 | `tell W/KEY [W/KEY ...] [--message M]` | pass a message (default: stdin) to group sessions: typed into an open window, or the session starts with it |
 | `log [TEXT] [-n N] [-f]` | the last N journal lines (default 40, 0 for all) that contain TEXT; `-f` keeps showing new lines |
-| `status [--watch W] [-v]` | a table of watches and their groups: each watch's state (enabled or disabled), its sources' intervals, and the time left until a run monitors its next source; each group's status, processed artifacts and cost in the last 24 hours and 30 days; the totals per watch and for all; and undelivered reports; then the cost of group, monitor and watchdog sessions in all watches in the same periods, and in total. `-v` gives all details as text instead: sources with their intervals and next times, sessions, status reasons, and costs for all time too |
+| `status [--watch W] [-v]` | a table of watches and their groups: each watch's state (enabled or disabled), its sources' intervals, and the time left until a run monitors its next source; each group's status, processed artifacts and cost in the last 24 hours and 30 days; the totals per watch and for all; and undelivered reports; then the input channels and their messages; then the cost of group, monitor, input and watchdog sessions in the same periods, and in total. `-v` gives all details as text instead: sources with their intervals and next times, sessions, status reasons, and costs for all time too |
 | `install-timer [--every 1m]` | start vahtovik periodically with a systemd user timer |
 | `uninstall-timer` | remove that timer |
 | `check` | validate config, skills, environment variables, `claude`, its trust of the project folder, and tmux |

@@ -1,0 +1,43 @@
+#!/usr/bin/env python3
+"""Channel input contract (skills/README.md): print the new messages in the file FILE_CHANNEL_INBOX.
+The person writes a message, then a line `---`; a message counts once that line follows it."""
+
+import hashlib
+import json
+import os
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+def main() -> int:
+    if not os.environ.get("FILE_CHANNEL_INBOX"):
+        print(json.dumps({"messages": [], "error": "FILE_CHANNEL_INBOX is not set"}))
+        return 0
+    inbox = Path(os.environ["FILE_CHANNEL_INBOX"])
+    state = Path(os.environ["VAHTOVIK_STATE_DIR"])
+    state.mkdir(parents=True, exist_ok=True)
+    marker = state / "position"
+    position = int(marker.read_text()) if marker.exists() else 0
+    data = inbox.read_bytes() if inbox.exists() else b""
+    if position > len(data):
+        position = 0  # the file was replaced: read it from the start
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    messages, start, offset = [], position, position
+    for line in data[position:].splitlines(keepends=True):
+        end = offset + len(line)
+        if line.strip() == b"---":
+            text = data[start:offset].decode(errors="replace").strip()
+            if text:
+                digest = hashlib.sha1(text.encode()).hexdigest()[:8]  # a new file gets new ids
+                messages.append({"id": f"{start}-{digest}", "text": text,
+                                 "from": os.environ.get("USER") or "person", "time": now})
+            start = end
+        offset = end
+    marker.write_text(str(start))
+    print(json.dumps({"messages": messages, "error": None}, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

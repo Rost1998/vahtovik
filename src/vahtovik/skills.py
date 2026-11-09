@@ -10,7 +10,7 @@ import yaml
 KINDS = ("sources", "channels")
 SHARED_SKILL = "shared"
 AGENT_SKILL = "vahtovik"
-AGENT_TASKS = ("create-watch", "groups", "artifacts", "tell")
+AGENT_TASKS = ("create-watch", "groups", "artifacts", "tell", "channel")
 WATCHDOG_SKILL = "watchdog"
 
 

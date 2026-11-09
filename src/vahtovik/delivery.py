@@ -53,25 +53,38 @@ def run_send_script(cfg: Config, channel: str, subject: str, body: str, dry_run:
     return SendResult(False, tail(proc.stderr, 300) or f"exit code {proc.returncode}")
 
 
+def kind(row) -> str:
+    """What a delivery is: a group's `report` or `notice`, or a `reply` to a message from a channel."""
+    return "reply" if row["reply_to"] else ("notice" if row["origin"] == "notice" else "report")
+
+
+def scope(row) -> str:
+    """Whose delivery it is, for the journal: the group, or the channel of a reply."""
+    return f"{row['watch']}/{row['group_key']}" if row["group_key"] else row["channel"]
+
+
 def attempt(cfg: Config, state: State, delivery_id: int, dry_run: bool):
     row = state.delivery(delivery_id)
-    notice = row["origin"] == "notice"
-    result = run_send_script(cfg, row["channel"], row["subject"], row["body"], dry_run,
-                             {"VAHTOVIK_WATCH": row["watch"], "VAHTOVIK_GROUP": row["group_key"]}, plain=notice)
+    extra = {"VAHTOVIK_WATCH": row["watch"], "VAHTOVIK_GROUP": row["group_key"]}
+    if row["reply_to"]:
+        extra["VAHTOVIK_REPLY_TO"] = row["reply_to"]
+    result = run_send_script(cfg, row["channel"], row["subject"], row["body"], dry_run, extra,
+                             plain=row["origin"] == "notice")
     state.update_delivery(delivery_id, result.ok, None if result.ok else result.detail,
                           result.detail if result.ok else None)
-    context = cfg.group_dir(row["watch"], row["group_key"]) / "context.md"
-    context_file.append(context, "Reports",
-                        context_file.report_line(row["channel"], result.ok, result.detail, row["subject"], dry_run))
+    if row["group_key"]:
+        context = cfg.group_dir(row["watch"], row["group_key"]) / "context.md"
+        context_file.append(context, "Reports",
+                            context_file.report_line(row["channel"], result.ok, result.detail, row["subject"], dry_run))
     row = state.delivery(delivery_id)
-    what = f"{'notice' if notice else 'report'} {delivery_id} to {row['channel']}"
+    what = f"{kind(row)} {delivery_id} to {row['channel']}"
     what += f' "{row["subject"]}"' if row["subject"] else ""
     what += " (dry run)" if dry_run else ""
     if result.ok:
-        log.info("%s/%s: Sent %s", row["watch"], row["group_key"], what)
+        log.info("%s: Sent %s", scope(row), what)
     else:
-        log.error("%s/%s: Failed %s (attempt %d of %d): %s", row["watch"], row["group_key"], what,
-                  row["attempts"], MAX_ATTEMPTS, result.detail)
+        log.error("%s: Failed %s (attempt %d of %d): %s", scope(row), what, row["attempts"], MAX_ATTEMPTS,
+                  result.detail)
     return row
 
 
@@ -86,6 +99,16 @@ def report(cfg: Config, state: State, watch_name: str, key: str, channel: str, s
     if not body.strip():
         raise DeliveryError("the message body is empty")
     delivery_id = state.add_delivery(watch_name, key, channel, subject, body, origin, turn_id)
+    return attempt(cfg, state, delivery_id, dry_run)
+
+
+def reply(cfg: Config, state: State, channel: str, subject: str, body: str, reply_to: str, origin: str = "reply",
+          dry_run: bool = False):
+    """Answer a message that came from the channel, through the same channel. `origin` "notice" sends plain text
+    from vahtovik itself."""
+    if not body.strip():
+        raise DeliveryError("the reply is empty")
+    delivery_id = state.add_delivery("", "", channel, subject, body, origin, None, reply_to)
     return attempt(cfg, state, delivery_id, dry_run)
 
 

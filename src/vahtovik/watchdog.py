@@ -419,8 +419,8 @@ def warn_given_up_reports(cfg: Config, state: State) -> None:
         state.execute("UPDATE deliveries SET given_up_warned_at = ? WHERE id = ?",
                       datetime.now(timezone.utc).isoformat(timespec="seconds"), row["id"])
         ref = f"{row['watch']}/{row['group_key']}"
-        log.error("%s: Gave up report %d to %s after %d attempts: %s", ref, row["id"], row["channel"],
-                  row["attempts"], row["last_error"])
+        log.error("%s: Gave up %s %d to %s after %d attempts: %s", delivery.scope(row), delivery.kind(row), row["id"],
+                  row["channel"], row["attempts"], row["last_error"])
         watch = cfg.watches.get(row["watch"])
         if watch is None:
             continue

@@ -51,6 +51,11 @@ CREATE TABLE IF NOT EXISTS group_aliases (
     watch TEXT, key TEXT, target TEXT, created_at TEXT, PRIMARY KEY (watch, key));
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS channel_inputs (
+    channel TEXT PRIMARY KEY, session_id TEXT, last_read_at TEXT, last_ok_at TEXT, last_error TEXT, last_error_at TEXT);
+CREATE TABLE IF NOT EXISTS channel_messages (
+    channel TEXT, id TEXT, text TEXT, sender TEXT, sent_at TEXT, received_at TEXT, status TEXT DEFAULT 'new',
+    attempts INTEGER DEFAULT 0, last_error TEXT, answered_at TEXT, PRIMARY KEY (channel, id));
 """
 
 # Columns added later. Opening an older database adds them.
@@ -65,7 +70,7 @@ COLUMNS = {
     "group_turns": {"artifact_ids": "TEXT", "work_log_before": "INTEGER", "long_warned_at": "TEXT",
                     "scheduled_for": "TEXT"},
     "windows": {"checked_at": "TEXT"},
-    "deliveries": {"given_up_warned_at": "TEXT"},
+    "deliveries": {"given_up_warned_at": "TEXT", "reply_to": "TEXT"},
     "source_state": {"last_run_at": "TEXT"},
 }
 
@@ -501,12 +506,13 @@ class State:
     # deliveries
 
     def add_delivery(self, watch: str, key: str, channel: str, subject: str, body: str,
-                     origin: str, turn_id: str | None) -> int:
+                     origin: str, turn_id: str | None, reply_to: str | None = None) -> int:
+        """A report or notice of a group, or with watch and key "" a reply to a message from a channel."""
         now = utc_iso()
         cursor = self.execute(
             "INSERT INTO deliveries (watch, group_key, channel, subject, body, origin, turn_id, status, "
-            "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)",
-            watch, key, channel, subject, body, origin, turn_id, now, now,
+            "created_at, updated_at, reply_to) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)",
+            watch, key, channel, subject, body, origin, turn_id, now, now, reply_to,
         )
         return int(cursor.lastrowid)
 
@@ -536,3 +542,48 @@ class State:
             "SELECT * FROM deliveries WHERE status IN ('pending', 'failed') AND attempts < ? ORDER BY id",
             max_attempts,
         )
+
+    # channel-input (see stages/channel_input.py)
+
+    def input_state(self, channel: str) -> sqlite3.Row | None:
+        return self.row("SELECT * FROM channel_inputs WHERE channel = ?", channel)
+
+    def input_read(self, channel: str, error: str | None = None) -> None:
+        """The channel was read, with an error or without."""
+        now = utc_iso()
+        self.execute("INSERT OR IGNORE INTO channel_inputs (channel) VALUES (?)", channel)
+        if error:
+            self.execute("UPDATE channel_inputs SET last_read_at = ?, last_error = ?, last_error_at = ? "
+                         "WHERE channel = ?", now, error, now, channel)
+        else:
+            self.execute("UPDATE channel_inputs SET last_read_at = ?, last_ok_at = ? WHERE channel = ?",
+                         now, now, channel)
+
+    def set_input_session(self, channel: str, session_id: str) -> None:
+        self.execute("INSERT OR IGNORE INTO channel_inputs (channel) VALUES (?)", channel)
+        self.execute("UPDATE channel_inputs SET session_id = ? WHERE channel = ?", session_id, channel)
+
+    def add_message(self, channel: str, message_id: str, text: str, sender: str, sent_at: str) -> bool:
+        """Store a message from the channel. Returns False if it is known already."""
+        cursor = self.execute(
+            "INSERT OR IGNORE INTO channel_messages (channel, id, text, sender, sent_at, received_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)", channel, message_id, text, sender, sent_at, utc_iso())
+        return cursor.rowcount == 1
+
+    def waiting_messages(self, channel: str, max_attempts: int) -> list[sqlite3.Row]:
+        """The channel's messages that wait for an answer, the oldest first."""
+        return self.rows("SELECT * FROM channel_messages WHERE channel = ? AND status = 'new' AND attempts < ? "
+                         "ORDER BY received_at, rowid", channel, max_attempts)
+
+    def message_counts(self, channel: str) -> dict[str, int]:
+        return {r["status"]: r["n"] for r in self.rows(
+            "SELECT status, COUNT(*) AS n FROM channel_messages WHERE channel = ? GROUP BY status", channel)}
+
+    def messages_failed_attempt(self, channel: str, ids: list[str], error: str) -> None:
+        self.db.executemany("UPDATE channel_messages SET attempts = attempts + 1, last_error = ? "
+                            "WHERE channel = ? AND id = ?", [(error, channel, i) for i in ids])
+
+    def set_messages(self, channel: str, ids: list[str], status: str) -> None:
+        """Mark messages `answered`, or `failed` when vahtovik gave up on them."""
+        self.db.executemany("UPDATE channel_messages SET status = ?, answered_at = ? WHERE channel = ? AND id = ?",
+                            [(status, utc_iso(), channel, i) for i in ids])

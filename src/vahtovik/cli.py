@@ -17,7 +17,7 @@ from . import config as config_mod
 from . import costs, delivery, group_session, group_status, journal, operations, skills, timer, watchdog, windows
 from .claude_session import Claude
 from .config import Config, ConfigError
-from .stages import group_turn, monitor
+from .stages import channel_input, group_turn, monitor
 from .state import State
 from .tmux import Tmux, TmuxError
 from .util import LockBusy, duration, file_lock, human, plural, utc_iso
@@ -53,6 +53,8 @@ def _nothing_due(state: State, watches, now: datetime, stage: str | None) -> str
         return "no failed reports to retry"
     if stage == "group":
         return "no group turn can start"
+    if stage == "input":
+        return "no messages to answer"
     if not watches:
         return "no enabled watches"
     nexts = [(w, _watch_next(state, w, now)) for w in watches]
@@ -112,23 +114,32 @@ def _run(cfg: Config, state: State, args, run_id: str) -> int:
     sources = {w.name: _due_sources(state, w, now, args.force) for w in watches} \
         if args.stage in (None, "monitor") else {}
     due = [w for w in watches if sources.get(w.name)]
+    # Reading the channels comes before the run's first line: a read that finds nothing writes no line.
+    reading = args.stage in (None, "input") and not args.watch
+    for channel in channel_input.due(cfg, state, now, args.force) if reading else []:
+        channel_input.receive(cfg, state, channel)
+    inputs = channel_input.waiting(cfg, state) if reading else []
     # Group turns start at every run, not only when their watch is due: groups left over by an earlier run
     # (claude.parallel_turns, or an open window) start as soon as they can.
     turns_wait = args.stage in (None, "group") and group_turn.can_start(cfg, state, tmux, watches)
     retry = args.stage in (None, "deliver") and bool(state.retryable_deliveries(delivery.MAX_ATTEMPTS))
-    if not due and not turns_wait and not retry:
+    if not inputs and not due and not turns_wait and not retry:
         log.info("Nothing due: %s", _nothing_due(state, watches, now, args.stage))
         return 0
     flags = [name for name, on in (("forced", args.force), ("dry run", args.dry_run)) if on]
     flags += [f"stage {args.stage}"] if args.stage else []
-    what = ", ".join(w.name for w in due) or ("group turns" if turns_wait else "retrying failed reports")
+    what = ", ".join([*(f"messages in {c.name}" for c in inputs), *(w.name for w in due)]) or (
+        "group turns" if turns_wait else "retrying failed reports")
     log.info("Started run: %s%s", what, f" ({', '.join(flags)})" if flags else "")
     started = time.monotonic()
     raw_dir = cfg.runs_dir(run_id)
-    new = turns = 0
+    new = turns = answered = 0
     state.start_run(run_id)
     status = "ok"
     try:
+        # Messages first: what the channel agent changes, such as added artifacts, counts in this run.
+        for channel in inputs:
+            answered += channel_input.answer(cfg, state, claude, channel, run_id, raw_dir, args.dry_run)
         for watch in watches:
             if watch in due:
                 new += monitor.run(cfg, state, claude, watch, run_id, raw_dir, sources[watch.name])
@@ -145,8 +156,10 @@ def _run(cfg: Config, state: State, args, run_id: str) -> int:
     finally:
         state.finish_run(run_id, status)
     # The turns go on in their windows: their results come to the journal as the agents report them.
-    log.info("Finished run in %s: %s, %s started, $%.2f", duration(time.monotonic() - started),
-             plural(new, "new artifact"), plural(turns, "group turn"), state.run_cost(run_id))
+    done = [plural(new, "new artifact"), f"{plural(turns, 'group turn')} started"]
+    done += [f"{plural(answered, 'message')} answered"] if inputs else []
+    log.info("Finished run in %s: %s, $%.2f", duration(time.monotonic() - started), ", ".join(done),
+             state.run_cost(run_id))
     return 0
 
 
@@ -308,8 +321,25 @@ def _status_table(cfg: Config, state: State, names: list[str]) -> None:
                        right=(4, 5, 6)):
         print(line)
     print()
+    for line in _inputs(cfg, state):
+        print(line)
     for line in _cost_summary(state, dict(PERIODS)):
         print(line)
+
+
+def _inputs(cfg: Config, state: State) -> list[str]:
+    """One line per input channel: how often it is read, when it was last, and its messages."""
+    lines = []
+    for channel in channel_input.input_channels(cfg):
+        row = state.input_state(channel.name)
+        counts = state.message_counts(channel.name)
+        read = human(datetime.fromisoformat(row["last_read_at"])) if row and row["last_read_at"] else "never"
+        error = f", last error: {row['last_error']}" if row and row["last_error"] and (
+            not row["last_ok_at"] or row["last_error_at"] > row["last_ok_at"]) else ""
+        lines.append(f"input channel {channel.name}: every {_every(channel.input.interval)}, last read {read}, "
+                     f"{counts.get('new', 0)} waiting, {counts.get('answered', 0)} answered, "
+                     f"{counts.get('failed', 0)} failed{error}")
+    return lines + [""] if lines else []
 
 
 def _cost_summary(state: State, periods: dict[str, timedelta | None]) -> list[str]:
@@ -318,7 +348,7 @@ def _cost_summary(state: State, periods: dict[str, timedelta | None]) -> list[st
     since = [_since(period) if period else None for period in periods.values()]
     kinds = {"groups": [state.group_costs(s) for s in since]}
     stages = [state.stage_costs(s) for s in since]
-    kinds |= {stage: [{stage: c.get(stage, 0)} for c in stages] for stage in ("monitor", "watchdog")}
+    kinds |= {stage: [{stage: c.get(stage, 0)} for c in stages] for stage in ("monitor", "input", "watchdog")}
     rows = [[kind, *map(_money, costs)] for kind, costs in kinds.items()]
     footer = ["all", *(_money(groups | stage) for groups, stage in zip(kinds["groups"], stages))]
     return _table(["sessions", *periods], rows, footer, right=tuple(range(1, len(periods) + 1)))
@@ -409,6 +439,8 @@ def _status_details(cfg: Config, state: State, names: list[str]) -> None:
     failed = state.row("SELECT COUNT(*) AS n FROM deliveries WHERE status != 'sent'")["n"]
     print(f"undelivered reports: {failed}")
     print()
+    for line in _inputs(cfg, state):
+        print(line)
     for line in _cost_summary(state, DETAIL_PERIODS):
         print(line)
 
@@ -433,9 +465,12 @@ def cmd_check(args) -> int:
             continue
         if not os.access(skill.dir / "send", os.X_OK):
             problems.append(f"channel {name}: {skill.dir / 'send'} is missing or not executable")
-        missing = [v for v in skill.list_meta("required_env") if v not in channel.env and not os.environ.get(v)]
+        needed = skill.list_meta("required_env") + (skill.list_meta("input_env") if channel.input else [])
+        missing = [v for v in needed if v not in channel.env and not os.environ.get(v)]
         if missing:
             problems.append(f"channel {name}: environment variable {', '.join(missing)} not set")
+        if channel.input and not os.access(skill.dir / "receive", os.X_OK):
+            problems.append(f"channel {name}: it has input, but {skill.dir / 'receive'} is missing or not executable")
     for watch in cfg.watches.values():
         for path in (watch.monitor_md, watch.report_md):
             if not path.is_file():
@@ -529,8 +564,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("run", help="run one monitoring cycle")
     p.add_argument("--watch", help="only this watch")
-    p.add_argument("--stage", choices=["monitor", "group", "deliver"], help="only this stage")
-    p.add_argument("--force", action="store_true", help="ignore the sources' intervals")
+    p.add_argument("--stage", choices=["input", "monitor", "group", "deliver"], help="only this stage")
+    p.add_argument("--force", action="store_true", help="ignore the intervals of sources and input channels")
     p.add_argument("--dry-run", action="store_true", help="channels print instead of sending")
     p.set_defaults(func=cmd_run)
 

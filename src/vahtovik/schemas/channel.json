@@ -1,0 +1,21 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["replies"],
+  "properties": {
+    "replies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["to", "subject", "text"],
+        "properties": {
+          "to": {"type": "array", "minItems": 1, "items": {"type": "string"},
+                 "description": "The ids of the messages this reply answers; it is sent as an answer to the first"},
+          "subject": {"type": "string", "description": "A short subject, or empty"},
+          "text": {"type": "string", "minLength": 1, "description": "The reply, formatted by the channel's rules"}
+        }
+      }
+    }
+  }
+}
