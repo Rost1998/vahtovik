@@ -7,6 +7,8 @@ import hashlib
 import json
 import os
 import re
+import shutil
+import subprocess
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from importlib import resources
@@ -95,3 +97,59 @@ def file_lock(path: Path, wait: bool = False):
             yield handle
         finally:
             fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+class StateBackup:
+    """A whole copy of a script's state folder, kept while a script and an AI session work: the scripts move their
+    "already seen" markers, so until vahtovik has saved what they found, the old folder must come back on failure.
+    A backup found at the start means the last run stopped before it saved: `recover()` puts it back.
+    Renames are atomic, so the backup folder only ever holds a whole copy."""
+
+    def __init__(self, folder: Path):
+        self.folder = folder
+        self.backup = folder.with_name(f".{folder.name}.backup")
+        self.partial = folder.with_name(f".{folder.name}.partial")
+
+    def recover(self) -> bool:
+        """Put back a backup that a stopped run left. Returns whether there was one."""
+        shutil.rmtree(self.partial, ignore_errors=True)
+        found = self.backup.exists()
+        if found:
+            self.restore()
+        self.folder.mkdir(parents=True, exist_ok=True)
+        return found
+
+    def take(self) -> None:
+        shutil.copytree(self.folder, self.partial)
+        self.partial.rename(self.backup)
+
+    def restore(self) -> None:
+        """Put the folder back as it was when the backup was taken."""
+        shutil.rmtree(self.folder, ignore_errors=True)
+        self.backup.rename(self.folder)
+
+    def drop(self) -> None:
+        self.backup.rename(self.partial)  # from here a half-removed backup is never taken for a whole one
+        shutil.rmtree(self.partial)
+
+
+def run_json_script(path: Path, env: dict[str, str], cwd: Path, timeout: int) -> tuple[dict | None, str | None]:
+    """Run a skill's script that prints one JSON object with an `error` field.
+    Returns (the object, None), or (None, what went wrong)."""
+    try:
+        proc = subprocess.run([str(path)], capture_output=True, text=True, cwd=cwd, env=env, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return None, f"{path.name} timed out after {timeout} s"
+    except OSError as exc:
+        return None, f"cannot run {path}: {exc}"
+    if proc.returncode != 0:
+        return None, f"{path.name} failed: {tail(proc.stderr, 300) or f'exit code {proc.returncode}'}"
+    try:
+        data = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return None, f"{path.name} did not print JSON: {tail(proc.stdout, 200) or 'no output'}"
+    if not isinstance(data, dict):
+        return None, f"{path.name} did not print a JSON object"
+    if data.get("error"):
+        return None, f"{path.name}: {data['error']}"
+    return data, None

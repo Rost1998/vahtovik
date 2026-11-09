@@ -392,7 +392,7 @@ def _status_details(cfg: Config, state: State, names: list[str]) -> None:
             error = f", last error: {row['last_error']}" if row and row["last_error"] and (
                 not row["last_ok_at"] or row["last_error_at"] > row["last_ok_at"]) else ""
             at = _next_monitoring(state, watch, src)
-            print(f"  source {src.id} ({src.skill}): every {_every(src.interval)}, next "
+            print(f"  source {src.id} ({src.skill}, {src.scan} scan): every {_every(src.interval)}, next "
                   f"{human(at) if at and at > datetime.now(timezone.utc) else 'now'}{error}")
         for g in state.groups(name):
             summary = _artifact_counts(state, name, g["key"])
@@ -448,6 +448,9 @@ def cmd_check(args) -> int:
             except skills.SkillError as exc:
                 problems.append(f"watch {watch.name}, source {src.id}: {exc}")
                 continue
+            if src.scan == "script" and not os.access(skill.dir / "scan", os.X_OK):
+                problems.append(f"watch {watch.name}, source {src.id}: scan is script, but {skill.dir / 'scan'} is "
+                                "missing or not executable")
             missing = [p for p in skill.list_meta("required_params") if p not in src.params]
             if missing:
                 problems.append(f"watch {watch.name}, source {src.id}: missing params {', '.join(missing)}")

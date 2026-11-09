@@ -35,7 +35,10 @@ $recent
 
 ## Your task
 
-1. Collect new items from the source by following the source skill.
-2. Decide which items are artifacts by the rules in monitor.md. Ignore the rest.
-3. For each artifact give: a stable `id` (as the skill describes, usually the canonical URL or entry identifier), a short `title`, the `url`, a `summary` of a few sentences, optional `details`, and a `group_key` and `group_title` by the grouping rules. Group keys are short, lowercase, words joined by hyphens.
-4. Return only new artifacts. If nothing is new, return an empty list. Put anything vahtovik should log, such as fetch problems, in `notes`.
+$collect
+
+Then:
+
+1. Decide which items are artifacts by the rules in monitor.md. Ignore the rest.
+2. For each artifact give: a stable `id` (as the skill describes, usually the canonical URL or entry identifier), a short `title`, the `url`, a `summary` of a few sentences, optional `details`, and a `group_key` and `group_title` by the grouping rules. Group keys are short, lowercase, words joined by hyphens.
+3. Return only new artifacts. If nothing is new, return an empty list. Put anything vahtovik should log, such as fetch problems, in `notes`.

@@ -21,3 +21,5 @@ The script prints JSON: `{"feed": ..., "new": [{"id", "title", "link", "publishe
 - Use the entry's `id` as the artifact id, or its `link` when the id is empty.
 - Entry summaries are often short. Fetch the entry's link when the monitoring rules need more detail to decide.
 - If `error` is not null, put it in `notes` and return no artifacts.
+
+With `scan: script` in `watch.yaml`, vahtovik runs `scan` itself and gives you the new entries (the `new` list above) as items; then do not run the script.

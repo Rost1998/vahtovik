@@ -13,6 +13,7 @@ import yaml
 CONFIG_FILE = "vahtovik.yaml"
 WATCH_FILE = "watch.yaml"
 STAGES = ("monitor", "group", "watchdog")
+SCAN_MODES = ("ai", "script")  # who collects a source's items: an AI session, or the source type's scan script
 EFFORTS = ("low", "medium", "high", "xhigh", "max")  # what `claude --effort` takes
 AUTH_MODES = ("subscription", "api-key")
 
@@ -66,6 +67,7 @@ class Source:
     params: dict = field(default_factory=dict)
     env: dict[str, str] = field(default_factory=dict)  # variable the skill reads -> name of the secret to use
     interval: timedelta = timedelta(hours=1)  # how often to monitor it; watch.yaml's default is the watch's interval
+    scan: str = "ai"  # see SCAN_MODES
 
 
 @dataclass
@@ -306,8 +308,11 @@ def _load_watch(path: Path, channels: dict[str, Channel]) -> Watch:
         env = item.get("env") or {}
         if not isinstance(env, dict):
             raise ConfigError(f"{where}: env of source {item['id']!r} must be a mapping of variable to secret name")
+        scan = str(item.get("scan") or "ai")
+        if scan not in SCAN_MODES:
+            raise ConfigError(f"{where}: scan of source {item['id']!r} must be one of {', '.join(SCAN_MODES)}")
         sources.append(Source(str(item["id"]), str(item["skill"]), params, {str(k): str(v) for k, v in env.items()},
-                              parse_interval(item["interval"]) if item.get("interval") else interval))
+                              parse_interval(item["interval"]) if item.get("interval") else interval, scan))
     ids = [s.id for s in sources]
     if len(ids) != len(set(ids)):
         raise ConfigError(f"{where}: source ids must be unique")

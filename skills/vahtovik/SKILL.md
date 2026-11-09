@@ -17,7 +17,7 @@ Run vahtovik as `uv run vahtovik ...` in the project folder.
   - `process/*.md`: how group agents process new artifacts, in name order.
   - `report.md`: when and what to report, to which channel.
   - `.env`: the watch's own secrets.
-- **Source types**, `skills/sources/<type>/`, and **channel types**, `skills/channels/<type>/`: skills with optional scripts. The channels themselves are named in `vahtovik.yaml`.
+- **Source types**, `skills/sources/<type>/`, and **channel types**, `skills/channels/<type>/`: skills with optional scripts. A source is read by an AI session (`scan: ai`, the default), or first by its type's `scan` script (`scan: script`), with a session only for new items. The channels themselves are named in `vahtovik.yaml`.
 - **Artifact**: one item that a source or a person brought, with a stable id. One artifact can be in several groups; each group processes it on its own.
 - **Group**: related artifacts of one watch, with one persistent Claude Code session, the group agent. Its folder is `data/watches/<watch>/groups/<key>/`:
   - `context.md`: Summary, Open questions, Artifacts, Work log, Reports;

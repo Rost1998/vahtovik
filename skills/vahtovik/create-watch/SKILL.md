@@ -36,6 +36,7 @@ Reuse an existing type when it fits: `rss`, `web-page`, `web-search`. Otherwise 
 - `scripts/` (optional): take the parameters as arguments and `--state-dir <folder>`. Keep "already seen" markers in the state folder, and print only new items, preferably as JSON with an `error` field. Use bash or the Python standard library, so the scripts run with the system `python3`.
 - The artifact id must be stable: the same item always gets the same id, such as a feed entry id or a link without tracking parameters. vahtovik drops an artifact as already seen only when its id matches exactly.
 - Scripts read secrets from the environment variables listed in `required_env`, never from parameters.
+- `scan` (optional): an executable that vahtovik runs for sources with `scan: script`, by the contract in `skills/README.md`. See `skills/sources/rss/scan`. Give a type one when a script can tell its new items for certain: then a monitoring session starts only when there are new items.
 
 A source type is generic. Rules for one watch go into that watch's files.
 
@@ -68,6 +69,8 @@ sources:
     skill: <source type>
     params: {...}               # no secrets here
     interval: 10m               # optional: this source's own interval
+    scan: script                # optional: ai (default): a session collects the items; script: the type's
+                                # `scan` script does, and a session starts only for new items
     env: {GITHUB_TOKEN: GITHUB_TOKEN_ORG_A}   # optional: fill a variable from a secret with another name
 channels: [team-telegram]       # channels from vahtovik.yaml this watch may use
 claude:                         # optional overrides of vahtovik.yaml

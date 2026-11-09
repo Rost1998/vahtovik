@@ -25,7 +25,7 @@ uv run vahtovik open example/uv-0-13                 # talk to a group's agent
 
 `vahtovik run` does one cycle. It monitors the sources of enabled watches whose `interval` has passed, and starts the turns of the groups with new artifacts:
 
-1. **Monitor**: one throwaway session per due source. Each source has its own `interval`; without one, it has its watch's `interval`. It follows the source skill and `monitor.md`, and returns new artifacts with a `group_key`. vahtovik drops artifacts it has seen, creates new groups, and saves the artifacts.
+1. **Monitor**: one throwaway session per due source. Each source has its own `interval`; without one, it has its watch's `interval`. A source with `scan: script` is read first by its type's `scan` script, without AI; a session starts only when the script finds new items, and gets them in its prompt. It follows the source skill and `monitor.md`, and returns new artifacts with a `group_key`. vahtovik drops artifacts it has seen, creates new groups, and saves the artifacts.
 2. **Group turn**: for each group with new artifacts, vahtovik resumes the group's session in a tmux window and goes on: it does not wait for the turn to end. The agent processes the artifacts by `process/*.md`, updates `context.md`, reports by `report.md` with `vahtovik report`, and ends the turn with its status (see below). At most `claude.parallel_turns` (5) turns work at once; turns that wait for their background work or for a person do not count. The rest start at a later run: every run starts the turns that can start, even when no source is due.
 3. **Deliver**: failed deliveries are retried, up to 5 attempts.
 

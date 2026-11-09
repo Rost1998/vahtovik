@@ -13,6 +13,7 @@ A skill is a folder with a `SKILL.md` file (front matter with `name` and `descri
 ```
 sources/<name>/SKILL.md
 sources/<name>/scripts/...     optional
+sources/<name>/scan            optional executable, for sources with `scan: script`; only vahtovik runs it
 ```
 
 - Front matter: `name`, `description`, and optionally:
@@ -22,6 +23,16 @@ sources/<name>/scripts/...     optional
 - The body tells the agent how to collect new items and what to use as the stable artifact id.
 - Scripts take the source parameters as arguments and a state folder (`--state-dir`) for snapshots or "last seen" markers, and print what is new, preferably as JSON.
 - In monitoring, the state folder is the session's working folder. If the session fails, or the run stops before the new artifacts are saved, vahtovik puts the folder back as it was and monitors the source again, so no item is lost.
+
+A source in `watch.yaml` has `scan: ai` (the default) or `scan: script`:
+- `ai`: the monitoring session collects the items itself, by the skill's body.
+- `script`: vahtovik runs the skill's `scan` first, and starts a monitoring session only when it finds new items. The session gets the items in its prompt and decides which are artifacts and where they go. Use it for sources whose new items a script can tell for certain, such as feeds or message lists, to read them often at little cost.
+
+`scan` contract:
+- it runs in the vahtovik project folder with a 5-minute timeout;
+- `VAHTOVIK_STATE_DIR` is the source's state folder, `VAHTOVIK_PARAMS` holds the source's `params` as JSON; also `VAHTOVIK_WATCH`, `VAHTOVIK_SOURCE`, and the source's secrets as environment variables;
+- it prints `{"items": [{"id": "...", ...}], "error": null}`: only the items it has not printed before for this state folder, each an object with an `id` and any other fields;
+- exit code 0 and `error` null mean success. Anything else fails the monitoring, and vahtovik puts the state folder back.
 
 ## Channel skill
 

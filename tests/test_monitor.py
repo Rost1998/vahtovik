@@ -1,3 +1,4 @@
+import json
 import pytest
 from conftest import artifact, monitor_answer
 
@@ -90,3 +91,86 @@ def test_monitoring_stopped_while_saving_saves_the_rest_on_the_next_run(project,
     assert [r["id"] for r in state.rows("SELECT id FROM artifacts ORDER BY id")] == ["a1", "a2"]
     context = (cfg.group_dir("w1", "x") / "context.md").read_text()
     assert context.count("example.com/a1") == 1 and context.count("example.com/a2") == 1
+
+
+@pytest.fixture
+def scripted(project, monkeypatch):
+    """Source src-a of type `scripted` with `scan: script`; its scan prints the file $SCAN_FILE and marks the
+    state folder. Returns a function that sets what the next scan prints."""
+    import yaml
+    from conftest import _script
+    folder = project.root / "skills/sources/scripted"
+    _script(folder / "scan", '#!/bin/sh\necho moved >> "$VAHTOVIK_STATE_DIR/seen.txt"\ncat "$SCAN_FILE"\n')
+    (folder / "SKILL.md").write_text("---\nname: scripted\ndescription: test\n---\nItems come from the scan.\n")
+    path = project.root / "watches/w1/watch.yaml"
+    data = yaml.safe_load(path.read_text())
+    data["sources"][0].update(skill="scripted", scan="script")
+    path.write_text(yaml.safe_dump(data))
+    out = project.tmp / "scan.json"
+    monkeypatch.setenv("SCAN_FILE", str(out))
+    return lambda value: out.write_text(value if isinstance(value, str) else json.dumps(value))
+
+
+def _scan_run(project):
+    cfg, state, claude = project.load()
+    watch = cfg.watch("w1")
+    count = monitor.run(cfg, state, claude, watch, "run1", project.tmp / "raw", [watch.sources[0]])
+    return cfg, state, count
+
+
+def test_a_script_source_without_new_items_needs_no_session(project, scripted):
+    scripted({"items": [], "error": None})
+    cfg, state, count = _scan_run(project)
+    assert count == 0 and project.calls() == []
+    assert (cfg.source_dir("w1", "src-a") / "seen.txt").read_text() == "moved\n"
+    assert state.row("SELECT last_ok_at FROM source_state WHERE source_id = 'src-a'")["last_ok_at"]
+
+
+def test_a_script_sources_new_items_go_to_one_session(project, scripted):
+    scripted({"items": [{"id": "i1", "title": "Item one"}], "error": None})
+    project.queue(monitor_answer(artifact("i1", "g")))
+    cfg, state, count = _scan_run(project)
+    assert count == 1
+    [call] = project.calls()
+    assert "vahtovik ran the source's scan script" in call["prompt"] and '"title": "Item one"' in call["prompt"]
+    assert state.artifact_exists("w1", "i1")
+
+
+@pytest.mark.parametrize("printed", ['{"items": [], "error": "feed is down"}', "not json", '{"items": [{"x": 1}]}'])
+def test_a_failed_scan_restores_the_state_and_starts_no_session(project, scripted, printed):
+    scripted(printed)
+    cfg, state, count = _scan_run(project)
+    assert count == 0 and project.calls() == []
+    assert not (cfg.source_dir("w1", "src-a") / "seen.txt").exists()
+    assert state.row("SELECT last_error FROM source_state WHERE source_id = 'src-a'")["last_error"]
+
+
+def test_a_failed_session_after_a_scan_restores_the_state(project, scripted):
+    scripted({"items": [{"id": "i1"}], "error": None})
+    project.queue({"mode": "print", "exit": 1})
+    cfg, _state, count = _scan_run(project)
+    assert count == 0 and len(project.calls()) == 1
+    assert not (cfg.source_dir("w1", "src-a") / "seen.txt").exists()
+
+
+def test_check_wants_a_scan_script_for_a_script_source(project, scripted, capsys):
+    from vahtovik import cli
+    (project.root / "skills/sources/scripted/scan").unlink()
+    cli.main(["check"])
+    assert "source src-a: scan is script, but" in capsys.readouterr().out
+
+
+def test_the_rss_scan_script_lists_each_entry_once(project):
+    import yaml
+    feed = project.tmp / "feed.xml"
+    feed.write_text('<?xml version="1.0"?><rss><channel><title>T</title><item><guid>g1</guid><title>One</title>'
+                    '<link>http://x/1</link><description>d</description></item></channel></rss>')
+    path = project.root / "watches/w1/watch.yaml"
+    data = yaml.safe_load(path.read_text())
+    data["sources"][0].update(scan="script", params={"url": f"file://{feed}"})
+    path.write_text(yaml.safe_dump(data))
+    project.queue(monitor_answer(artifact("g1", "g")))
+    _scan_run(project)
+    assert '"id": "g1"' in project.calls()[0]["prompt"]
+    _scan_run(project)
+    assert len(project.calls()) == 1

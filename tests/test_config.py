@@ -133,3 +133,13 @@ def test_a_source_has_the_watchs_interval_unless_it_sets_its_own(project):
     path.write_text(yaml.safe_dump(data))
     a, b = config_mod.load(project.root).watch("w1").sources
     assert (a.interval, b.interval) == (timedelta(hours=1), timedelta(minutes=1))
+
+
+def test_an_unknown_scan_mode_is_rejected(project):
+    path = project.root / "watches/w1/watch.yaml"
+    data = yaml.safe_load(path.read_text())
+    assert config_mod.load(project.root).watch("w1").sources[0].scan == "ai"
+    data["sources"][0]["scan"] = "magic"
+    path.write_text(yaml.safe_dump(data))
+    with pytest.raises(ConfigError, match="scan of source 'src-a' must be one of ai, script"):
+        config_mod.load(project.root)
