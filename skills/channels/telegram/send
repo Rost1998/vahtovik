@@ -16,16 +16,23 @@ text="${subject:+<b>${subject}</b>
 }${body}"
 
 if [[ "${VAHTOVIK_DRY_RUN:-}" == "1" ]]; then
-    printf 'dry run, would send to chat %s:\n%s\n' "$TELEGRAM_CHAT_ID" "$text" >&2
+    printf 'dry run, would send to chat %s%s:\n%s\n' "$TELEGRAM_CHAT_ID" \
+        "${VAHTOVIK_REPLY_TO:+ in reply to message $VAHTOVIK_REPLY_TO}" "$text" >&2
     echo "dry-run"
     exit 0
 fi
 
-response="$(curl -sS --max-time 30 -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+reply=()
+if [[ "${VAHTOVIK_REPLY_TO:-}" =~ ^[0-9]+$ ]]; then  # an answer to the person's message, read by `receive`
+    reply=(--data-urlencode "reply_parameters={\"message_id\":${VAHTOVIK_REPLY_TO},\"allow_sending_without_reply\":true}")
+fi
+
+response="$(curl -sS --max-time 30 -X POST "${TELEGRAM_API_URL:-https://api.telegram.org}/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
     --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
     --data-urlencode "text=${text}" \
     --data-urlencode "parse_mode=HTML" \
-    --data-urlencode "disable_web_page_preview=true")"
+    --data-urlencode "disable_web_page_preview=true" \
+    ${reply[@]+"${reply[@]}"})"
 
 if [[ "$response" == *'"ok":true'* ]]; then
     id="$(grep -o '"message_id":[0-9]*' <<<"$response" | head -1 | cut -d: -f2)"
