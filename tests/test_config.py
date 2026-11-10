@@ -1,3 +1,4 @@
+import shutil
 from datetime import timedelta
 
 import pytest
@@ -171,3 +172,47 @@ def test_input_sessions_get_opus_and_xhigh_unless_set(project):
     data["claude"]["stages"]["input"] = {"effort": "max"}
     path.write_text(yaml.safe_dump(data))
     assert config_mod.load(project.root).stage(None, "input") == config_mod.StageSettings("opus", "max")
+
+
+def _input(project, **settings) -> None:
+    _edit_yaml(project.root / "vahtovik.yaml", lambda d: d["channels"]["log"].update(input=settings))
+
+
+def test_an_input_channel_has_full_power_unless_it_sets_commands_or_watches(project):
+    _input(project, senders=["@alice", 12345], rules="  Answer in Ukrainian.\n")
+    settings = config_mod.load(project.root).channels["log"].input
+    assert not settings.limited and settings.commands is None and settings.watches is None
+    assert settings.senders == ["@alice", "12345"] and settings.rules == "Answer in Ukrainian."
+    _input(project, commands=["status", "log"])
+    settings = config_mod.load(project.root).channels["log"].input
+    assert settings.limited and settings.commands == ["status", "log"] and settings.watches is None
+    _input(project, watches=["w1"])
+    settings = config_mod.load(project.root).channels["log"].input
+    assert settings.limited and settings.commands == list(config_mod.INPUT_COMMANDS) and settings.watches == ["w1"]
+
+
+@pytest.mark.parametrize("settings, error", [
+    ({"commands": ["status", "run"]}, "unknown command run; commands: status, log, tell, artifact, group"),
+    ({"commands": "status"}, "input.commands must be a list of names"),
+    ({"watches": ["w1", "nope"]}, "input.watches: unknown watch nope"),
+    ({"senders": [True]}, "input.senders must be a list of names"),
+    ({"rules": ["a"]}, "input.rules must be text"),
+])
+def test_bad_input_limits_are_config_errors(project, settings, error):
+    _input(project, **settings)
+    with pytest.raises(ConfigError, match=error):
+        config_mod.load(project.root)
+
+
+def test_vahtovik_watches_in_the_environment_hides_the_other_watches(project, monkeypatch):
+    shutil.copytree(project.root / "watches/w1", project.root / "watches/w2")
+    _input(project, watches=["w2"])  # checked against all watches, whatever the environment says
+    monkeypatch.setenv("VAHTOVIK_WATCHES", "w1")
+    cfg = config_mod.load(project.root)
+    assert list(cfg.watches) == ["w1"]
+    with pytest.raises(ConfigError, match="unknown watch 'w2'; known: w1"):
+        cfg.watch("w2")
+    monkeypatch.setenv("VAHTOVIK_WATCHES", "")
+    assert config_mod.load(project.root).watches == {}
+    monkeypatch.delenv("VAHTOVIK_WATCHES")
+    assert list(config_mod.load(project.root).watches) == ["w1", "w2"]

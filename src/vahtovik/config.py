@@ -17,6 +17,8 @@ STAGE_DEFAULTS = {"input": {"model": "opus", "effort": "xhigh"}}  # over the cla
 SCAN_MODES = ("ai", "script")  # who collects a source's items: an AI session, or the source type's scan script
 EFFORTS = ("low", "medium", "high", "xhigh", "max")  # what `claude --effort` takes
 AUTH_MODES = ("subscription", "api-key")
+INPUT_COMMANDS = ("status", "log", "tell", "artifact", "group")  # the vahtovik commands a limited channel may get
+SCOPE_ENV = "VAHTOVIK_WATCHES"  # set: vahtovik commands see only these watches (the sessions of limited channels)
 
 
 class ConfigError(Exception):
@@ -57,6 +59,15 @@ class WatchdogSettings:
 @dataclass
 class InputSettings:
     interval: timedelta = timedelta(minutes=1)  # how often vahtovik reads the channel
+    commands: list[str] | None = None  # set: a limited channel, whose agent may run only these vahtovik commands
+    watches: list[str] | None = None  # set: its agent sees only these watches
+    senders: list[str] | None = None  # set: only messages whose `from` is one of these reach the agent
+    rules: str = ""  # the person's own rules for the channel's agent
+
+    @property
+    def limited(self) -> bool:
+        """A limited channel's session runs with the guard (channel_guard.py) instead of bypassPermissions."""
+        return self.commands is not None
 
 
 @dataclass
@@ -305,13 +316,38 @@ def _load_channels(raw: object) -> dict[str, Channel]:
         reading = item.get("input")
         if reading is not None and not isinstance(reading, dict):
             raise ConfigError(f"channel {name!r}: input must be a mapping, such as {{}} or {{interval: 5m}}")
-        settings = None
-        if reading is not None:
-            settings = InputSettings()
-            if reading.get("interval"):
-                settings.interval = parse_interval(reading["interval"])
+        settings = None if reading is None else _load_input(reading, f"channel {name!r}: input")
         channels[name] = Channel(name, str(item["skill"]), {str(k): str(v) for k, v in env.items()}, settings)
     return channels
+
+
+def _names(raw: dict, key: str, where: str) -> list[str] | None:
+    if raw.get(key) is None:
+        return None
+    value = raw[key]
+    if not isinstance(value, list) or any(not isinstance(v, (str, int)) or isinstance(v, bool) for v in value):
+        raise ConfigError(f"{where}.{key} must be a list of names")
+    return [str(v) for v in value]
+
+
+def _load_input(raw: dict, where: str) -> InputSettings:
+    settings = InputSettings()
+    if raw.get("interval"):
+        settings.interval = parse_interval(raw["interval"])
+    settings.commands = _names(raw, "commands", where)
+    unknown = [c for c in settings.commands or [] if c not in INPUT_COMMANDS]
+    if unknown:
+        raise ConfigError(f"{where}.commands: unknown command {', '.join(unknown)}; "
+                          f"commands: {', '.join(INPUT_COMMANDS)}")
+    settings.watches = _names(raw, "watches", where)
+    if settings.watches is not None and settings.commands is None:
+        settings.commands = list(INPUT_COMMANDS)  # watches alone limit the channel too
+    settings.senders = _names(raw, "senders", where)
+    rules = raw.get("rules") or ""
+    if not isinstance(rules, str):
+        raise ConfigError(f"{where}.rules must be text")
+    settings.rules = rules.strip()
+    return settings
 
 
 def _load_watch(path: Path, channels: dict[str, Channel]) -> Watch:
@@ -369,6 +405,13 @@ def load(root: Path | None = None) -> Config:
     if watches_dir.is_dir():
         for path in sorted(p for p in watches_dir.iterdir() if (p / WATCH_FILE).is_file()):
             watches[path.name] = _load_watch(path, channels)
+    for channel in channels.values():
+        unknown = [w for w in (channel.input.watches or []) if w not in watches] if channel.input else []
+        if unknown:
+            raise ConfigError(f"channel {channel.name!r}: input.watches: unknown watch {', '.join(unknown)}")
+    if os.environ.get(SCOPE_ENV) is not None:  # a limited channel's agent: the other watches do not exist for it
+        allowed = [w for w in os.environ[SCOPE_ENV].split(",") if w]
+        watches = {name: watch for name, watch in watches.items() if name in allowed}
     return Config(
         root=root,
         claude=_load_claude(raw.get("claude") or {}, root),
