@@ -14,7 +14,7 @@ from pathlib import Path
 
 import jsonschema
 
-from . import group_status
+from . import channel_guard, group_status
 from .config import Config, StageSettings
 from .util import tail
 
@@ -36,6 +36,7 @@ class SessionSpec:
     name: str | None = None
     env: dict[str, str] = field(default_factory=dict)
     scope: str = "session"  # <watch>/<source or group>, for the journal
+    guard: str | None = None  # a limited input channel: its session runs with the guard (channel_guard.py)
 
     @property
     def label(self) -> str:
@@ -88,8 +89,8 @@ class Claude:
     def settings_json(self, spec: SessionSpec) -> str:
         """Keep the user's personal and parent-folder CLAUDE.md files out of vahtovik sessions
         (the working folder's own CLAUDE.md still loads), skip the bypassPermissions warning screen,
-        turn off prompt suggestions (see env()), and give group sessions the hooks that keep their status
-        (group_status.py)."""
+        turn off prompt suggestions (see env()), give group sessions the hooks that keep their status
+        (group_status.py), and limited input channels their guard (channel_guard.py)."""
         excludes = [str(Path.home() / ".claude" / "CLAUDE.md"), str(Path.home() / ".claude" / "rules" / "**")]
         for parent in spec.workdir.resolve().parents:
             excludes += [str(parent / name) for name in ("CLAUDE.md", "CLAUDE.local.md", ".claude/CLAUDE.md")]
@@ -97,11 +98,16 @@ class Claude:
                     "promptSuggestionEnabled": False}
         if spec.stage == "group":
             settings["hooks"] = group_status.hooks()
+        if spec.guard:
+            settings["hooks"] = channel_guard.hooks(spec.guard)
         return json.dumps(settings)
 
     def _common_args(self, spec: SessionSpec) -> list[str]:
-        args = ["--model", spec.settings.model, "--permission-mode", "bypassPermissions",
-                "--settings", self.settings_json(spec)]
+        args = ["--model", spec.settings.model, "--settings", self.settings_json(spec)]
+        if spec.guard:  # only the guard's tools, no MCP servers, and Claude Code denies what nothing allowed
+            args += ["--permission-mode", "dontAsk", "--tools", ",".join(channel_guard.TOOLS), "--strict-mcp-config"]
+        else:
+            args += ["--permission-mode", "bypassPermissions"]
         if spec.settings.effort:
             args += ["--effort", spec.settings.effort]
         if self.cfg.claude.auth == "api-key":

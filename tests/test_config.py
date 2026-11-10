@@ -1,3 +1,4 @@
+import os
 import shutil
 from datetime import timedelta
 
@@ -209,10 +210,11 @@ def test_vahtovik_watches_in_the_environment_hides_the_other_watches(project, mo
     _input(project, watches=["w2"])  # checked against all watches, whatever the environment says
     monkeypatch.setenv("VAHTOVIK_WATCHES", "w1")
     cfg = config_mod.load(project.root)
-    assert list(cfg.watches) == ["w1"]
+    assert list(cfg.watches) == ["w1"] and cfg.scope == ["w1"]
     with pytest.raises(ConfigError, match="unknown watch 'w2'; known: w1"):
         cfg.watch("w2")
-    monkeypatch.setenv("VAHTOVIK_WATCHES", "")
-    assert config_mod.load(project.root).watches == {}
-    monkeypatch.delenv("VAHTOVIK_WATCHES")
+    assert "VAHTOVIK_WATCHES" not in os.environ  # what the command starts sees all watches
     assert list(config_mod.load(project.root).watches) == ["w1", "w2"]
+    monkeypatch.setenv("VAHTOVIK_WATCHES", "")
+    cfg = config_mod.load(project.root)
+    assert cfg.watches == {} and cfg.scope == []

@@ -82,6 +82,7 @@ def test_interactive_args_end_with_the_prompt_and_group_sessions_get_the_hooks(p
     settings = json.loads(_value(args, "--settings"))
     assert settings["skipDangerousModePermissionPrompt"] is True and settings["promptSuggestionEnabled"] is False
     assert settings["hooks"]["Stop"][0]["hooks"][0]["command"].endswith("-m vahtovik hook stop")
+    assert "PreToolUse" not in settings["hooks"] and _value(args, "--permission-mode") == "bypassPermissions"
 
 
 def test_trust_is_read_from_the_claude_config(project):

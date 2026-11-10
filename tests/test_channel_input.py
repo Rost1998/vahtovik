@@ -1,4 +1,6 @@
 import hashlib
+import json
+import shutil
 import time
 
 import pytest
@@ -57,6 +59,8 @@ def test_the_channel_agent_answers_each_message_through_the_channel(project, cha
     args = call["args"]
     assert args[args.index("--model") + 1] == "opus" and args[args.index("--effort") + 1] == "xhigh"
     assert "--session-id" in args and "--no-session-persistence" not in args
+    assert args[args.index("--permission-mode") + 1] == "bypassPermissions" and "--tools" not in args  # full power
+    assert "hooks" not in json.loads(args[args.index("--settings") + 1]) and "VAHTOVIK_WATCHES" not in call["env"]
     assert "What waits for me?" in call["prompt"] and "skills/vahtovik/channel/SKILL.md" in call["prompt"]
     assert f"reply to message {first}" in _outbox(project) and "Nothing waits for you." in _outbox(project)
     assert state.message_counts("chat") == {"answered": 1}
@@ -148,3 +152,24 @@ def test_messages_from_other_senders_are_ignored_without_a_reply(project, chat, 
     message = chat("What waits for me?")
     project.queue(replies(([message], "Nothing.")))
     assert _receive_and_answer(project)[2:] == (1, 1)
+
+
+def test_a_limited_channel_runs_with_the_guard_and_sees_only_its_watches(project, chat):
+    shutil.copytree(project.root / "watches/w1", project.root / "watches/w2")
+    _chat_input(project, commands=["status", "tell"], watches=["w1"])
+    message = chat("How are things?")
+    project.queue({**replies(([message], "All quiet.")), "actions": [
+        {"bash": "vahtovik status"}, {"bash": "vahtovik status --watch w2"}, {"bash": "vahtovik run"},
+        {"bash": "VAHTOVIK_WATCHES=w2 vahtovik status"}]})
+    assert _receive_and_answer(project)[2:] == (1, 1)
+    [call] = project.calls()
+    args = call["args"]
+    assert args[args.index("--permission-mode") + 1] == "dontAsk" and "bypassPermissions" not in args
+    assert args[args.index("--tools") + 1] == "Read,Grep,Glob,Bash" and "--strict-mcp-config" in args
+    [hook] = json.loads(args[args.index("--settings") + 1])["hooks"]["PreToolUse"]
+    assert hook["matcher"] == "*" and hook["hooks"][0]["command"].endswith("-m vahtovik hook guard chat")
+    assert call["env"]["VAHTOVIK_WATCHES"] == "w1"
+    status, other, run, sneaky = project.command_runs()
+    assert status["code"] == 0 and "w1" in status["out"] and "w2" not in status["out"]
+    assert other["code"] != 0 and "unknown watch 'w2'; known: w1" in other["out"]
+    assert "may not run `vahtovik run`" in run["denied"] and "denied" in sneaky

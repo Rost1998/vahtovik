@@ -16,7 +16,7 @@ from pathlib import Path
 
 from .. import delivery, skills
 from ..claude_session import Claude, SessionSpec
-from ..config import Channel, Config
+from ..config import SCOPE_ENV, Channel, Config
 from ..state import State
 from ..util import StateBackup, duration, human, load_schema, plural, render, run_json_script
 
@@ -127,13 +127,16 @@ def answer(cfg: Config, state: State, claude: Claude, channel: Channel, run_id: 
     if mode == "new":
         session_id = str(uuid.uuid4())
         state.set_input_session(channel.name, session_id)
+    env = {"VAHTOVIK_CHANNEL": channel.name, "VAHTOVIK_RUN": run_id}
+    if channel.input.watches is not None:
+        env[SCOPE_ENV] = ",".join(channel.input.watches)
     spec = SessionSpec(
         stage="input", workdir=cfg.root, settings=cfg.stage(None, "input"), schema=load_schema("channel"),
         prompt=render("channel_turn.md", channel=channel.name, run_id=run_id, now=human(),
                       channel_skill=cfg.skills_dir / CHANNEL_SKILL, format_rules=rules,
                       messages=_messages_text(rows)),
-        mode=mode, session_id=session_id, name=f"vahtovik channel {channel.name}",
-        env={"VAHTOVIK_CHANNEL": channel.name, "VAHTOVIK_RUN": run_id}, scope=channel.name,
+        mode=mode, session_id=session_id, name=f"vahtovik channel {channel.name}", env=env, scope=channel.name,
+        guard=channel.name if channel.input.limited else None,
     )
     log.info("%s: Started answering %s, %s session %s", channel.name, plural(len(ids), "message"),
              "resumed" if mode == "resume" else "new", session_id[:8])

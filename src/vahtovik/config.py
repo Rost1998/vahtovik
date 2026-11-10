@@ -150,6 +150,7 @@ class Config:
     watches_dir: Path
     tmux: TmuxSettings = field(default_factory=TmuxSettings)
     watchdog: WatchdogSettings = field(default_factory=WatchdogSettings)
+    scope: list[str] | None = None  # set: the command runs for a limited channel that sees only these watches
 
     def stage(self, watch: Watch | None, stage: str) -> StageSettings:
         """A stage's settings. Later ones win: vahtovik.yaml's model and effort, the stage's own defaults
@@ -409,9 +410,12 @@ def load(root: Path | None = None) -> Config:
         unknown = [w for w in (channel.input.watches or []) if w not in watches] if channel.input else []
         if unknown:
             raise ConfigError(f"channel {channel.name!r}: input.watches: unknown watch {', '.join(unknown)}")
-    if os.environ.get(SCOPE_ENV) is not None:  # a limited channel's agent: the other watches do not exist for it
-        allowed = [w for w in os.environ[SCOPE_ENV].split(",") if w]
-        watches = {name: watch for name, watch in watches.items() if name in allowed}
+    # A command that a limited channel's agent runs sees only the channel's watches. The scope is for this command
+    # alone: what the command starts, such as the tmux server or a group session, must see all watches.
+    scope = os.environ.pop(SCOPE_ENV, None)
+    scope = None if scope is None else [w for w in scope.split(",") if w]
+    if scope is not None:
+        watches = {name: watch for name, watch in watches.items() if name in scope}
     return Config(
         root=root,
         claude=_load_claude(raw.get("claude") or {}, root),
@@ -422,4 +426,5 @@ def load(root: Path | None = None) -> Config:
         watches_dir=watches_dir,
         tmux=_load_tmux(raw.get("tmux")),
         watchdog=_load_watchdog(raw.get("watchdog")),
+        scope=scope,
     )

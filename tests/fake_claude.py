@@ -8,7 +8,8 @@ and performs the response's actions in the working folder (their results go to $
 - Without -p (interactive, in a tmux window), the prompt is the last argument. Then each line typed into the
   window is the next prompt (logged to $FAKE_CLAUDE_LOG.typed); end of input exits.
 
-Response keys: "mode" ("print" or "interactive": only a session in that mode takes the response); "actions"; "on_block" (actions run when a Stop hook blocks the first time); "exit" (exit code,
+Response keys: "mode" ("print" or "interactive": only a session in that mode takes the response); "actions"
+(a "bash" action runs the PreToolUse hooks first, like the Bash tool); "on_block" (actions run when a Stop hook blocks the first time); "exit" (exit code,
 right after the actions); "screen" (interactive: show this text and wait for a line of keys, as a startup
 screen does, before the prompt); "hang" (interactive: stop responding after the prompt hook);
 "background_tasks" and "session_crons" (what the Stop hook hears is still running, as Claude Code tells it);
@@ -26,7 +27,8 @@ import uuid
 from pathlib import Path
 
 VALUE_OPTIONS = {"--model", "--permission-mode", "--settings", "--effort", "--resume", "--session-id", "--name",
-                 "--append-system-prompt", "--add-dir", "--output-format", "--json-schema", "--max-budget-usd"}
+                 "--append-system-prompt", "--add-dir", "--output-format", "--json-schema", "--max-budget-usd",
+                 "--tools"}
 
 
 def main() -> int:
@@ -103,7 +105,7 @@ class Session:
         if response.get("hang"):
             while True:
                 time.sleep(1)
-        perform(response.get("actions", []))
+        perform(response.get("actions", []), self.hook)
         if "exit" in response:
             print(response.get("stderr", "fake failure"), file=sys.stderr, flush=True)
             return response["exit"]
@@ -114,7 +116,7 @@ class Session:
             if not any(a.get("decision") == "block" for a in answers):
                 break
             if attempt == 0:
-                perform(response.get("on_block", []))
+                perform(response.get("on_block", []), self.hook)
         if self.interactive:
             print(response.get("result", "done"), flush=True)
         if "wake" in response:
@@ -137,7 +139,7 @@ class Session:
         return answers
 
 
-def perform(actions: list[dict]) -> None:
+def perform(actions: list[dict], hook=lambda event, payload: []) -> None:
     for action in actions:
         if "append" in action:
             with open(action["append"], "a") as handle:
@@ -152,6 +154,16 @@ def perform(actions: list[dict]) -> None:
         elif "run" in action:
             proc = subprocess.run(action["run"], input=action.get("stdin", ""), text=True, capture_output=True)
             _log(".runs", {"run": action["run"], "code": proc.returncode, "out": proc.stdout + proc.stderr})
+        elif "bash" in action:  # like the Bash tool: the PreToolUse hooks first, then bash runs the command
+            answers = hook("PreToolUse", {"tool_name": "Bash", "tool_input": {"command": action["bash"]},
+                                          "cwd": os.getcwd()})
+            denied = [a["hookSpecificOutput"]["permissionDecisionReason"] for a in answers
+                      if (a.get("hookSpecificOutput") or {}).get("permissionDecision") == "deny"]
+            if denied:
+                _log(".runs", {"bash": action["bash"], "denied": denied[0]})
+                continue
+            proc = subprocess.run(["bash", "-c", action["bash"]], text=True, capture_output=True)
+            _log(".runs", {"bash": action["bash"], "code": proc.returncode, "out": proc.stdout + proc.stderr})
 
 
 def _pop(mode: str) -> dict | None:
