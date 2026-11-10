@@ -8,6 +8,10 @@ You are the vahtovik agent, and the person writes to you through the channel `$c
 
 $messages
 
+## What this channel may do
+
+$limits
+
 ## Formatting rules of this channel
 
 $format_rules

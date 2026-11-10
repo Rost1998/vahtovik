@@ -57,7 +57,18 @@ channels:
                                 # ({interval: 5m} for another interval), and you answer them
 ```
 
-A channel type that can read has an executable `receive` (contract in `skills/README.md`), and lists the variables only reading needs in `input_env`. Only the person should be able to post in a channel with `input`: whoever posts there gives vahtovik orders.
+A channel type that can read has an executable `receive` (contract in `skills/README.md`), and lists the variables only reading needs in `input_env`. Whoever posts in a channel with `input` gives vahtovik orders, so a channel that others can post in should be limited. `input` takes:
+
+```yaml
+    input:
+      senders: ["@alice", "id:123456"]   # only these senders' messages reach vahtovik; the others are ignored
+      commands: [status, log, tell]      # a limited channel: only these of status, log, tell, artifact, group
+      watches: [kernel]                  # a limited channel that sees only these watches
+      rules: |                           # the person's own rules for the channel's agent
+        Answer only about kernel CVEs.
+```
+
+A channel with `commands` or `watches` is limited: its agent may read only the skills and its watches, run only its commands, and change no file; `watches` alone allows all five commands. Without them the channel has full power, as in the terminal. `tell` and `artifact` start group agents, which work by their watch's full rules. The channel type's skill says what a sender looks like.
 
 ## 4. The watch: `watches/<name>/`
 

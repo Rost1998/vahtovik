@@ -14,7 +14,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from .. import delivery, skills
+from .. import channel_guard, delivery, skills
 from ..claude_session import Claude, SessionSpec
 from ..config import SCOPE_ENV, Channel, Config
 from ..state import State
@@ -98,6 +98,27 @@ def _messages_text(rows) -> str:
                        f"\n\n{r['text'].strip() or '(no text)'}" for r in rows)
 
 
+def _limits_text(cfg: Config, channel: Channel) -> str:
+    """What the channel's agent may do, for its prompt, and the person's own rules for the channel."""
+    settings = channel.input
+    if not settings.limited:
+        text = "Everything, as in the terminal."
+    else:
+        where = ", ".join(f"`{p.relative_to(cfg.root) if p.is_relative_to(cfg.root) else p}`"
+                          for p in channel_guard.readable(cfg, channel))
+        text = "\n".join([
+            "This channel is limited (see Limited channels in your skill). vahtovik's guard denies everything else.",
+            "",
+            f"- Commands: {channel_guard.commands_text(channel)}.",
+            f"- Watches: {', '.join(settings.watches) or 'none'}; the commands see no other watch."
+            if settings.watches is not None else "- Watches: all.",
+            f"- Reading: {where}; never `.env` files.",
+            "- Changing files, the web and other tools: not allowed."])
+    if settings.rules:
+        text += f"\n\nThe person's own rules for this channel:\n\n{settings.rules}"
+    return text
+
+
 def _check_replies(replies: list[dict], ids: list[str]) -> str | None:
     """Every message must be in the `to` of exactly one reply. Returns what is wrong, or None."""
     given = [str(i) for r in replies for i in r["to"]]
@@ -134,7 +155,7 @@ def answer(cfg: Config, state: State, claude: Claude, channel: Channel, run_id: 
         stage="input", workdir=cfg.root, settings=cfg.stage(None, "input"), schema=load_schema("channel"),
         prompt=render("channel_turn.md", channel=channel.name, run_id=run_id, now=human(),
                       channel_skill=cfg.skills_dir / CHANNEL_SKILL, format_rules=rules,
-                      messages=_messages_text(rows)),
+                      limits=_limits_text(cfg, channel), messages=_messages_text(rows)),
         mode=mode, session_id=session_id, name=f"vahtovik channel {channel.name}", env=env, scope=channel.name,
         guard=channel.name if channel.input.limited else None,
     )

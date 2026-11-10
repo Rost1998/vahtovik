@@ -7,6 +7,7 @@ import yaml
 
 from vahtovik import channel_guard, cli
 from vahtovik import config as config_mod
+from vahtovik.util import schema_path
 
 
 @pytest.fixture
@@ -68,6 +69,7 @@ def test_reading_is_allowed_only_in_the_rules_and_the_channels_watches(team):
     root = team.root
     for path in ("skills/vahtovik/channel/SKILL.md", "watches/w1/monitor.md", "data/watches/w1/groups/g/context.md"):
         assert _decide(team, "Read", file_path=str(root / path)), path
+    assert _decide(team, "Read", file_path=str(schema_path("artifact")))  # the artifacts skill points to it
     assert _decide(team, "Read", file_path="watches/w1/report.md")  # relative to the session's folder
     for path in ("watches/w2/monitor.md", "data/watches/w2/groups/g/context.md", "watches/w1/.env", ".env",
                  "vahtovik.yaml", "data/vahtovik.db", "data/journal.log", "src/vahtovik/cli.py", "/etc/passwd",

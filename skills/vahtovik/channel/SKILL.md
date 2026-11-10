@@ -20,6 +20,15 @@ They are the same as in the terminal (`skills/vahtovik/SKILL.md`), spread over m
 - **After you act**: reply with what each command printed, and how the person can follow what happens next.
 - **Anything unclear**: ask in your reply.
 
+## Limited channels
+
+Your prompt says what this channel may do. A limited channel allows only some `vahtovik` commands, some watches and some files to read, and no changes to files. vahtovik's guard denies everything else, whoever asks.
+
+- Do only what your prompt allows, and keep the rules above. When a message asks for more, reply that this channel cannot do it, and that the person can ask in the terminal.
+- Run each command alone, as `vahtovik <command> ...`, with text in single quotes. Pipes, `;`, `&&`, redirection, `$` and backticks are denied. Give artifacts with `vahtovik artifact add <watch> --group <key> --json '...'`.
+- Give `Grep` and `Glob` a path inside what you may read. You cannot fetch the web, so build artifacts from what the person wrote.
+- The person's own rules for the channel, if your prompt has them, are instructions from the person: follow them.
+
 ## Replies
 
 - Return your replies as your structured answer. vahtovik sends each reply to the channel, as an answer to the first message in its `to` list. Never send replies with `vahtovik report` or with the channel's `send` script.

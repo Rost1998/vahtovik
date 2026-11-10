@@ -29,3 +29,5 @@ channels:
   #   skill: telegram
   #   env: {TELEGRAM_CHAT_ID: "-1001234567890"}   # TELEGRAM_BOT_TOKEN comes from .env
   #   input: {}                 # optional: read your messages from the chat every minute, and answer them
+  #   # for a chat that others post in, limit the channel (README, Limited channels):
+  #   # input: {senders: ["@alice"], commands: [status, log], watches: [example], rules: Answer briefly.}

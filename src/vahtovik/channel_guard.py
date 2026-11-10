@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 from .config import Channel, Config
+from .util import schema_path
 
 log = logging.getLogger(__name__)
 
@@ -29,8 +30,9 @@ def hooks(channel: str) -> dict:
 
 
 def readable(cfg: Config, channel: Channel) -> list[Path]:
-    """The files and folders the channel's agent may read: the rules and its watches, never a .env file."""
-    paths = [cfg.skills_dir, cfg.root / "README.md", cfg.root / "CLAUDE.md"]
+    """The files and folders the channel's agent may read: the rules, the schemas and its watches, never a .env
+    file."""
+    paths = [cfg.skills_dir, cfg.root / "README.md", cfg.root / "CLAUDE.md", schema_path("artifact").parent]
     if channel.input.watches is None:
         return paths + [cfg.watches_dir, cfg.data_dir / "watches"]
     for watch in channel.input.watches:

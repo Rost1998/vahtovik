@@ -62,6 +62,7 @@ def test_the_channel_agent_answers_each_message_through_the_channel(project, cha
     assert args[args.index("--permission-mode") + 1] == "bypassPermissions" and "--tools" not in args  # full power
     assert "hooks" not in json.loads(args[args.index("--settings") + 1]) and "VAHTOVIK_WATCHES" not in call["env"]
     assert "What waits for me?" in call["prompt"] and "skills/vahtovik/channel/SKILL.md" in call["prompt"]
+    assert "## What this channel may do\n\nEverything, as in the terminal.\n" in call["prompt"]
     assert f"reply to message {first}" in _outbox(project) and "Nothing waits for you." in _outbox(project)
     assert state.message_counts("chat") == {"answered": 1}
     assert state.row("SELECT reply_to, origin FROM deliveries")["reply_to"] == first
@@ -156,7 +157,7 @@ def test_messages_from_other_senders_are_ignored_without_a_reply(project, chat, 
 
 def test_a_limited_channel_runs_with_the_guard_and_sees_only_its_watches(project, chat):
     shutil.copytree(project.root / "watches/w1", project.root / "watches/w2")
-    _chat_input(project, commands=["status", "tell"], watches=["w1"])
+    _chat_input(project, commands=["status", "tell"], watches=["w1"], rules="Answer in Ukrainian.")
     message = chat("How are things?")
     project.queue({**replies(([message], "All quiet.")), "actions": [
         {"bash": "vahtovik status"}, {"bash": "vahtovik status --watch w2"}, {"bash": "vahtovik run"},
@@ -169,6 +170,11 @@ def test_a_limited_channel_runs_with_the_guard_and_sees_only_its_watches(project
     [hook] = json.loads(args[args.index("--settings") + 1])["hooks"]["PreToolUse"]
     assert hook["matcher"] == "*" and hook["hooks"][0]["command"].endswith("-m vahtovik hook guard chat")
     assert call["env"]["VAHTOVIK_WATCHES"] == "w1"
+    prompt = call["prompt"]
+    assert "This channel is limited" in prompt and "- Commands: `vahtovik status`, `vahtovik tell`." in prompt
+    assert "- Watches: w1; the commands see no other watch." in prompt
+    assert "- Reading: `skills`, `README.md`, `CLAUDE.md`, " in prompt and "`watches/w1`, `data/watches/w1`; never" in prompt
+    assert prompt.count("Answer in Ukrainian.") == 1 and "own rules for this channel:\n\nAnswer in Ukrainian." in prompt
     status, other, run, sneaky = project.command_runs()
     assert status["code"] == 0 and "w1" in status["out"] and "w2" not in status["out"]
     assert other["code"] != 0 and "unknown watch 'w2'; known: w1" in other["out"]
