@@ -14,7 +14,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from . import config as config_mod
-from . import costs, delivery, group_session, group_status, journal, operations, skills, timer, watchdog, windows
+from . import (channel_guard, costs, delivery, group_session, group_status, journal, operations, skills, timer,
+               watchdog, windows)
 from .claude_session import Claude
 from .config import Config, ConfigError
 from .stages import channel_input, group_turn, monitor
@@ -260,7 +261,16 @@ def cmd_tell(args) -> int:
 
 
 def cmd_hook(args) -> int:
-    """Claude Code runs this for the hooks of group sessions (group_status.hooks)."""
+    """Claude Code runs this for the hooks of group sessions (group_status.hooks), and for the guard of limited
+    input channels (channel_guard.hooks)."""
+    if args.event == "guard":
+        try:
+            cfg, _state = _load()
+            print(json.dumps(channel_guard.run(cfg, args.channel or "", json.loads(sys.stdin.read() or "{}"))))
+            return 0
+        except Exception as exc:  # noqa: BLE001 - exit code 2 makes Claude Code deny the tool call
+            print(f"vahtovik's guard failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+            return 2
     _cfg, state = _load()
     watch, key = _session_group()
     data = json.loads(sys.stdin.read() or "{}")
@@ -638,7 +648,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_window)
 
     p = sub.add_parser("hook", help=argparse.SUPPRESS)
-    p.add_argument("event", choices=["prompt", "stop"])
+    p.add_argument("event", choices=["prompt", "stop", "guard"])
+    p.add_argument("channel", nargs="?", help="guard: the limited input channel")
     p.set_defaults(func=cmd_hook)
 
     p = sub.add_parser("status", help="show watches, groups and deliveries")
