@@ -55,6 +55,6 @@ channels/<name>/receive        optional executable, for channels with `input`; o
 - `send` runs in the vahtovik project folder with a 60-second timeout.
 - `receive` contract:
   - `VAHTOVIK_STATE_DIR` is the channel's state folder, for "last read" markers; also `VAHTOVIK_CHANNEL`, the channel's `env` from `vahtovik.yaml`, and the secrets from `.env`;
-  - it prints `{"messages": [{"id": "...", "text": "...", "from": "...", "time": "..."}], "error": null}`: only messages it has not printed before for this state folder, and only messages from people, never the ones vahtovik sent; `id` must be what `send` needs in `VAHTOVIK_REPLY_TO`;
+  - it prints `{"messages": [{"id": "...", "text": "...", "from": "...", "time": "..."}], "error": null}`: only messages it has not printed before for this state folder, and only messages from people, never the ones vahtovik sent; `id` must be what `send` needs in `VAHTOVIK_REPLY_TO`; `from` must be a stable id of the sender that nobody else can take, such as a username, never a display name: a channel's `senders` in `vahtovik.yaml` matches it;
   - exit code 0 and `error` null mean success. Anything else fails the read, and vahtovik puts the state folder back;
   - it runs in the vahtovik project folder with a 60-second timeout.

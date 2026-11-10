@@ -53,7 +53,8 @@ def main() -> int:
         messages.append({
             "id": str(message["message_id"]),
             "text": text,
-            "from": sender.get("username") or sender.get("first_name") or "unknown",
+            # a stable id, for the channel's `senders`: anybody can take a display name
+            "from": f"@{sender['username']}" if sender.get("username") else f"id:{sender.get('id', 'unknown')}",
             "time": datetime.fromtimestamp(message.get("date", 0), timezone.utc).isoformat(timespec="seconds"),
         })
     marker.write_text(str(offset))

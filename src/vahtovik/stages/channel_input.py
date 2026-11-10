@@ -71,8 +71,15 @@ def receive(cfg: Config, state: State, channel: Channel) -> int | None:
     if error:
         backup.restore()
         return _read_failed(state, channel, error)
-    new = sum(state.add_message(channel.name, str(m["id"]).strip(), str(m.get("text") or ""),
-                                str(m.get("from") or ""), str(m.get("time") or "")) for m in messages)
+    new = 0
+    for m in messages:
+        sender = str(m.get("from") or "")
+        if channel.input.senders is not None and sender not in channel.input.senders:
+            log.warning("%s: Ignored message %s from %s: not one of the channel's senders", channel.name,
+                        str(m["id"]).strip(), sender or "an unknown sender")  # no reply: it may be anybody
+            continue
+        new += state.add_message(channel.name, str(m["id"]).strip(), str(m.get("text") or ""), sender,
+                                 str(m.get("time") or ""))
     state.input_read(channel.name)
     backup.drop()
     if new:

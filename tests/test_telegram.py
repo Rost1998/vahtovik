@@ -51,9 +51,9 @@ def api(tmp_path):
     server.shutdown()
 
 
-def _message(update_id: int, chat: int, text: str | None) -> dict:
+def _message(update_id: int, chat: int, text: str | None, sender: dict | None = None) -> dict:
     message = {"message_id": update_id * 10, "chat": {"id": chat}, "date": 1700000000,
-               "from": {"username": "rost"}}
+               "from": sender or {"id": 5, "username": "rost", "first_name": "Rost"}}
     if text is not None:
         message["text"] = text
     return {"update_id": update_id, "message": message}
@@ -67,11 +67,16 @@ def _receive(env) -> dict:
 def test_receive_lists_new_text_messages_of_the_chat_once(api):
     Api.updates = [_message(1, 42, "Hello"), _message(2, 7, "Other chat"), _message(3, 42, None)]
     first = _receive(api)
-    assert first == {"messages": [{"id": "10", "text": "Hello", "from": "rost", "time": "2023-11-14T22:13:20+00:00"}],
+    assert first == {"messages": [{"id": "10", "text": "Hello", "from": "@rost", "time": "2023-11-14T22:13:20+00:00"}],
                      "error": None}
     Api.updates.append(_message(4, 42, "Again"))
     assert [m["text"] for m in _receive(api)["messages"]] == ["Again"]
     assert [r["offset"] for r in Api.requests] == ["0", "4"]
+
+
+def test_receive_names_a_sender_by_username_or_by_user_id(api):
+    Api.updates = [_message(1, 42, "Hi", {"id": 77, "first_name": "rost"})]
+    assert _receive(api)["messages"][0]["from"] == "id:77"  # a first name is no id: anybody can take it
 
 
 def test_receive_reports_a_missing_setting(api):
