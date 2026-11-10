@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from conftest import artifact, status_action, until
 
-from vahtovik import artifacts, context_file, operations
+from vahtovik import artifacts, cli, context_file, operations
 from vahtovik.config import ConfigError
 from vahtovik.tmux import Tmux, Window
 
@@ -125,6 +125,9 @@ def test_add_artifacts_to_several_groups(project):
         operations.add_artifacts(cfg, state, "w1", ["a"], '{"id": "x3", "title": "T"}')
     with pytest.raises(ConfigError, match="unknown group w1/nope"):
         operations.add_artifacts(cfg, state, "w1", ["nope"], json.dumps(items[0]))
+    item = json.dumps({"id": "x4", "title": "X four", "summary": "-"})  # as a limited channel's agent gives them
+    assert cli.main(["artifact", "add", "w1", "--group", "a", "--json", item]) == 0
+    assert [r["id"] for r in state.group_artifacts("w1", "a")] == ["x1", "x2", "x4"]
 
 
 def test_tell_starts_the_session_or_types_into_its_window(project, monkeypatch):

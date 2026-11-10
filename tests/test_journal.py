@@ -123,3 +123,21 @@ def test_read_filters_and_follows(tmp_path):
         handle.write(" line\nb four\n")
     assert next(lines) == "a unfinished line"
     assert next(lines) == "b four"
+
+
+def test_a_limited_channels_agent_reads_only_the_lines_about_its_watches_and_its_channel(project, monkeypatch,
+                                                                                        capsys):
+    lines = [f"2026-10-17 14:03:40 {who:<19} {message}" for who, message in [
+        ("run 20261017-140312", "Started run: messages in chat, w1, w2"), ("run 20261017-140312", "w1/g: Started"),
+        ("run 20261017-140312", "w2/g: Started"), ("manual", "w1: Created group"), ("manual", "w10/g: Started"),
+        ("run 20261017-140312", "chat: Received 1 message"), ("run 20261017-140312", "other: Received 1 message")]]
+    path = project.root / "data/journal.log"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n")
+    assert [line[40:] for line in journal.read(path, about=["w1", "chat"])] == [
+        "w1/g: Started", "w1: Created group", "chat: Received 1 message"]
+    assert len(list(journal.read(path))) == 7
+    monkeypatch.setenv("VAHTOVIK_WATCHES", "w1")
+    monkeypatch.setenv("VAHTOVIK_CHANNEL", "chat")
+    assert cli.main(["log", "Started"]) == 0
+    assert [line[40:] for line in capsys.readouterr().out.splitlines()] == ["w1/g: Started"]

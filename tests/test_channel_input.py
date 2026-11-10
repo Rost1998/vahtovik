@@ -173,3 +173,13 @@ def test_a_limited_channel_runs_with_the_guard_and_sees_only_its_watches(project
     assert status["code"] == 0 and "w1" in status["out"] and "w2" not in status["out"]
     assert other["code"] != 0 and "unknown watch 'w2'; known: w1" in other["out"]
     assert "may not run `vahtovik run`" in run["denied"] and "denied" in sneaky
+
+
+def test_status_shows_each_input_channels_limits(project, chat, capsys):
+    _chat_input(project, commands=["status"], watches=["w1"], senders=["@alice"], rules="Be brief.\nNo jokes.")
+    cli.main(["status", "-v"])
+    out = capsys.readouterr().out
+    assert "  limited to status; watches w1; senders @alice; rules: Be brief...." in out
+    _chat_input(project, commands=None, watches=None, senders=None, rules="")
+    cli.main(["status", "-v"])
+    assert "  full power; all watches; any sender; no rules of its own" in capsys.readouterr().out

@@ -63,18 +63,28 @@ def setup(cfg: Config, who: str | None = None, echo: bool = False) -> None:
 
 
 def read(journal: Path, count: int = 0, text: str = "", follow: bool = False,
-         poll: float = 1.0) -> Iterator[str]:
-    """The last `count` lines that contain `text` (all of them if `count` is 0).
-    With `follow`, then keep yielding such lines as they are added."""
+         poll: float = 1.0, about: list[str] | None = None) -> Iterator[str]:
+    """The last `count` lines that contain `text` (all of them if `count` is 0), and, with `about`, are about one
+    of these watches or channels. With `follow`, then keep yielding such lines as they are added."""
     data = journal.read_bytes() if journal.is_file() else b""
     position = data.rfind(b"\n") + 1  # an unfinished last line is read when it is finished
-    matching = [line for line in data[:position].decode("utf-8", "replace").splitlines() if text in line]
+    matching = [line for line in data[:position].decode("utf-8", "replace").splitlines()
+                if text in line and _is_about(line, about)]
     yield from matching[-count:] if count else matching
     if follow:
-        yield from _follow(journal, text, poll, position)
+        yield from _follow(journal, text, poll, position, about)
 
 
-def _follow(journal: Path, text: str, poll: float, position: int) -> Iterator[str]:
+def _is_about(line: str, names: list[str] | None) -> bool:
+    """Whether the line's message starts with `<name>/` or `<name>:`, for one of the names; any line without names."""
+    if names is None:
+        return True
+    message = line[len("2026-10-17 14:03:40 ") + WHO_WIDTH + 1:]  # see _Formatter
+    return message.startswith(tuple(f"{name}{end}" for name in names for end in "/:"))
+
+
+def _follow(journal: Path, text: str, poll: float, position: int,
+            about: list[str] | None = None) -> Iterator[str]:
     pending = b""
     while True:
         size = journal.stat().st_size if journal.exists() else 0
@@ -88,7 +98,7 @@ def _follow(journal: Path, text: str, poll: float, position: int) -> Iterator[st
             *lines, pending = (pending + chunk).split(b"\n")
             for raw in lines:
                 line = raw.decode("utf-8", "replace")
-                if text in line:
+                if text in line and _is_about(line, about):
                     yield line
         else:
             time.sleep(poll)

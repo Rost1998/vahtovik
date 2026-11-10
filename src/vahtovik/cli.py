@@ -251,7 +251,8 @@ def cmd_group_set(args) -> int:
 
 def cmd_artifact_add(args) -> int:
     cfg, state = _load()
-    return _print(operations.add_artifacts(cfg, state, args.watch, args.group, _stdin_text("the artifacts as JSON")))
+    text = args.json if args.json is not None else _stdin_text("the artifacts as JSON, or give --json")
+    return _print(operations.add_artifacts(cfg, state, args.watch, args.group, text))
 
 
 def cmd_tell(args) -> int:
@@ -337,8 +338,9 @@ def _status_table(cfg: Config, state: State, names: list[str]) -> None:
         print(line)
 
 
-def _inputs(cfg: Config, state: State) -> list[str]:
-    """One line per input channel: how often it is read, when it was last, and its messages."""
+def _inputs(cfg: Config, state: State, verbose: bool = False) -> list[str]:
+    """One line per input channel: how often it is read, when it was last, and its messages; `verbose` adds
+    a line with its limits."""
     lines = []
     for channel in channel_input.input_channels(cfg):
         row = state.input_state(channel.name)
@@ -349,7 +351,20 @@ def _inputs(cfg: Config, state: State) -> list[str]:
         lines.append(f"input channel {channel.name}: every {_every(channel.input.interval)}, last read {read}, "
                      f"{counts.get('new', 0)} waiting, {counts.get('answered', 0)} answered, "
                      f"{counts.get('failed', 0)} failed{error}")
+        if verbose:
+            lines.append(f"  {_limits(channel.input)}")
     return lines + [""] if lines else []
+
+
+def _limits(settings) -> str:
+    """What an input channel's agent may do, and who may write to it."""
+    first = settings.rules.splitlines()[0] if settings.rules else ""
+    rules = first[:60] + ("..." if len(settings.rules) > len(first[:60]) else "")
+    return "; ".join([
+        f"limited to {', '.join(settings.commands) or 'no commands'}" if settings.limited else "full power",
+        f"watches {', '.join(settings.watches) or 'none'}" if settings.watches is not None else "all watches",
+        f"senders {', '.join(settings.senders) or 'none'}" if settings.senders is not None else "any sender",
+        f"rules: {rules}" if rules else "no rules of its own"])
 
 
 def _cost_summary(state: State, periods: dict[str, timedelta | None]) -> list[str]:
@@ -449,7 +464,7 @@ def _status_details(cfg: Config, state: State, names: list[str]) -> None:
     failed = state.row("SELECT COUNT(*) AS n FROM deliveries WHERE status != 'sent'")["n"]
     print(f"undelivered reports: {failed}")
     print()
-    for line in _inputs(cfg, state):
+    for line in _inputs(cfg, state, verbose=True):
         print(line)
     for line in _cost_summary(state, DETAIL_PERIODS):
         print(line)
@@ -541,7 +556,9 @@ def cmd_test_channel(args) -> int:
 def cmd_log(args) -> int:
     cfg = config_mod.load(config_mod.find_root())
     try:
-        for line in journal.read(journal.path(cfg), args.lines, args.text, follow=args.follow):
+        # A limited channel's agent sees only the lines about its watches, and its own channel's.
+        about = None if cfg.scope is None else [*cfg.scope, *filter(None, [os.environ.get("VAHTOVIK_CHANNEL")])]
+        for line in journal.read(journal.path(cfg), args.lines, args.text, follow=args.follow, about=about):
             print(line, flush=args.follow)
     except KeyboardInterrupt:
         pass
@@ -632,10 +649,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("artifact", help="add artifacts to groups")
     artifact_sub = p.add_subparsers(dest="artifact_command", required=True)
-    a = artifact_sub.add_parser("add", help="add artifacts, as JSON on stdin (one object or a list), to groups")
+    a = artifact_sub.add_parser("add", help="add artifacts, as JSON (one object or a list), to groups")
     a.add_argument("watch")
     a.add_argument("--group", action="append", default=[], required=True,
                    help="a group key of the watch to add them to; repeat for each group")
+    a.add_argument("--json", help="the artifacts (default: stdin)")
     a.set_defaults(func=cmd_artifact_add)
 
     p = sub.add_parser("tell", help="pass a message from the person to group sessions")
