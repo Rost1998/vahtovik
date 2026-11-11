@@ -173,6 +173,9 @@ def answer(cfg: Config, state: State, claude: Claude, channel: Channel, run_id: 
     state.set_messages(channel.name, ids, "answered")
     log.info("%s: Answered %s in %s, $%.2f", channel.name, plural(len(ids), "message"),
              duration(result.duration_s), result.cost_usd)
+    if result.output.get("new_session"):
+        state.set_input_session(channel.name, None)
+        log.info("%s: Cleared the session at the person's request; the next message starts a new one", channel.name)
     return len(ids)
 
 

@@ -16,6 +16,8 @@
           "text": {"type": "string", "minLength": 1, "description": "The reply, formatted by the channel's rules"}
         }
       }
-    }
+    },
+    "new_session": {"type": "boolean",
+                    "description": "true when the person asked to clear the conversation or start over; the next message starts a new session"}
   }
 }

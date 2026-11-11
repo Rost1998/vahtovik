@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 import shutil
 import time
 
@@ -74,6 +75,27 @@ def test_the_channel_agent_answers_each_message_through_the_channel(project, cha
     assert resumed[resumed.index("--resume") + 1] == args[args.index("--session-id") + 1]
     assert f"reply to message {second}" in _outbox(project)
     assert state.message_counts("chat") == {"answered": 3}
+
+
+def test_the_person_can_clear_the_channels_session(project, chat, caplog):
+    caplog.set_level(logging.INFO)
+    first = chat("Clear our conversation.")
+    answer = replies(([first], "Cleared: your next message starts a fresh conversation."))
+    answer["structured_output"]["new_session"] = True
+    project.queue(answer)
+    _cfg, state, _received, answered = _receive_and_answer(project)
+    assert answered == 1 and state.input_state("chat")["session_id"] is None
+    assert caplog.records[-1].getMessage() == ("chat: Cleared the session at the person's request; "
+                                               "the next message starts a new one")
+    assert "Cleared: your next message" in _outbox(project)
+
+    second = chat("What waits for me?")
+    project.queue(replies(([second], "Nothing waits for you.")))
+    _receive_and_answer(project)
+    old, new = (call["args"] for call in project.calls())
+    assert "--resume" not in new
+    assert new[new.index("--session-id") + 1] != old[old.index("--session-id") + 1]
+    assert state.input_state("chat")["session_id"] == new[new.index("--session-id") + 1]
 
 
 def test_a_message_without_a_reply_is_tried_again_and_given_up_after_three_attempts(project, chat):

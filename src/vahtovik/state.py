@@ -559,7 +559,8 @@ class State:
             self.execute("UPDATE channel_inputs SET last_read_at = ?, last_ok_at = ? WHERE channel = ?",
                          now, now, channel)
 
-    def set_input_session(self, channel: str, session_id: str) -> None:
+    def set_input_session(self, channel: str, session_id: str | None) -> None:
+        """None clears it: the next answer starts a new session."""
         self.execute("INSERT OR IGNORE INTO channel_inputs (channel) VALUES (?)", channel)
         self.execute("UPDATE channel_inputs SET session_id = ? WHERE channel = ?", session_id, channel)
 
