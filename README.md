@@ -24,10 +24,10 @@ uv run vahtovik open example/uv-0-13                 # talk to a group's agent
 
 ## How a run works
 
-`vahtovik run` does one cycle. It answers your messages from channels with `input`, monitors the sources of enabled watches whose `interval` has passed, and starts the turns of the groups with new artifacts:
+`vahtovik run` does one cycle. It answers your messages from channels with `input`, monitors the sources of enabled watches that are due, by their `interval` or their times of the day (`at`), and starts the turns of the groups with new artifacts:
 
 1. **Input**: it reads each channel with `input` whose interval has passed, and the vahtovik agent answers the new messages (see Channel-input).
-2. **Monitor**: one throwaway session per due source. Each source has its own `interval`; without one, it has its watch's `interval`. A source with `scan: script` is read first by its type's `scan` script, without AI; a session starts only when the script finds new items, and gets them in its prompt. It follows the source skill and `monitor.md`, and returns new artifacts with a `group_key`. vahtovik drops artifacts it has seen, creates new groups, and saves the artifacts.
+2. **Monitor**: one throwaway session per due source. A source is due once its `interval` has passed since it was last monitored, or, with `at`, once the first of its times of the day after that has come. A source without its own `interval` or `at` has its watch's. A source with `scan: script` is read first by its type's `scan` script, without AI; a session starts only when the script finds new items, and gets them in its prompt. It follows the source skill and `monitor.md`, and returns new artifacts with a `group_key`. vahtovik drops artifacts it has seen, creates new groups, and saves the artifacts.
 3. **Group turn**: for each group with new artifacts, vahtovik resumes the group's session in a tmux window and goes on: it does not wait for the turn to end. The agent processes the artifacts by `process/*.md`, updates `context.md`, reports by `report.md` with `vahtovik report`, and ends the turn with its status (see below). At most `claude.parallel_turns` (5) turns work at once; turns that wait for their background work or for a person do not count. The rest start at a later run: every run starts the turns that can start, even when no source is due.
 4. **Deliver**: failed deliveries are retried, up to 5 attempts.
 
@@ -175,7 +175,7 @@ The second column says who wrote the line: a timer run, an `interactive` session
 
 - `vahtovik.yaml`: Claude login mode (`subscription` or `api-key`), the default model and effort (`opus`, the newest Opus, and `high`), model, effort and dollar cap per stage, how many group turns work at once (`claude.parallel_turns`), the watchdog's pace and notices, and channels. A watch can set its own model and effort in `watch.yaml` (`claude: {model: ..., effort: ...}`), and override the settings of a stage (`claude: {group: {effort: xhigh}}`). Later ones win: `vahtovik.yaml`'s model and effort, its stage settings, the watch's model and effort, the watch's stage settings. The watchdog belongs to no watch, so only `vahtovik.yaml` sets it.
 - `.env`: shared secrets, such as channel tokens and `ANTHROPIC_API_KEY`; see `.env.example`.
-- `watches/<name>/`: `watch.yaml` (interval, sources, channels), `monitor.md`, `process/*.md` (used in name order), `report.md`, and `MEMORY.md`, the notes that agents save (see Watch memory). See `watches/example/`. A source may set its own `interval`; the watch's `interval` is the default for its sources.
+- `watches/<name>/`: `watch.yaml` (interval or times of the day, sources, channels), `monitor.md`, `process/*.md` (used in name order), `report.md`, and `MEMORY.md`, the notes that agents save (see Watch memory). See `watches/example/`. A source may set its own `interval` or `at`; the watch's is the default for its sources. See Scheduling.
 - `watches/<name>/.env`: the watch's own secrets, such as source tokens. Only this watch's sessions get them, so two watches can each have their own `GITHUB_TOKEN`. If one watch has two sources of the same type with different tokens, give a source `env: {GITHUB_TOKEN: GITHUB_TOKEN_ORG_B}`: its scripts then get `GITHUB_TOKEN` set to the value of `GITHUB_TOKEN_ORG_B`.
 - `skills/`: see [skills/README.md](skills/README.md) for the source and channel contracts.
 
@@ -205,7 +205,7 @@ The sessions that vahtovik starts never load the root `CLAUDE.md`: monitoring, g
 
 | Command | What it does |
 |---|---|
-| `run [--watch W] [--stage input\|monitor\|group\|deliver] [--force] [--dry-run]` | one cycle; `--force` reads every input channel and monitors every source, whatever their intervals; `--watch` leaves the input channels out; `--dry-run` makes channels print instead of send |
+| `run [--watch W] [--stage input\|monitor\|group\|deliver] [--force] [--dry-run]` | one cycle; `--force` reads every input channel and monitors every source, whatever their schedules; `--watch` leaves the input channels out; `--dry-run` makes channels print instead of send |
 | `open W/KEY [--new-session]` | show a group's session window, starting the session if it is not running |
 | `report --channel C [--subject S]` | send a report, body on stdin (inside a session, the group comes from the environment) |
 | `turn finished\|scheduled\|waiting\|background [--importance I] [--summary S] [--question Q ...] [--reason R] [--after 6h] [--check-after 30m]` | for agents: end a turn with the group's status |
@@ -218,7 +218,7 @@ The sessions that vahtovik starts never load the root `CLAUDE.md`: monitoring, g
 | `memory add [--watch W] [--text T]` | add a note (default: stdin) to the watch's `MEMORY.md`; inside a session, the watch comes from the environment |
 | `memory remove NUMBER --reason R [--watch W]` | remove an entry from the watch's `MEMORY.md` |
 | `log [TEXT] [-n N] [-f]` | the last N journal lines (default 40, 0 for all) that contain TEXT; `-f` keeps showing new lines |
-| `status [--watch W] [-v]` | a table of watches and their groups: each watch's state (enabled or disabled), its sources' intervals, and the time left until a run monitors its next source; each group's status, processed artifacts and cost in the last 24 hours and 30 days; the totals per watch and for all; and undelivered reports; then the input channels and their messages; then the cost of group, monitor, input and watchdog sessions in the same periods, and in total. `-v` gives all details as text instead: sources with their intervals and next times, sessions, status reasons, and costs for all time too |
+| `status [--watch W] [-v]` | a table of watches and their groups: each watch's state (enabled or disabled), its sources' intervals or times of the day, and the time left until a run monitors its next source; each group's status, processed artifacts and cost in the last 24 hours and 30 days; the totals per watch and for all; and undelivered reports; then the input channels and their messages; then the cost of group, monitor, input and watchdog sessions in the same periods, and in total. `-v` gives all details as text instead: sources with their schedules and next times, sessions, status reasons, and costs for all time too |
 | `install-timer [--every 1m]` | start vahtovik periodically with a systemd user timer |
 | `uninstall-timer` | remove that timer |
 | `check` | validate config, skills, environment variables, `claude`, its trust of the project folder, and tmux |
@@ -226,7 +226,16 @@ The sessions that vahtovik starts never load the root `CLAUDE.md`: monitoring, g
 
 ## Scheduling
 
-vahtovik has no background process. A timer starts one cycle at a fixed period, every minute by default. Each source is monitored only when its own `interval` has passed, and the watchdog runs only every `watchdog.every` (5 minutes), but every cycle starts the group turns that wait. Nothing runs more often than the timer fires, so keep the period at 1 minute, the default.
+vahtovik has no background process. A timer starts one cycle at a fixed period, every minute by default. Each source is monitored only when it is due by its schedule, and the watchdog runs only every `watchdog.every` (5 minutes), but every cycle starts the group turns that wait. Nothing runs more often than the timer fires, so keep the period at 1 minute, the default.
+
+A watch, or a source, has one of two schedules in `watch.yaml`:
+
+```yaml
+interval: 6h                    # every 6 hours after the last monitoring: 30m, 6h, 1d
+at: ["08:00", "20:00"]          # or: at these times of the day, in the computer's local time; one time or a list
+```
+
+Not both at once. A source without its own `interval` or `at` has its watch's; a watch with neither has `interval: 1h`. With `at`, a source is due at the first of its times after it was last monitored. So a time missed while the computer was off is made up once, at the first run after it is back. A source that was never monitored is due at once, with either schedule. Write the times in quotes: YAML reads an unquoted `20:00` as a number, which vahtovik turns back into the time, but quotes make it plain.
 
 Runs never overlap. Group turns go on in their windows after the run that started them, and have no time limit. A run that starts while another is still going does nothing and writes a line such as `Skipped run: run 20261020-140312 has been going for 47m00s`. Sources that are due stay due, so the first run after the long one picks them up. The systemd timer does not even start a run while one is going, so these fires leave no line.
 

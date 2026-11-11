@@ -35,9 +35,9 @@ def _load(who: str | None = None, echo: bool = False) -> tuple[Config, State]:
 
 
 def _next_monitoring(state: State, watch, source) -> datetime | None:
-    """When the source is due: its interval after it was last monitored, or None if it never was."""
+    """When the source is due after it was last monitored (Source.next_run), or None if it never was."""
     last = state.source_last_run(watch.name, source.id)
-    return datetime.fromisoformat(last) + source.interval if last else None
+    return source.next_run(datetime.fromisoformat(last)) if last else None
 
 
 def _due_sources(state: State, watch, now: datetime, force: bool) -> list:
@@ -404,10 +404,10 @@ def _table(header: list[str], rows: list[list[str]], footer: list[str], right: t
 
 
 def _period(state: State, watch) -> str:
-    """The intervals of the watch's sources and, if it is enabled, the time left until a run monitors the next
-    one: "6h (in 4h12m)", or "1m, 6h (now)"."""
-    intervals = sorted({s.interval for s in watch.sources}) or [watch.interval]
-    period = ", ".join(map(_every, intervals))
+    """The schedules of the watch's sources and, if it is enabled, the time left until a run monitors the next
+    one: "6h (in 4h12m)", "1m; 6h (now)" or "at 08:00, 20:00 (in 3h05m)"."""
+    items = sorted(watch.sources or [watch], key=lambda s: (bool(s.at), s.interval, s.at))
+    period = "; ".join(dict.fromkeys(map(_schedule, items)))
     if not watch.enabled:
         return period
     now = datetime.now(timezone.utc)
@@ -420,6 +420,11 @@ def _left(at: str) -> str:
     """The time left until a moment: "in 4h12m", or "now" once it has come."""
     left = datetime.fromisoformat(at) - datetime.now(timezone.utc)
     return f"in {duration(left.total_seconds())}" if left > timedelta(0) else "now"
+
+
+def _schedule(item) -> str:
+    """When a source, or a watch's sources, are monitored, as watch.yaml sets it: "6h", or "at 08:00, 20:00"."""
+    return "at " + ", ".join(t.strftime("%H:%M") for t in item.at) if item.at else _every(item.interval)
 
 
 def _every(interval: timedelta) -> str:
@@ -458,7 +463,8 @@ def _status_details(cfg: Config, state: State, names: list[str]) -> None:
             error = f", last error: {row['last_error']}" if row and row["last_error"] and (
                 not row["last_ok_at"] or row["last_error_at"] > row["last_ok_at"]) else ""
             at = _next_monitoring(state, watch, src)
-            print(f"  source {src.id} ({src.skill}, {src.scan} scan): every {_every(src.interval)}, next "
+            when = _schedule(src) if src.at else f"every {_schedule(src)}"
+            print(f"  source {src.id} ({src.skill}, {src.scan} scan): {when}, next "
                   f"{human(at) if at and at > datetime.now(timezone.utc) else 'now'}{error}")
         for g in state.groups(name):
             summary = _artifact_counts(state, name, g["key"])
@@ -603,7 +609,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("run", help="run one monitoring cycle")
     p.add_argument("--watch", help="only this watch")
     p.add_argument("--stage", choices=["input", "monitor", "group", "deliver"], help="only this stage")
-    p.add_argument("--force", action="store_true", help="ignore the intervals of sources and input channels")
+    p.add_argument("--force", action="store_true",
+                   help="ignore the schedules of sources and the intervals of input channels")
     p.add_argument("--dry-run", action="store_true", help="channels print instead of sending")
     p.set_defaults(func=cmd_run)
 

@@ -1,11 +1,12 @@
 # Example watch: new releases of uv (the Python package manager).
 enabled: false                  # timer runs skip it; `vahtovik run --watch example` still runs it
 interval: 6h                    # how often to monitor its sources, unless a source sets its own interval
+# at: ["08:00", "20:00"]        # or instead of interval: at these times of the day, in the computer's local time
 sources:
   - id: uv-releases
     skill: rss
     params: {url: "https://github.com/astral-sh/uv/releases.atom", max: 10}
-    # interval: 1h                # optional: this source's own interval
+    # interval: 1h                # optional: this source's own interval, or its own `at: "09:30"`
     # scan: script                # optional: rss's scan script reads the feed; a session starts only for new entries
     # env: {GITHUB_TOKEN: GITHUB_TOKEN_ORG_B}   # optional: fill a variable the skill reads from another secret
 channels: [local-log]           # add ops-telegram here once it is defined in vahtovik.yaml

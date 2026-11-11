@@ -12,7 +12,7 @@ Run vahtovik as `uv run vahtovik ...` in the project folder.
 ## The parts
 
 - **Watch**, `watches/<name>/`: what to monitor and what to do with it.
-  - `watch.yaml`: enabled, interval (the default for its sources), sources (each may set its own interval), channels, and the model and effort of its sessions.
+  - `watch.yaml`: enabled, interval or times of the day (`at`, the default for its sources), sources (each may set its own interval or `at`), channels, and the model and effort of its sessions.
   - `monitor.md`: what counts as an artifact, how to make its id, title and summary, and how to group artifacts.
   - `process/*.md`: how group agents process new artifacts, in name order.
   - `report.md`: when and what to report, to which channel.
@@ -28,7 +28,7 @@ Run vahtovik as `uv run vahtovik ...` in the project folder.
 - **Runs**: a timer starts `vahtovik run` every minute. A run:
   1. lets the watchdog look after the group sessions, every 5 minutes (`watchdog.every`);
   2. reads the channels with `input`, and lets you answer their new messages;
-  3. monitors each source whose `interval` has passed (a source's own, or its watch's), with one AI session per source;
+  3. monitors each source that is due by its `interval` or its times of the day, `at` (a source's own, or its watch's), with one AI session per source;
   4. starts a turn, in a tmux window, for each group with new artifacts or a scheduled turn that is due;
   5. retries failed reports and replies.
 - **Channel-input**: a channel with `input` in `vahtovik.yaml` is read by its type's `receive` script, and you answer the person's messages from it (`channel/SKILL.md`).
@@ -59,7 +59,7 @@ If the person asks you to change vahtovik's own code, work on it as a developer.
 
 | The person wants to | Read first | Commands |
 |---|---|---|
-| set up a watch, or change one: sources, channels, interval, enabled, model, effort, rules | `skills/vahtovik/create-watch/SKILL.md` | edit `watches/<name>/`; `vahtovik check` |
+| set up a watch, or change one: sources, channels, interval or times of the day, enabled, model, effort, rules | `skills/vahtovik/create-watch/SKILL.md` | edit `watches/<name>/`; `vahtovik check` |
 | create a group, merge groups, split a group, or schedule a group's turns | `skills/vahtovik/groups/SKILL.md` | `vahtovik group create`, `merge`, `split`, `set` |
 | add artifacts to one group, to several, or to the groups they belong to | `skills/vahtovik/artifacts/SKILL.md` | `vahtovik artifact add` |
 | pass an instruction or a question to group agents | `skills/vahtovik/tell/SKILL.md` | `vahtovik tell` |

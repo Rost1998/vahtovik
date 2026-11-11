@@ -47,6 +47,23 @@ def test_each_source_is_monitored_on_its_own_interval(project):
     assert _monitored(project)[3:] == ["src-a", "src-b"]
 
 
+def test_a_source_with_times_of_the_day_is_monitored_at_the_first_one_after_its_last_monitoring(project):
+    at = (datetime.now() - timedelta(minutes=5)).strftime("%H:%M")
+    path = project.root / "watches/w1/watch.yaml"
+    data = yaml.safe_load(path.read_text())
+    data["sources"][1]["at"] = [at]
+    path.write_text(yaml.safe_dump(data))
+    project.queue(monitor_answer(), monitor_answer())
+    _run()
+    assert _monitored(project) == ["src-a", "src-b"]
+    _run()  # src-b's next time is tomorrow
+    assert len(project.calls()) == 2
+    _ago(project, "src-b", 10)  # monitored before the time came: it is due
+    project.queue(monitor_answer())
+    _run()
+    assert _monitored(project)[2:] == ["src-b"]
+
+
 def test_a_stage_run_does_not_move_the_sources_times(project):
     project.queue(monitor_answer(), monitor_answer())
     cli.main(["run", "--stage", "monitor"])

@@ -1,6 +1,6 @@
 import os
 import shutil
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 
 import pytest
 import yaml
@@ -135,6 +135,50 @@ def test_a_source_has_the_watchs_interval_unless_it_sets_its_own(project):
     path.write_text(yaml.safe_dump(data))
     a, b = config_mod.load(project.root).watch("w1").sources
     assert (a.interval, b.interval) == (timedelta(hours=1), timedelta(minutes=1))
+
+
+def test_a_watch_or_a_source_may_set_times_of_the_day(project):
+    path = project.root / "watches/w1/watch.yaml"
+    data = yaml.safe_load(path.read_text())
+    del data["interval"]
+    data["at"] = ["20:00", "08:30", "20:00"]
+    data["sources"][1]["interval"] = "10m"
+    path.write_text(yaml.safe_dump(data))
+    watch = config_mod.load(project.root).watch("w1")
+    a, b = watch.sources
+    assert watch.at == a.at == [time(8, 30), time(20, 0)]
+    assert (b.at, b.interval) == ([], timedelta(minutes=10))  # the source's own interval wins over its watch's at
+
+
+def test_unquoted_times_are_read_as_times(project):
+    path = project.root / "watches/w1/watch.yaml"
+    path.write_text(path.read_text().replace("interval: 1h", "at: [8:00, 20:00, 07:15]"))
+    assert config_mod.load(project.root).watch("w1").at == [time(7, 15), time(8, 0), time(20, 0)]
+    path.write_text(path.read_text().replace("at: [8:00, 20:00, 07:15]", "at: 9:30"))
+    assert config_mod.load(project.root).watch("w1").at == [time(9, 30)]
+
+
+@pytest.mark.parametrize("change, error", [
+    (lambda d: d.update(at="08:00"), "set interval or at, not both"),
+    (lambda d: d["sources"][0].update(at="8 am"), "source 'src-a': bad time '8 am': use HH:MM"),
+    (lambda d: d["sources"][0].update(at="24:00"), "bad time '24:00'"),
+    (lambda d: d.update(interval=None, at=[]), "at: give one time of the day or more"),
+])
+def test_bad_times_are_rejected(project, change, error):
+    _edit_yaml(project.root / "watches/w1/watch.yaml", change)
+    with pytest.raises(ConfigError, match=error):
+        config_mod.load(project.root)
+
+
+@pytest.mark.parametrize("last, expected", [
+    (datetime(2026, 11, 11, 7, 0), datetime(2026, 11, 11, 8, 0)),
+    (datetime(2026, 11, 11, 8, 0), datetime(2026, 11, 11, 20, 0)),  # a run at 08:00 has done the 08:00 one
+    (datetime(2026, 11, 11, 12, 0), datetime(2026, 11, 11, 20, 0)),
+    (datetime(2026, 11, 11, 21, 0), datetime(2026, 11, 12, 8, 0)),
+])
+def test_a_source_with_times_is_due_at_the_first_one_after_its_last_monitoring(last, expected):
+    source = config_mod.Source("s", "rss", at=[time(8, 0), time(20, 0)])
+    assert source.next_run(last.astimezone()).astimezone().replace(tzinfo=None) == expected
 
 
 def test_an_unknown_scan_mode_is_rejected(project):

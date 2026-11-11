@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 from pathlib import Path
 
 import yaml
@@ -86,6 +86,17 @@ class Source:
     env: dict[str, str] = field(default_factory=dict)  # variable the skill reads -> name of the secret to use
     interval: timedelta = timedelta(hours=1)  # how often to monitor it; watch.yaml's default is the watch's interval
     scan: str = "ai"  # see SCAN_MODES
+    at: list[time] = field(default_factory=list)  # set: monitor it at these times of the day instead, in local time
+
+    def next_run(self, last: datetime) -> datetime:
+        """When the source is due after it was monitored at `last`: its interval later, or the first of its times
+        of the day after `last`."""
+        if not self.at:
+            return last + self.interval
+        local = last.astimezone()  # a naive datetime's astimezone() takes it as local time
+        today = (datetime.combine(local.date(), at).astimezone() for at in self.at)
+        return next((moment for moment in today if moment > local),
+                    datetime.combine(local.date() + timedelta(days=1), self.at[0]).astimezone())
 
 
 @dataclass
@@ -99,6 +110,7 @@ class Watch:
     claude: dict[str, dict]  # stage settings that override vahtovik.yaml, by stage
     model: str | None = None  # the model and effort of all the watch's sessions, unless a stage sets its own
     effort: str | None = None
+    at: list[time] = field(default_factory=list)  # set: the default times of the day of its sources, over interval
 
     @property
     def watch_yaml(self) -> Path:
@@ -237,6 +249,35 @@ def parse_interval(value: object) -> timedelta:
     return timedelta(**{unit: int(match[1])})
 
 
+def parse_times(value: object) -> list[time]:
+    """`at`: one time of the day, HH:MM, or a list of them; sorted, without repeats. PyYAML reads an unquoted 20:00
+    as the base-60 number 1200, so numbers are taken as minutes."""
+    times = set()
+    for item in value if isinstance(value, list) else [value]:
+        if isinstance(item, int) and not isinstance(item, bool) and 0 <= item < 24 * 60:
+            times.add(time(*divmod(item, 60)))
+            continue
+        match = re.fullmatch(r"\s*(\d{1,2}):(\d{2})\s*", str(item))
+        if not match or int(match[1]) > 23 or int(match[2]) > 59:
+            raise ConfigError(f"bad time {item!r}: use HH:MM, for example 08:30")
+        times.add(time(int(match[1]), int(match[2])))
+    if not times:
+        raise ConfigError("at: give one time of the day or more, for example \"08:30\"")
+    return sorted(times)
+
+
+def _schedule(raw: dict, where: str) -> tuple[timedelta | None, list[time]]:
+    """The interval or the times of the day that a watch or a source sets itself; (None, []) for neither."""
+    if raw.get("interval") is not None and raw.get("at") is not None:
+        raise ConfigError(f"{where}: set interval or at, not both")
+    try:
+        if raw.get("at") is not None:
+            return None, parse_times(raw["at"])
+        return (parse_interval(raw["interval"]) if raw.get("interval") is not None else None), []
+    except ConfigError as exc:
+        raise ConfigError(f"{where}: {exc}") from None
+
+
 def _read_yaml(path: Path) -> dict:
     try:
         data = yaml.safe_load(path.read_text()) or {}
@@ -358,7 +399,8 @@ def _load_input(raw: dict, where: str) -> InputSettings:
 def _load_watch(path: Path, channels: dict[str, Channel]) -> Watch:
     raw = _read_yaml(path / WATCH_FILE)
     where = str(path / WATCH_FILE)
-    interval = parse_interval(raw.get("interval", "1h"))
+    interval, at = _schedule(raw, where)
+    interval = interval or timedelta(hours=1)
     sources = []
     for item in raw.get("sources") or []:
         if not isinstance(item, dict) or not item.get("id") or not item.get("skill"):
@@ -372,8 +414,11 @@ def _load_watch(path: Path, channels: dict[str, Channel]) -> Watch:
         scan = str(item.get("scan") or "ai")
         if scan not in SCAN_MODES:
             raise ConfigError(f"{where}: scan of source {item['id']!r} must be one of {', '.join(SCAN_MODES)}")
+        own_interval, own_at = _schedule(item, f"{where}: source {item['id']!r}")
+        if own_interval is None and not own_at:  # a source without its own schedule has its watch's
+            own_interval, own_at = interval, at
         sources.append(Source(str(item["id"]), str(item["skill"]), params, {str(k): str(v) for k, v in env.items()},
-                              parse_interval(item["interval"]) if item.get("interval") else interval, scan))
+                              own_interval or interval, scan, own_at))
     ids = [s.id for s in sources]
     if len(ids) != len(set(ids)):
         raise ConfigError(f"{where}: source ids must be unique")
@@ -395,6 +440,7 @@ def _load_watch(path: Path, channels: dict[str, Channel]) -> Watch:
         claude=_stage_overrides(stages, f"{where} claude"),
         model=str(claude["model"]) if claude.get("model") else None,
         effort=_effort(claude.get("effort"), f"{where} claude"),
+        at=at,
     )
 
 

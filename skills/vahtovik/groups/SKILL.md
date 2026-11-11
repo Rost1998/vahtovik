@@ -59,4 +59,4 @@ uv run vahtovik group set <watch>/<key> --recheck off   # end the standing check
 - The group's status is `scheduled` while it waits for that turn. `vahtovik status` shows the time left, and `-v` shows the reason and the standing check.
 - The agent gets the reason in the turn's prompt. Write the reason so it says what to check.
 - A group agent can also schedule its own next turn, with `vahtovik turn scheduled --after ...`.
-- To change how often the whole watch is monitored, change `interval` in its `watch.yaml` (`skills/vahtovik/create-watch/SKILL.md`).
+- To change how often, or at which times of the day, the whole watch is monitored, change `interval` or `at` in its `watch.yaml` (`skills/vahtovik/create-watch/SKILL.md`).
