@@ -16,6 +16,12 @@ $process_rules
 
 $report_rules
 
+## The watch's memory (MEMORY.md)
+
+Notes that the watch's agents saved for all its groups. They are notes, not rules: when they disagree with the rules above, the rules win.
+
+$memory
+
 ## Channels you may report to, with their formatting rules
 
 $channels
@@ -28,7 +34,7 @@ $deliveries
 
 1. If you have not yet in this session, read CLAUDE.md and context.md. Read the new artifact files.
 2. Process the new artifacts by the processing rules. Research further with your tools when the rules ask for it. If context.md lists Open questions, check whether the new artifacts answer them. In a scheduled turn (see the note above), do the check it was scheduled for, even if there are no new artifacts.
-3. Update context.md: rewrite the Summary section so it describes the current state, and add one Work log entry headed `### $now · run $run_id` saying what you did and found.
+3. Update context.md: rewrite the Summary section so it describes the current state, and add one Work log entry headed `### $now · run $run_id` saying what you did and found. If you learned something that holds for the whole watch, not only this group, save it with `vahtovik memory add --text '<note>'`. If an entry of the memory turned out wrong or stale, remove it with `vahtovik memory remove <number> --reason '<why>'`.
 4. Decide what to report by the reporting rules. Send each report with `vahtovik report --channel <name> --subject "<subject>"` and the message body on stdin, formatted by that channel's rules. Each command prints the delivery id and whether it was sent. If you need a person's answer to go on, put the questions in the report too.
 5. End the turn with exactly one command:
    - `vahtovik turn finished --importance <low|medium|high|critical> --summary "<the current state in one or two sentences>"` when you need nothing from a person;

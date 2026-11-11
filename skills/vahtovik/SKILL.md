@@ -17,6 +17,7 @@ Run vahtovik as `uv run vahtovik ...` in the project folder.
   - `process/*.md`: how group agents process new artifacts, in name order.
   - `report.md`: when and what to report, to which channel.
   - `.env`: the watch's own secrets.
+  - `MEMORY.md`: notes that agents saved for the whole watch with `vahtovik memory`. Group and monitoring sessions get it in their prompts. The person commits it to git.
 - **Source types**, `skills/sources/<type>/`, and **channel types**, `skills/channels/<type>/`: skills with optional scripts. A source is read by an AI session (`scan: ai`, the default), or first by its type's `scan` script (`scan: script`), with a session only for new items. The channels themselves are named in `vahtovik.yaml`.
 - **Artifact**: one item that a source or a person brought, with a stable id. One artifact can be in several groups; each group processes it on its own.
 - **Group**: related artifacts of one watch, with one persistent Claude Code session, the group agent. Its folder is `data/watches/<watch>/groups/<key>/`:
@@ -38,7 +39,7 @@ Run vahtovik as `uv run vahtovik ...` in the project folder.
 
 1. **Change state only with commands.** Read anything. Change watches, skills, `vahtovik.yaml` and `.env` files as the sub-skills say. Never edit anything in `data/` yourself, and never touch its database: change groups, artifacts and sessions only with `vahtovik` commands.
 2. **Know the watch first.** Before any work on a watch:
-   - read its `watch.yaml`, `monitor.md`, `process/*.md` and `report.md`;
+   - read its `watch.yaml`, `monitor.md`, `process/*.md`, `report.md` and `MEMORY.md`;
    - run `uv run vahtovik status --watch <watch> -v`.
 
    Before you change groups, add artifacts or tell group agents something, also read the Summary in `context.md` of each group involved. Run `uv run vahtovik log <watch>/<key>` when its recent history matters. Every watch has its own rules, such as its artifact ids and its grouping rule. Follow them, so that your changes fit what monitoring and the group agents do.
@@ -62,6 +63,7 @@ If the person asks you to change vahtovik's own code, work on it as a developer.
 | create a group, merge groups, split a group, or schedule a group's turns | `skills/vahtovik/groups/SKILL.md` | `vahtovik group create`, `merge`, `split`, `set` |
 | add artifacts to one group, to several, or to the groups they belong to | `skills/vahtovik/artifacts/SKILL.md` | `vahtovik artifact add` |
 | pass an instruction or a question to group agents | `skills/vahtovik/tell/SKILL.md` | `vahtovik tell` |
+| save a note for all agents of a watch, or remove one | | `vahtovik memory add --watch W --text '...'`, `vahtovik memory remove <number> --watch W --reason '...'`; agree first, as for other changes |
 | know what happens or happened | | `vahtovik status`, `vahtovik log`, the groups' `context.md` |
 | talk to a group agent themselves | | tell them to run `uv run vahtovik open <watch>/<key>` in their own terminal: it attaches the terminal, so you cannot run it for them |
 | run a cycle now | | `vahtovik run [--watch W] [--stage input\|monitor\|group\|deliver] [--force] [--dry-run]`; ask first |

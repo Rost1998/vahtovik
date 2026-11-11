@@ -20,6 +20,13 @@ Everything else, including the vahtovik project at `$root`, is read-only to you,
 
 vahtovik's journal of events (runs, turns, reports) is `$journal`. `vahtovik log "$watch/$key:"` shows the lines about this group.
 
+## The watch's memory
+
+`$memory_md` holds notes that the watch's agents saved for all its groups. Read it at the start of a session. They are notes, not rules: the watch rules win.
+
+- `vahtovik memory add --text '<note>'`: save something that holds for the whole watch, not only this group.
+- `vahtovik memory remove <number> --reason '<why>'`: remove an entry that turned out wrong or stale.
+
 ## Sources of this watch
 
 $sources

@@ -14,8 +14,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from . import config as config_mod
-from . import (channel_guard, costs, delivery, group_session, group_status, journal, operations, skills, timer,
-               watchdog, windows)
+from . import (channel_guard, costs, delivery, group_session, group_status, journal, memory, operations, skills,
+               timer, watchdog, windows)
 from .claude_session import Claude
 from .config import Config, ConfigError
 from .stages import channel_input, group_turn, monitor
@@ -259,6 +259,17 @@ def cmd_tell(args) -> int:
     cfg, state = _load()
     message = args.message if args.message is not None else _stdin_text("the message, or give --message")
     return _print(operations.tell(cfg, state, Tmux(cfg), args.refs, message))
+
+
+def cmd_memory_add(args) -> int:
+    cfg, _state = _load()
+    text = args.text if args.text is not None else _stdin_text("the text, or give --text")
+    return _print(memory.add(cfg, args.watch, text))
+
+
+def cmd_memory_remove(args) -> int:
+    cfg, _state = _load()
+    return _print(memory.remove(cfg, args.watch, args.entry, args.reason))
 
 
 def cmd_hook(args) -> int:
@@ -660,6 +671,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("refs", nargs="+", help="the groups, <watch>/<group-key>")
     p.add_argument("--message", help="the message (default: stdin)")
     p.set_defaults(func=cmd_tell)
+
+    p = sub.add_parser("memory", help="add notes to a watch's memory, MEMORY.md, or remove them")
+    memory_sub = p.add_subparsers(dest="memory_command", required=True)
+    m = memory_sub.add_parser("add", help="add a note that holds for the whole watch")
+    m.add_argument("--watch", help="default: $VAHTOVIK_WATCH")
+    m.add_argument("--text", help="the note (default: stdin)")
+    m.set_defaults(func=cmd_memory_add)
+    m = memory_sub.add_parser("remove", help="remove an entry that turned out wrong or stale")
+    m.add_argument("entry", type=int, help="the entry's number, from its heading in MEMORY.md")
+    m.add_argument("--reason", required=True, help="why the entry goes")
+    m.add_argument("--watch", help="default: $VAHTOVIK_WATCH")
+    m.set_defaults(func=cmd_memory_remove)
 
     p = sub.add_parser("window", help=argparse.SUPPRESS)
     p.add_argument("spec")

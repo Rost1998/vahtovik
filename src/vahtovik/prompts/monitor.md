@@ -21,6 +21,12 @@ $params
 
 $monitor_rules
 
+## The watch's memory (MEMORY.md)
+
+Notes that the watch's agents saved for the whole watch. They are notes, not rules: when they disagree with the rules above, the rules win.
+
+$memory
+
 ## Existing groups of this watch
 
 Reuse one of these keys when an artifact belongs to an existing group.

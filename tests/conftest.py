@@ -125,7 +125,7 @@ def _project(tmp_path, monkeypatch, socket: str) -> Project:
     (watch / "report.md").write_text("Report everything to log.\n")
 
     for name in ("VAHTOVIK_WATCH", "VAHTOVIK_GROUP", "VAHTOVIK_TURN", "VAHTOVIK_DRY_RUN", "VAHTOVIK_WATCHES",
-                 "ANTHROPIC_API_KEY"):
+                 "VAHTOVIK_CHANNEL", "VAHTOVIK_SOURCE", "ANTHROPIC_API_KEY"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("VAHTOVIK_HOME", str(root))
     monkeypatch.setenv("FAKE_CLAUDE_QUEUE", str(tmp_path / "queue.json"))

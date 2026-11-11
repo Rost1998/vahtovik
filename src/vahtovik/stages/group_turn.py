@@ -11,7 +11,7 @@ import logging
 import uuid
 from pathlib import Path
 
-from .. import context_file, group_session, groups, skills, windows
+from .. import context_file, group_session, groups, memory, skills, windows
 from ..claude_session import Claude
 from ..config import Config, Watch
 from ..state import State
@@ -117,7 +117,7 @@ def turn(cfg: Config, state: State, claude: Claude, tmux: Tmux, watch: Watch, ke
         "group_turn.md",
         run_id=run_id, turn_id=turn_id, now=now, session_note="\n\n".join(filter(None, notes)),
         artifacts=_artifacts_text(pending) or "- none", process_rules=_process_text(watch),
-        report_rules=_read(watch.report_md), channels=_channels_text(cfg, watch),
+        report_rules=_read(watch.report_md), memory=memory.prompt_text(watch), channels=_channels_text(cfg, watch),
         deliveries=_deliveries_text(state.deliveries_since(watch.name, key, last["started_at"] if last else None)),
     )
     spec.env.update(VAHTOVIK_TURN=turn_id, VAHTOVIK_RUN=run_id)

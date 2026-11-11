@@ -113,6 +113,10 @@ class Watch:
         return self.dir / "report.md"
 
     @property
+    def memory_md(self) -> Path:
+        return self.dir / "MEMORY.md"
+
+    @property
     def env_file(self) -> Path:
         return self.dir / ".env"
 

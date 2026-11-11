@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,7 +19,7 @@ from .config import Config, ConfigError, parse_interval
 from .stages.group_turn import MAX_ATTEMPTS
 from .state import State
 from .tmux import Tmux
-from .util import LockBusy, group_key, human, load_schema, plural, utc_iso, write_atomic
+from .util import LockBusy, group_key, headings_down, human, load_schema, plural, utc_iso, write_atomic
 
 log = logging.getLogger(__name__)
 
@@ -126,11 +125,6 @@ def _hold(cfg: Config, state: State, tmux: Tmux, watch: str, keys: list[str]):
         yield
 
 
-def _headings_down(text: str) -> str:
-    """Make every heading level 4, so text from another group's record stays inside one Work log entry."""
-    return re.sub(r"^#+ ", "#### ", text, flags=re.MULTILINE)
-
-
 def _move_file(cfg: Config, watch: str, key: str, filename: str, target: str) -> None:
     """Move an artifact file to the target group, with the new group key in it."""
     source = cfg.group_dir(watch, key) / "artifacts" / filename
@@ -163,11 +157,11 @@ def _merged_entry(group, context: Path) -> str:
     parts = [f"### {human()} · merged {key}",
              f"vahtovik merged group `{key}` (\"{group['title']}\") into this group. Its artifacts are in the "
              "Artifacts section now, and its record follows.",
-             f"**Summary of `{key}`:**\n\n{_headings_down(context_file.section_text(context, 'Summary')) or '_None._'}"]
+             f"**Summary of `{key}`:**\n\n{headings_down(context_file.section_text(context, 'Summary')) or '_None._'}"]
     questions = context_file.section_text(context, "Open questions")
     if questions and questions != "_None._":
         parts.append(f"**Open questions of `{key}`:**\n\n{questions}")
-    work = _headings_down(context_file.section_text(context, "Work log")) or "_None._"
+    work = headings_down(context_file.section_text(context, "Work log")) or "_None._"
     parts.append(f"**Work log of `{key}`:**\n\n{work}")
     return "\n\n".join(parts)
 
@@ -247,7 +241,7 @@ def split(cfg: Config, state: State, tmux: Tmux, ref: str, ids: list[str], into:
         titles = "; ".join(f"\"{rows[i]['title'] or i}\"" for i in ids)
         source_context = cfg.group_dir(watch_name, key) / "context.md"
         target_context = cfg.group_dir(watch_name, target) / "context.md"
-        summary = _headings_down(context_file.section_text(source_context, "Summary")) or "_None._"
+        summary = headings_down(context_file.section_text(source_context, "Summary")) or "_None._"
         context_file.append(target_context, "Work log", "\n\n".join([
             f"### {human()} · split from {key}",
             f"vahtovik moved {plural(len(ids), 'artifact')} here from group `{key}` (\"{group['title']}\"): {titles}.",

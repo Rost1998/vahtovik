@@ -59,6 +59,11 @@ def tail(text: str, limit: int = 500) -> str:
     return text if len(text) <= limit else "..." + text[-limit:]
 
 
+def headings_down(text: str) -> str:
+    """Make every heading level 4, so text put under a level-2 or level-3 heading stays inside that one part."""
+    return re.sub(r"^#+ ", "#### ", text, flags=re.MULTILINE)
+
+
 def render(template_name: str, **values: object) -> str:
     """Fill a template from the prompts/ package folder ($name placeholders)."""
     text = resources.files("vahtovik").joinpath("prompts", template_name).read_text()

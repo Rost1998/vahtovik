@@ -12,7 +12,7 @@ from pathlib import Path
 
 import yaml
 
-from .. import artifacts, skills
+from .. import artifacts, memory, skills
 from ..claude_session import Claude, SessionSpec
 from ..config import Config, Source, Watch
 from ..state import State
@@ -90,7 +90,7 @@ def run(cfg: Config, state: State, claude: Claude, watch: Watch, run_id: str, ra
             watch=watch.name, source_id=source.id, run_id=run_id, now=human(), workdir=workdir,
             skill_name=skill.name, skill_dir=skill.dir, skill_text=skill.body.strip(),
             params=yaml.safe_dump(source.params, sort_keys=False, allow_unicode=True).strip() or "{}",
-            monitor_rules=rules.strip(), groups=_groups_text(state, watch),
+            monitor_rules=rules.strip(), memory=memory.prompt_text(watch), groups=_groups_text(state, watch),
             recent="\n".join(f"- `{r['id']}`: {r['title']}" for r in recent) or "- none yet",
             collect=collect,
         )
