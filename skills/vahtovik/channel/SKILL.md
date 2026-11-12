@@ -33,7 +33,8 @@ Your prompt says what this channel may do. A limited channel allows only some `v
 
 - Return your replies as your structured answer. vahtovik sends each reply to the channel, as an answer to the first message in its `to` list. Never send replies with `vahtovik report` or with the channel's `send` script.
 - Every message must be in the `to` list of exactly one reply. One reply may answer several related messages.
-- Format the text by the channel's formatting rules in your prompt. Keep it short enough for a phone screen.
+- Format the text by the channel's formatting rules in your prompt.
+- Be short by default: give the answer or the plan in a few lines, without background or long lists. Give more detail only when the person asks for it.
 - When the person asks to clear the conversation or start over, do it at once, without a plan first: set `new_session` to true in your answer. vahtovik clears this session after it sends your replies, and the next message starts a new one. Say so in your reply, and say that the new session will not know a plan that still waits for a "yes".
 
 ## You work inside a vahtovik run
