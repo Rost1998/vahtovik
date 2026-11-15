@@ -34,6 +34,7 @@ When you need any tool before you can answer, tell the person at once that their
   - a request for a change: "Give me a moment: I'll make a plan."
   - a "yes" to your plan: "Doing it now." or "Passing it to the group agent."
   - a report that something failed: "Let me look at what happened."
+- vahtovik adds the size of your context to the end of the line, such as "(22k)", so the person sees whether this session is new. Do not write it yourself.
 - Send one for all the new messages in your prompt. It answers the last of them; `--to <id>` answers another one. vahtovik refuses a second one.
 - Skip it when you can answer without any tool, and when the person asks you to clear the conversation.
 - It is not your reply: every message still needs its reply in your answer. If it fails, go on with your answer. vahtovik does not retry it.

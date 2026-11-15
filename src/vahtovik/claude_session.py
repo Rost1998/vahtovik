@@ -21,6 +21,7 @@ from .util import tail
 log = logging.getLogger(__name__)
 
 SESSION_MISSING = "No conversation found"
+CONTEXT_USAGE = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")  # a step's context
 
 
 @dataclass
@@ -85,6 +86,32 @@ class Claude:
 
     def session_exists(self, session_id: str | None) -> bool:
         return self.session_file(session_id) is not None
+
+    def context_tokens(self, session_id: str | None) -> int | None:
+        """How many tokens the session's context held at its last step: the input of the last assistant entry
+        in its conversation file, cached or not. Claude Code writes a step there before its tool runs, so a
+        command that the session runs sees the step that ran it. None if the file has no such entry."""
+        path = self.session_file(session_id)
+        if path is None:
+            return None
+        tokens = None
+        try:
+            with open(path, errors="replace") as handle:
+                for raw in handle:
+                    if '"usage"' not in raw:
+                        continue
+                    try:
+                        item = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
+                    if item.get("type") != "assistant" or item.get("isSidechain"):
+                        continue
+                    usage = (item.get("message") or {}).get("usage") or {}
+                    total = sum(int(usage.get(k) or 0) for k in CONTEXT_USAGE)
+                    tokens = total or tokens  # a synthetic entry has no usage
+        except OSError:
+            return None
+        return tokens
 
     def settings_json(self, spec: SessionSpec) -> str:
         """Keep the user's personal and parent-folder CLAUDE.md files out of vahtovik sessions

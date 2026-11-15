@@ -166,6 +166,25 @@ def test_a_failed_acknowledgment_is_not_retried_and_outside_a_channel_session_it
     assert "have their first message already" in capsys.readouterr().err
 
 
+def test_the_acknowledgment_shows_the_sessions_context_size(project, chat):
+    chat("Hello.")
+    cfg, state, claude = project.load()
+    channel_input.receive(cfg, state, cfg.channels["chat"])
+    state.set_input_session("chat", "s1")
+    folder = claude.config_dir / "projects" / "here"
+    folder.mkdir(parents=True)
+
+    def step(tokens: tuple[int, int, int], **more) -> str:
+        usage = dict(zip(("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"), tokens))
+        return json.dumps({"type": "assistant", "message": {"usage": {**usage, "output_tokens": 50}}, **more})
+    (folder / "s1.jsonl").write_text("\n".join([
+        json.dumps({"type": "user", "message": {"content": "Hello."}}), step((3, 9000, 4000)), "{broken",
+        step((5, 1600, 20400)), step((2, 500, 90000), isSidechain=True), step((0, 0, 0)), ""]))
+    assert claude.context_tokens("s1") == 22005 and claude.context_tokens("s2") is None
+    assert channel_input.acknowledge(cfg, state, "chat", "One moment.")[0]
+    assert "One moment. (22k)" in _outbox(project)
+
+
 def test_a_failed_read_keeps_the_messages_for_the_next_read(project, chat, monkeypatch):
     chat("Hello.")
     cfg, state, claude = project.load()

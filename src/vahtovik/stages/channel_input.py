@@ -141,8 +141,9 @@ def _limits_text(cfg: Config, channel: Channel) -> str:
 def acknowledge(cfg: Config, state: State, name: str, text: str, to: str | None = None,
                 dry_run: bool = False) -> tuple[bool, str]:
     """The channel agent's first short message, sent at once while it works on the answer: that the person's
-    messages arrived, and what it does now. One for the waiting messages, never retried: a late one is no use.
-    Returns whether it was sent, and what to tell the agent."""
+    messages arrived, and what it does now, with the session's context size in thousands of tokens. One for the
+    waiting messages, never retried: a late one is no use. Returns whether it was sent, and what to tell the
+    agent."""
     channel = cfg.channels.get(name)
     if channel is None or not channel.input:
         raise ConfigError(f"{name!r} is not an input channel")
@@ -158,6 +159,10 @@ def acknowledge(cfg: Config, state: State, name: str, text: str, to: str | None 
     if state.row("SELECT 1 FROM deliveries WHERE channel = ? AND origin = ? "
                  "AND reply_to IN (SELECT value FROM json_each(?))", name, delivery.ACKNOWLEDGMENT, json.dumps(ids)):
         raise delivery.DeliveryError("these messages have their first message already: go on with your answer")
+    session = state.input_state(name)
+    tokens = Claude(cfg).context_tokens(session["session_id"] if session else None)
+    if tokens:  # so the person sees whether a new session answers, or the old one goes on
+        text += f" ({max(1, round(tokens / 1000))}k)"
     row = delivery.reply(cfg, state, name, "", text, to, origin=delivery.ACKNOWLEDGMENT, dry_run=dry_run)
     if row["status"] == "sent":
         return True, f"sent: delivery {row['id']} to {name}, in reply to message {to}"
