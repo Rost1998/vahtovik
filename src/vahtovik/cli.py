@@ -336,7 +336,7 @@ def _status_table(cfg: Config, state: State, names: list[str]) -> None:
                            *(_money(c, lambda k: k[0] == name) for c in group_costs)])
         watch_rows[0][:2] = f"{name} ({'enabled' if watch.enabled else 'disabled'})", _period(state, watch)
         rows += watch_rows
-    failed = state.row("SELECT COUNT(*) AS n FROM deliveries WHERE status != 'sent'")["n"]
+    failed = state.undelivered()
     footer = ["all", "", "", plural(failed, "undelivered report"), str(all_processed),
               *(_money(c, lambda k: k[0] in names) for c in group_costs)]
     for line in _table(["watch", "period", "groups", "status", "artifacts", *PERIODS], rows, footer,
@@ -481,7 +481,7 @@ def _status_details(cfg: Config, state: State, names: list[str]) -> None:
             print(f"  group {g['key']}: {g['title']} | {status} | {summary} | "
                   f"session {g['session_id'] or 'none yet'} | "
                   f"{_spent(group_costs, lambda k: k == (name, g['key']))}")
-    failed = state.row("SELECT COUNT(*) AS n FROM deliveries WHERE status != 'sent'")["n"]
+    failed = state.undelivered()
     print(f"undelivered reports: {failed}")
     print()
     for line in _inputs(cfg, state, verbose=True):
@@ -597,6 +597,17 @@ def cmd_messages(args) -> int:
         raise ConfigError(f"{name!r} is not an input channel; input channels: {inputs}")
     print(channel_input.history_text(state, name, args.last) or f"No messages in {name} yet.")
     return 0
+
+
+def cmd_acknowledge(args) -> int:
+    cfg, state = _load()
+    name = os.environ.get("VAHTOVIK_CHANNEL")
+    if not name:
+        raise ConfigError("run this inside a channel session (VAHTOVIK_CHANNEL is not set)")
+    sent, line = channel_input.acknowledge(cfg, state, name, args.text, args.to,
+                                           dry_run=os.environ.get("VAHTOVIK_DRY_RUN") == "1")
+    print(line)
+    return 0 if sent else 1
 
 
 def cmd_install_timer(args) -> int:
@@ -733,6 +744,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-n", "--last", type=int, default=20,
                    help="how many of the last messages to show, with their replies; 0 shows all (default 20)")
     p.set_defaults(func=cmd_messages)
+
+    p = sub.add_parser("acknowledge", help="tell the person at once that their messages arrived (for channel sessions)")
+    p.add_argument("--text", required=True, help="one short line that fits the messages, such as 'Let me check.'")
+    p.add_argument("--to", help="the message it answers (default: the last one that waits for an answer)")
+    p.set_defaults(func=cmd_acknowledge)
 
     p = sub.add_parser("install-timer", help="start vahtovik periodically with a systemd user timer")
     p.add_argument("--every", default="1m",

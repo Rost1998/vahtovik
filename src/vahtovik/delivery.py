@@ -16,6 +16,8 @@ log = logging.getLogger(__name__)
 
 MAX_ATTEMPTS = 5
 SEND_TIMEOUT = 60
+ACKNOWLEDGMENT = "acknowledgment"  # the origin of a channel agent's first short message: it is never retried
+PLAIN = ("notice", ACKNOWLEDGMENT)  # origins of plain text, which the send script escapes
 
 
 class DeliveryError(Exception):
@@ -54,7 +56,10 @@ def run_send_script(cfg: Config, channel: str, subject: str, body: str, dry_run:
 
 
 def kind(row) -> str:
-    """What a delivery is: a group's `report` or `notice`, or a `reply` to a message from a channel."""
+    """What a delivery is: a group's `report` or `notice`, or a `reply` or `acknowledgment` of a message from a
+    channel."""
+    if row["origin"] == ACKNOWLEDGMENT:
+        return ACKNOWLEDGMENT
     return "reply" if row["reply_to"] else ("notice" if row["origin"] == "notice" else "report")
 
 
@@ -69,7 +74,7 @@ def attempt(cfg: Config, state: State, delivery_id: int, dry_run: bool):
     if row["reply_to"]:
         extra["VAHTOVIK_REPLY_TO"] = row["reply_to"]
     result = run_send_script(cfg, row["channel"], row["subject"], row["body"], dry_run, extra,
-                             plain=row["origin"] == "notice")
+                             plain=row["origin"] in PLAIN)
     state.update_delivery(delivery_id, result.ok, None if result.ok else result.detail,
                           result.detail if result.ok else None)
     if row["group_key"]:
@@ -83,8 +88,8 @@ def attempt(cfg: Config, state: State, delivery_id: int, dry_run: bool):
     if result.ok:
         log.info("%s: Sent %s", scope(row), what)
     else:
-        log.error("%s: Failed %s (attempt %d of %d): %s", scope(row), what, row["attempts"], MAX_ATTEMPTS,
-                  result.detail)
+        tries = "not retried" if row["origin"] == ACKNOWLEDGMENT else f"attempt {row['attempts']} of {MAX_ATTEMPTS}"
+        log.error("%s: Failed %s (%s): %s", scope(row), what, tries, result.detail)
     return row
 
 
@@ -105,7 +110,7 @@ def report(cfg: Config, state: State, watch_name: str, key: str, channel: str, s
 def reply(cfg: Config, state: State, channel: str, subject: str, body: str, reply_to: str, origin: str = "reply",
           dry_run: bool = False):
     """Answer a message that came from the channel, through the same channel. `origin` "notice" sends plain text
-    from vahtovik itself."""
+    from vahtovik itself, and ACKNOWLEDGMENT the agent's first short message, plain too."""
     if not body.strip():
         raise DeliveryError("the reply is empty")
     delivery_id = state.add_delivery("", "", channel, subject, body, origin, None, reply_to)

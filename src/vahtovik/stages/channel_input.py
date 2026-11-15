@@ -2,7 +2,8 @@
 answers them through the same channel.
 
 Each channel type's `receive` script lists the new messages; vahtovik stores them, then resumes the channel's one
-persistent session: the vahtovik agent, in the project folder. It must return one reply for every message, and
+persistent session: the vahtovik agent, in the project folder. While it works, it may tell the person at once that
+their messages arrived, with `vahtovik acknowledge`. It must return one reply for every message, and
 vahtovik sends the replies with the channel's `send` script."""
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from pathlib import Path
 
 from .. import channel_guard, delivery, skills
 from ..claude_session import Claude, SessionSpec
-from ..config import SCOPE_ENV, Channel, Config
+from ..config import SCOPE_ENV, Channel, Config, ConfigError
 from ..state import State
 from ..util import StateBackup, duration, human, load_schema, plural, render, run_json_script
 
@@ -24,6 +25,7 @@ log = logging.getLogger(__name__)
 
 MAX_ATTEMPTS = 3
 RECEIVE_TIMEOUT = 60
+ACKNOWLEDGMENT_LIMIT = 200  # characters: the first message is one short line
 CHANNEL_SKILL = Path("vahtovik") / "channel" / "SKILL.md"
 GAVE_UP = ("vahtovik could not handle this message after {attempts} attempts: {error}\n"
            "See what happened: vahtovik log {channel}")
@@ -134,6 +136,33 @@ def _limits_text(cfg: Config, channel: Channel) -> str:
     if settings.rules:
         text += f"\n\nThe person's own rules for this channel:\n\n{settings.rules}"
     return text
+
+
+def acknowledge(cfg: Config, state: State, name: str, text: str, to: str | None = None,
+                dry_run: bool = False) -> tuple[bool, str]:
+    """The channel agent's first short message, sent at once while it works on the answer: that the person's
+    messages arrived, and what it does now. One for the waiting messages, never retried: a late one is no use.
+    Returns whether it was sent, and what to tell the agent."""
+    channel = cfg.channels.get(name)
+    if channel is None or not channel.input:
+        raise ConfigError(f"{name!r} is not an input channel")
+    text = text.strip()
+    if not text or "\n" in text or len(text) > ACKNOWLEDGMENT_LIMIT:
+        raise delivery.DeliveryError(f"give one short line, at most {ACKNOWLEDGMENT_LIMIT} characters")
+    ids = [r["id"] for r in state.waiting_messages(name, MAX_ATTEMPTS)]
+    if not ids:
+        raise delivery.DeliveryError(f"no message of {name} waits for an answer")
+    to = to or ids[-1]
+    if to not in ids:
+        raise delivery.DeliveryError(f"message {to} does not wait for an answer; waiting: {', '.join(ids)}")
+    if state.row("SELECT 1 FROM deliveries WHERE channel = ? AND origin = ? "
+                 "AND reply_to IN (SELECT value FROM json_each(?))", name, delivery.ACKNOWLEDGMENT, json.dumps(ids)):
+        raise delivery.DeliveryError("these messages have their first message already: go on with your answer")
+    row = delivery.reply(cfg, state, name, "", text, to, origin=delivery.ACKNOWLEDGMENT, dry_run=dry_run)
+    if row["status"] == "sent":
+        return True, f"sent: delivery {row['id']} to {name}, in reply to message {to}"
+    return False, (f"failed: delivery {row['id']} to {name}: {row['last_error']}. "
+                   "vahtovik does not retry it: go on with your answer")
 
 
 def _check_replies(replies: list[dict], ids: list[str]) -> str | None:

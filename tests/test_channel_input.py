@@ -119,6 +119,53 @@ def test_a_message_without_a_reply_is_tried_again_and_given_up_after_three_attem
     assert len(project.calls()) == 3
 
 
+def test_the_agent_acknowledges_the_messages_at_once_before_its_reply(project, chat):
+    first, second = chat("What waits for me?"), chat("And <b>this</b>?")
+    project.queue({**replies(([first, second], "Nothing waits for you.")), "actions": [
+        {"bash": "vahtovik acknowledge --text 'Let me check & see.'"},
+        {"bash": "vahtovik acknowledge --text 'Again.'"},
+        {"bash": f"vahtovik acknowledge --to {first} --text 'Again.'"},
+        {"bash": "vahtovik acknowledge --to x9 --text 'Hm.'"},
+        {"bash": "vahtovik acknowledge --text 'One line.\nTwo lines.'"},
+    ]})
+    _cfg, state, _received, answered = _receive_and_answer(project)
+    assert answered == 2
+    sent, again, again_first, unknown, two_lines = project.command_runs()
+    assert sent["code"] == 0 and sent["out"].startswith(f"sent: delivery 1 to chat, in reply to message {second}")
+    assert again["code"] == again_first["code"] == 2 and "have their first message already" in again["out"]
+    assert f"message x9 does not wait for an answer; waiting: {first}, {second}" in unknown["out"]
+    assert "give one short line" in two_lines["out"]
+    out = _outbox(project)
+    assert out.index("Let me check & see.") < out.index("Nothing waits for you.") and out.count("Again.") == 0
+    ack = state.row("SELECT * FROM deliveries WHERE id = 1")
+    assert (ack["origin"], ack["reply_to"], ack["status"]) == ("acknowledgment", second, "sent")
+    assert "chat: Sent acknowledgment 1 to chat" in (project.root / "data/journal.log").read_text()
+    history = channel_input.history_text(state, "chat", 0)
+    assert "Let me check" not in history and "Nothing waits for you." in history  # only the replies matter later
+
+
+def test_a_failed_acknowledgment_is_not_retried_and_outside_a_channel_session_it_is_refused(
+        project, chat, monkeypatch, capsys, caplog):
+    message = chat("Hello.")
+    cfg, state, _claude = project.load()
+    channel_input.receive(cfg, state, cfg.channels["chat"])
+    cfg.channels["chat"].env.pop("FILE_CHANNEL_PATH")
+    sent, line = channel_input.acknowledge(cfg, state, "chat", "One moment.")
+    assert not sent and line.startswith("failed: delivery 1 to chat: ")
+    assert line.endswith("FILE_CHANNEL_PATH is not set. vahtovik does not retry it: go on with your answer")
+    assert any(m.startswith("chat: Failed acknowledgment 1 to chat (not retried): ") for m in caplog.messages)
+    assert state.retryable_deliveries(5) == [] and state.undelivered() == 0
+    assert cli.main(["acknowledge", "--text", "Hi."]) == 2
+    assert "run this inside a channel session" in capsys.readouterr().err
+    monkeypatch.setenv("VAHTOVIK_CHANNEL", "local-log")
+    assert cli.main(["acknowledge", "--text", "Hi."]) == 2
+    assert "'local-log' is not an input channel" in capsys.readouterr().err
+    monkeypatch.setenv("VAHTOVIK_CHANNEL", "chat")
+    monkeypatch.setenv("VAHTOVIK_DRY_RUN", "1")
+    assert cli.main(["acknowledge", "--to", message, "--text", "Hi."]) == 2  # it had one, even if it failed
+    assert "have their first message already" in capsys.readouterr().err
+
+
 def test_a_failed_read_keeps_the_messages_for_the_next_read(project, chat, monkeypatch):
     chat("Hello.")
     cfg, state, claude = project.load()
@@ -197,7 +244,9 @@ def test_a_limited_channel_runs_with_the_guard_and_sees_only_its_watches(project
     assert hook["matcher"] == "*" and hook["hooks"][0]["command"].endswith("-m vahtovik hook guard chat")
     assert call["env"]["VAHTOVIK_WATCHES"] == "w1"
     prompt = call["prompt"]
-    assert "This channel is limited" in prompt and "- Commands: `vahtovik status`, `vahtovik tell`, `vahtovik messages` (this channel only)." in prompt
+    assert "This channel is limited" in prompt
+    assert ("- Commands: `vahtovik status`, `vahtovik tell`, `vahtovik messages` (this channel only), "
+            "`vahtovik acknowledge`.") in prompt
     assert "- Watches: w1; the commands see no other watch." in prompt
     assert "- Reading: `skills`, `README.md`, `CLAUDE.md`, " in prompt and "`watches/w1`, `data/watches/w1`; never" in prompt
     assert prompt.count("Answer in Ukrainian.") == 1 and "own rules for this channel:\n\nAnswer in Ukrainian." in prompt

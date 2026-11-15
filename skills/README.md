@@ -50,7 +50,7 @@ channels/<name>/receive        optional executable, for channels with `input`; o
   - exit code 0 means delivered; the last line of stdout may hold a delivery identifier;
   - any other exit code is a failure, and stderr holds the reason;
   - `VAHTOVIK_DRY_RUN=1` means do not send; print what would be sent to stderr and exit 0;
-  - `VAHTOVIK_PLAIN=1` means the body is plain text from vahtovik itself, such as a notice that a group waits for an answer: if the channel uses markup, escape the body;
+  - `VAHTOVIK_PLAIN=1` means the body is plain text, such as a notice from vahtovik that a group waits for an answer, or a channel agent's first short line: if the channel uses markup, escape the body;
   - `VAHTOVIK_REPLY_TO` is set when the message answers a message that `receive` read: its id. A channel that can reply to a message does so; others may ignore it. `VAHTOVIK_WATCH` and `VAHTOVIK_GROUP` are empty then.
 - `send` runs in the vahtovik project folder with a 60-second timeout.
 - `receive` contract:

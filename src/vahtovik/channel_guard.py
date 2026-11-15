@@ -41,7 +41,8 @@ def readable(cfg: Config, channel: Channel) -> list[Path]:
 
 
 def commands_text(channel: Channel) -> str:
-    return ", ".join([*(f"`vahtovik {c}`" for c in channel.input.commands), "`vahtovik messages` (this channel only)"])
+    return ", ".join([*(f"`vahtovik {c}`" for c in channel.input.commands), "`vahtovik messages` (this channel only)",
+                      "`vahtovik acknowledge`"])
 
 
 def decide(cfg: Config, channel: Channel, data: dict) -> tuple[bool, str]:
@@ -74,6 +75,8 @@ def _command(channel: Channel, command: str) -> tuple[bool, str]:
         if named in ([], [channel.name]):
             return True, "the channel's own messages"
         return False, "This channel may read only its own messages: run `vahtovik messages` without a channel."
+    if rest and rest[0] == "acknowledge":  # every channel may send its first short message, to its own chat
+        return True, "the channel's first short message"
     if not rest or rest[0] in ("-h", "--help"):
         return True, "vahtovik's help"
     return False, f"This channel may not run `vahtovik {rest[0]}`; it may run only {commands_text(channel)}."

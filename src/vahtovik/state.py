@@ -538,10 +538,16 @@ class State:
     def turn_deliveries(self, turn_id: str) -> list[sqlite3.Row]:
         return self.rows("SELECT * FROM deliveries WHERE turn_id = ? ORDER BY id", turn_id)
 
+    def undelivered(self) -> int:
+        """How many reports and replies have not reached their channel. A first short message does not count:
+        it is never retried."""
+        return self.row("SELECT COUNT(*) AS n FROM deliveries WHERE status != 'sent' "
+                        "AND origin != 'acknowledgment'")["n"]
+
     def retryable_deliveries(self, max_attempts: int) -> list[sqlite3.Row]:
         return self.rows(
-            "SELECT * FROM deliveries WHERE status IN ('pending', 'failed') AND attempts < ? ORDER BY id",
-            max_attempts,
+            "SELECT * FROM deliveries WHERE status IN ('pending', 'failed') AND attempts < ? "
+            "AND origin != 'acknowledgment' ORDER BY id", max_attempts,
         )
 
     # channel-input (see stages/channel_input.py)
@@ -597,9 +603,11 @@ class State:
             "ORDER BY received_at DESC, n DESC LIMIT ?) ORDER BY received_at, n",
             channel, since, since, json.dumps(list(leave_out)), last if last > 0 else -1)
         # By time, not by reply_to: one reply may answer several messages, and it names only the first.
+        # Without the agent's first short messages: only the replies matter later.
         replies = self.rows(
-            "SELECT * FROM deliveries WHERE channel = ? AND watch = '' AND reply_to IS NOT NULL AND created_at >= ? "
-            "ORDER BY id", channel, messages[0]["received_at"]) if messages else []
+            "SELECT * FROM deliveries WHERE channel = ? AND watch = '' AND reply_to IS NOT NULL "
+            "AND origin != 'acknowledgment' AND created_at >= ? ORDER BY id",
+            channel, messages[0]["received_at"]) if messages else []
         items = [(m["received_at"], "message", m) for m in messages] + [(r["created_at"], "reply", r) for r in replies]
         return sorted(items, key=lambda item: (item[0], item[1] == "reply"))
 
