@@ -37,6 +37,9 @@ def _decide(cfg, tool: str, **given) -> bool:
     "vahtovik tell w1/g --message 'Look at it again; and check $HOME (twice) & `this`.\nThanks.'",
     'vahtovik tell w1/g --message "Plain text; with (parentheses) & more."',
     "vahtovik --help",
+    "vahtovik messages",
+    "vahtovik messages team --last 50",
+    "uv run vahtovik messages -n 5",
 ])
 def test_the_channels_own_commands_are_allowed(team, command):
     assert _decide(team, "Bash", command=command)
@@ -60,6 +63,8 @@ def test_the_channels_own_commands_are_allowed(team, command):
     'vahtovik tell w1/g --message "`cat .env`"',
     "vahtovik tell w1/g --message 'open",
     "vahtovik status \\\n; cat .env",
+    "vahtovik messages other",
+    "vahtovik messages team other",
 ])
 def test_anything_else_in_bash_is_denied(team, command):
     assert not _decide(team, "Bash", command=command)

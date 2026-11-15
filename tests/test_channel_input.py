@@ -193,7 +193,7 @@ def test_a_limited_channel_runs_with_the_guard_and_sees_only_its_watches(project
     assert hook["matcher"] == "*" and hook["hooks"][0]["command"].endswith("-m vahtovik hook guard chat")
     assert call["env"]["VAHTOVIK_WATCHES"] == "w1"
     prompt = call["prompt"]
-    assert "This channel is limited" in prompt and "- Commands: `vahtovik status`, `vahtovik tell`." in prompt
+    assert "This channel is limited" in prompt and "- Commands: `vahtovik status`, `vahtovik tell`, `vahtovik messages` (this channel only)." in prompt
     assert "- Watches: w1; the commands see no other watch." in prompt
     assert "- Reading: `skills`, `README.md`, `CLAUDE.md`, " in prompt and "`watches/w1`, `data/watches/w1`; never" in prompt
     assert prompt.count("Answer in Ukrainian.") == 1 and "own rules for this channel:\n\nAnswer in Ukrainian." in prompt
@@ -211,3 +211,23 @@ def test_status_shows_each_input_channels_limits(project, chat, capsys):
     _chat_input(project, commands=None, watches=None, senders=None, rules="")
     cli.main(["status", "-v"])
     assert "  full power; all watches; any sender; no rules of its own" in capsys.readouterr().out
+
+
+def test_messages_shows_the_channels_last_messages_with_their_replies(project, chat, capsys, monkeypatch):
+    first, second = chat("Merge a and b."), chat("Also c.")
+    project.queue(replies(([first, second], "My plan: merge a, b and c. Answer yes to go on.")))
+    _cfg, state, _received, _answered = _receive_and_answer(project)
+    state.execute("UPDATE channel_messages SET received_at = '2026-11-10T09:00:00+00:00'")  # a minute before
+    state.execute("UPDATE deliveries SET created_at = '2026-11-10T09:00:30+00:00'")
+    third = chat("Yes.")
+    cfg, state, _claude = project.load()
+    channel_input.receive(cfg, state, cfg.channels["chat"])
+    assert cli.main(["messages", "chat", "--last", "2"]) == 0
+    out = capsys.readouterr().out
+    assert "Merge a and b." not in out
+    assert out.index(f"(message {second}):\nAlso c.") < out.index("vahtovik:\nMy plan: merge a, b and c.") \
+        < out.index(f"(message {third}, not answered yet):\nYes.")
+    monkeypatch.setenv("VAHTOVIK_CHANNEL", "chat")  # inside the channel's session
+    assert cli.main(["messages", "-n", "0"]) == 0 and "Merge a and b." in capsys.readouterr().out
+    assert cli.main(["messages", "local-log"]) == 2
+    assert "'local-log' is not an input channel; input channels: chat" in capsys.readouterr().err

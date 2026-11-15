@@ -98,6 +98,23 @@ def _messages_text(rows) -> str:
                        f"\n\n{r['text'].strip() or '(no text)'}" for r in rows)
 
 
+NOTES = {"new": "not answered yet", "failed": "given up"}
+
+
+def history_text(state: State, channel: str, last: int, since: str | None = None, leave_out: list[str] = ()) -> str:
+    """The channel's earlier messages and vahtovik's replies, oldest first, for people and for prompts."""
+    blocks = []
+    for at, kind, row in state.channel_history(channel, last, since, leave_out):
+        when = human(datetime.fromisoformat(at))
+        if kind == "message":
+            notes = ", ".join(filter(None, [f"message {row['id']}", NOTES.get(row["status"])]))
+            blocks.append(f"{when} {row['sender'] or 'unknown'} ({notes}):\n{row['text'].strip() or '(no text)'}")
+        else:
+            note = "" if row["status"] == "sent" else " (not sent)"
+            blocks.append(f"{when} vahtovik{note}:\n{row['body'].strip()}")
+    return "\n\n".join(blocks)
+
+
 def _limits_text(cfg: Config, channel: Channel) -> str:
     """What the channel's agent may do, for its prompt, and the person's own rules for the channel."""
     settings = channel.input

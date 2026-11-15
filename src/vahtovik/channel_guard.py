@@ -41,7 +41,7 @@ def readable(cfg: Config, channel: Channel) -> list[Path]:
 
 
 def commands_text(channel: Channel) -> str:
-    return ", ".join(f"`vahtovik {c}`" for c in channel.input.commands) or "none"
+    return ", ".join([*(f"`vahtovik {c}`" for c in channel.input.commands), "`vahtovik messages` (this channel only)"])
 
 
 def decide(cfg: Config, channel: Channel, data: dict) -> tuple[bool, str]:
@@ -69,6 +69,11 @@ def _command(channel: Channel, command: str) -> tuple[bool, str]:
         return False, f"This channel is limited: Bash may run only {commands_text(channel)}."
     if rest and rest[0] in channel.input.commands:
         return True, f"vahtovik {rest[0]} is one of the channel's commands"
+    if rest and rest[0] == "messages":  # every channel may read its own earlier messages, and only its own
+        named = [w for w in rest[1:] if not w.startswith("-") and not w.isdigit()]
+        if named in ([], [channel.name]):
+            return True, "the channel's own messages"
+        return False, "This channel may read only its own messages: run `vahtovik messages` without a channel."
     if not rest or rest[0] in ("-h", "--help"):
         return True, "vahtovik's help"
     return False, f"This channel may not run `vahtovik {rest[0]}`; it may run only {commands_text(channel)}."

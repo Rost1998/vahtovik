@@ -576,6 +576,22 @@ class State:
         return self.rows("SELECT * FROM channel_messages WHERE channel = ? AND status = 'new' AND attempts < ? "
                          "ORDER BY received_at, rowid", channel, max_attempts)
 
+    def channel_history(self, channel: str, last: int, since: str | None = None,
+                        leave_out: list[str] = ()) -> list[tuple[str, str, sqlite3.Row]]:
+        """The channel's last `last` messages (0: all) received from `since` on, without `leave_out`, and
+        vahtovik's replies since the first of them, oldest first: (time, "message" or "reply", row)."""
+        messages = self.rows(
+            "SELECT * FROM (SELECT rowid AS n, * FROM channel_messages WHERE channel = ? "
+            "AND (? IS NULL OR received_at >= ?) AND id NOT IN (SELECT value FROM json_each(?)) "
+            "ORDER BY received_at DESC, n DESC LIMIT ?) ORDER BY received_at, n",
+            channel, since, since, json.dumps(list(leave_out)), last if last > 0 else -1)
+        # By time, not by reply_to: one reply may answer several messages, and it names only the first.
+        replies = self.rows(
+            "SELECT * FROM deliveries WHERE channel = ? AND watch = '' AND reply_to IS NOT NULL AND created_at >= ? "
+            "ORDER BY id", channel, messages[0]["received_at"]) if messages else []
+        items = [(m["received_at"], "message", m) for m in messages] + [(r["created_at"], "reply", r) for r in replies]
+        return sorted(items, key=lambda item: (item[0], item[1] == "reply"))
+
     def message_counts(self, channel: str) -> dict[str, int]:
         return {r["status"]: r["n"] for r in self.rows(
             "SELECT status, COUNT(*) AS n FROM channel_messages WHERE channel = ? GROUP BY status", channel)}

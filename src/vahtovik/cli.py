@@ -584,6 +584,18 @@ def cmd_log(args) -> int:
     return 0
 
 
+def cmd_messages(args) -> int:
+    cfg, state = _load()
+    name = args.channel or os.environ.get("VAHTOVIK_CHANNEL")
+    if not name:
+        raise ConfigError("name the channel: vahtovik messages CHANNEL")
+    if name not in cfg.channels or not cfg.channels[name].input:
+        inputs = ", ".join(c.name for c in channel_input.input_channels(cfg)) or "none"
+        raise ConfigError(f"{name!r} is not an input channel; input channels: {inputs}")
+    print(channel_input.history_text(state, name, args.last) or f"No messages in {name} yet.")
+    return 0
+
+
 def cmd_install_timer(args) -> int:
     cfg, _state = _load()
     for line in timer.install(cfg, args.every):
@@ -712,6 +724,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-n", "--lines", type=int, default=40, help="how many last lines to show; 0 shows all (default 40)")
     p.add_argument("-f", "--follow", action="store_true", help="keep showing new lines as they are written")
     p.set_defaults(func=cmd_log)
+
+    p = sub.add_parser("messages", help="show an input channel's earlier messages and vahtovik's replies")
+    p.add_argument("channel", nargs="?", help="the input channel; inside a channel session, its own")
+    p.add_argument("-n", "--last", type=int, default=20,
+                   help="how many of the last messages to show, with their replies; 0 shows all (default 20)")
+    p.set_defaults(func=cmd_messages)
 
     p = sub.add_parser("install-timer", help="start vahtovik periodically with a systemd user timer")
     p.add_argument("--every", default="1m",

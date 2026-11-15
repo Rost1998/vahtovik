@@ -29,6 +29,10 @@ Your prompt says what this channel may do. A limited channel allows only some `v
 - Give `Grep` and `Glob` a path inside what you may read. You cannot fetch the web, so build artifacts from what the person wrote.
 - The person's own rules for the channel, if your prompt has them, are instructions from the person: follow them.
 
+## Earlier messages
+
+`vahtovik messages --last N` shows this channel's last N messages, with your replies, oldest first. When the person refers to something that you do not know from this session, read them, with N as large as you need, before you ask the person.
+
 ## Replies
 
 - Return your replies as your structured answer. vahtovik sends each reply to the channel, as an answer to the first message in its `to` list. Never send replies with `vahtovik report` or with the channel's `send` script.
