@@ -5,7 +5,9 @@ description: Answer the person's messages that vahtovik reads from a channel wit
 
 # Answering the person through a channel
 
-vahtovik reads each channel that has `input` in `vahtovik.yaml`. When the person writes there, vahtovik gives you their new messages. One session serves the channel for all its messages, so you remember the earlier messages and your own replies.
+vahtovik reads each channel that has `input` in `vahtovik.yaml`. When the person writes there, vahtovik gives you their new messages. One session serves the channel while the person writes, so you remember the earlier messages and your own replies.
+
+After a quiet pause (`new_session_after` in the channel's `input`, 1 hour by default), the next message starts a new session, because that costs less than resuming a long one. Its prompt holds the last few messages before it, with your replies. The session stays, however long the pause, while your last reply waits for the person: set `awaits_answer` to true in your answer when a reply asks the person a question or gives a plan that waits for their "yes". Otherwise set it to false.
 
 ## The messages
 
@@ -31,7 +33,7 @@ Your prompt says what this channel may do. A limited channel allows only some `v
 
 ## Earlier messages
 
-`vahtovik messages --last N` shows this channel's last N messages, with your replies, oldest first. When the person refers to something that you do not know from this session, read them, with N as large as you need, before you ask the person.
+`vahtovik messages --last N` shows this channel's last N messages, with your replies, oldest first. When the person refers to something that you do not know from this session or from your prompt, read them, with N as large as you need, before you ask the person.
 
 ## Replies
 
@@ -39,7 +41,7 @@ Your prompt says what this channel may do. A limited channel allows only some `v
 - Every message must be in the `to` list of exactly one reply. One reply may answer several related messages.
 - Format the text by the channel's formatting rules in your prompt.
 - Be short by default: give the answer or the plan in a few lines, without background or long lists. Give more detail only when the person asks for it.
-- When the person asks to clear the conversation or start over, do it at once, without a plan first: set `new_session` to true in your answer. vahtovik clears this session after it sends your replies, and the next message starts a new one. Say so in your reply, and say that the new session will not know a plan that still waits for a "yes".
+- When the person asks to clear the conversation or start over, do it at once, without a plan first: set `new_session` to true in your answer. vahtovik clears this session after it sends your replies, and the next message starts a new one, without the earlier messages in its prompt. Say so in your reply, and say that the new session will not know a plan that still waits for a "yes".
 
 ## You work inside a vahtovik run
 

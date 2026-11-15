@@ -63,6 +63,10 @@ class InputSettings:
     watches: list[str] | None = None  # set: its agent sees only these watches
     senders: list[str] | None = None  # set: only messages whose `from` is one of these reach the agent
     rules: str = ""  # the person's own rules for the channel's agent
+    # after a pause this long, the next message starts a new session, unless the last reply waits for an answer;
+    # 0: the session lasts until the person clears it
+    new_session_after: timedelta = timedelta(hours=1)
+    history: int = 5  # how many earlier messages a new session gets in its prompt
 
     @property
     def limited(self) -> bool:
@@ -393,6 +397,16 @@ def _load_input(raw: dict, where: str) -> InputSettings:
     if not isinstance(rules, str):
         raise ConfigError(f"{where}.rules must be text")
     settings.rules = rules.strip()
+    if "new_session_after" in raw:
+        value = raw["new_session_after"]
+        try:
+            settings.new_session_after = timedelta(0) if value in (0, "0", None) else parse_interval(value)
+        except ConfigError as exc:
+            raise ConfigError(f"{where}.new_session_after: {exc}") from None
+    history = raw.get("history", settings.history)
+    if isinstance(history, bool) or not isinstance(history, int) or history < 0:
+        raise ConfigError(f"{where}.history must be a whole number, 0 or more")
+    settings.history = history
     return settings
 
 

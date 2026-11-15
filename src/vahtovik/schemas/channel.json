@@ -1,7 +1,7 @@
 {
   "type": "object",
   "additionalProperties": false,
-  "required": ["replies"],
+  "required": ["replies", "awaits_answer"],
   "properties": {
     "replies": {
       "type": "array",
@@ -17,6 +17,8 @@
         }
       }
     },
+    "awaits_answer": {"type": "boolean",
+                      "description": "true when a reply asks the person a question or gives a plan that waits for their yes; vahtovik then keeps this session after a long pause"},
     "new_session": {"type": "boolean",
                     "description": "true when the person asked to clear the conversation or start over; the next message starts a new session"}
   }

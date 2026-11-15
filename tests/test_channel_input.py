@@ -3,6 +3,7 @@ import json
 import logging
 import shutil
 import time
+from datetime import datetime, timedelta, timezone
 
 import pytest
 import yaml
@@ -10,6 +11,7 @@ from conftest import monitor_answer
 
 from vahtovik import cli
 from vahtovik.stages import channel_input
+from vahtovik.util import utc_iso
 
 
 @pytest.fixture
@@ -32,8 +34,8 @@ def chat(project):
     return write
 
 
-def replies(*items: tuple[list[str], str]) -> dict:
-    return {"mode": "print", "structured_output": {"replies": [
+def replies(*items: tuple[list[str], str], awaits_answer: bool = False) -> dict:
+    return {"mode": "print", "structured_output": {"awaits_answer": awaits_answer, "replies": [
         {"to": to, "subject": "", "text": text} for to, text in items]}}
 
 
@@ -64,6 +66,7 @@ def test_the_channel_agent_answers_each_message_through_the_channel(project, cha
     assert "hooks" not in json.loads(args[args.index("--settings") + 1]) and "VAHTOVIK_WATCHES" not in call["env"]
     assert "What waits for me?" in call["prompt"] and "skills/vahtovik/channel/SKILL.md" in call["prompt"]
     assert "## What this channel may do\n\nEverything, as in the terminal.\n" in call["prompt"]
+    assert "## Earlier messages" not in call["prompt"]  # the channel's first session has none
     assert f"reply to message {first}" in _outbox(project) and "Nothing waits for you." in _outbox(project)
     assert state.message_counts("chat") == {"answered": 1}
     assert state.row("SELECT reply_to, origin FROM deliveries")["reply_to"] == first
@@ -96,6 +99,7 @@ def test_the_person_can_clear_the_channels_session(project, chat, caplog):
     assert "--resume" not in new
     assert new[new.index("--session-id") + 1] != old[old.index("--session-id") + 1]
     assert state.input_state("chat")["session_id"] == new[new.index("--session-id") + 1]
+    assert "## Earlier messages" not in project.calls()[1]["prompt"]  # the person asked to start over
 
 
 def test_a_message_without_a_reply_is_tried_again_and_given_up_after_three_attempts(project, chat):
@@ -207,6 +211,7 @@ def test_status_shows_each_input_channels_limits(project, chat, capsys):
     _chat_input(project, commands=["status"], watches=["w1"], senders=["@alice"], rules="Be brief.\nNo jokes.")
     cli.main(["status", "-v"])
     out = capsys.readouterr().out
+    assert "input channel chat: every 1m, new session after 1h quiet, last read never" in out
     assert "  limited to status; watches w1; senders @alice; rules: Be brief...." in out
     _chat_input(project, commands=None, watches=None, senders=None, rules="")
     cli.main(["status", "-v"])
@@ -231,3 +236,53 @@ def test_messages_shows_the_channels_last_messages_with_their_replies(project, c
     assert cli.main(["messages", "-n", "0"]) == 0 and "Merge a and b." in capsys.readouterr().out
     assert cli.main(["messages", "local-log"]) == 2
     assert "'local-log' is not an input channel; input channels: chat" in capsys.readouterr().err
+
+
+def _answered_ago(project, hours: float) -> None:
+    _cfg, state, _claude = project.load()
+    state.execute("UPDATE channel_inputs SET answered_at = ?",
+                  utc_iso(datetime.now(timezone.utc) - timedelta(hours=hours)))
+    state.execute("UPDATE channel_messages SET received_at = ?",  # the history's order needs earlier times
+                  utc_iso(datetime.now(timezone.utc) - timedelta(hours=hours, minutes=1)))
+    state.execute("UPDATE deliveries SET created_at = ?", utc_iso(datetime.now(timezone.utc) - timedelta(hours=hours)))
+
+
+def test_after_a_quiet_pause_a_new_session_starts_with_the_last_messages(project, chat, caplog):
+    caplog.set_level(logging.INFO)
+    first = chat("What waits for me?")
+    project.queue(replies(([first], "Nothing waits for you.")))
+    _receive_and_answer(project)
+    _answered_ago(project, 2)
+    second = chat("And now?")
+    project.queue(replies(([second], "Still nothing.")))
+    _cfg, state, _received, _answered = _receive_and_answer(project)
+    old, new = project.calls()
+    assert "--resume" not in new["args"] and new["args"][new["args"].index("--session-id") + 1] != \
+        old["args"][old["args"].index("--session-id") + 1]
+    assert any("new session" in r.getMessage() and ": the last answer was 2h00m ago" in r.getMessage()
+               for r in caplog.records)
+    history = new["prompt"].split("## Earlier messages\n\nThis session is new.", 1)[1].split("## New messages")[0]
+    assert history.index(f"(message {first}):\nWhat waits for me?") < history.index("vahtovik:\nNothing waits")
+    assert "`vahtovik messages --last N`" in history and "And now?" not in history
+    assert state.input_state("chat")["answered_at"] > utc_iso(datetime.now(timezone.utc) - timedelta(minutes=1))
+
+
+@pytest.mark.parametrize("hours, awaits, settings", [
+    (5, True, {}),  # the last reply waits for the person's answer
+    (0.5, False, {}),  # within the pause
+    (5, False, {"new_session_after": 0}),  # one session until the person clears it
+])
+def test_the_session_is_resumed_while_it_waits_for_an_answer_or_the_pause_is_short(project, chat, hours, awaits,
+                                                                                  settings):
+    _chat_input(project, **settings)
+    first = chat("Merge a and b.")
+    project.queue(replies(([first], "My plan: ... Answer yes to go on."), awaits_answer=awaits))
+    _receive_and_answer(project)
+    assert project.load()[1].input_state("chat")["awaits_answer"] == int(awaits)
+    _answered_ago(project, hours)
+    second = chat("Yes.")
+    project.queue(replies(([second], "Merged.")))
+    _receive_and_answer(project)
+    old, new = (call["args"] for call in project.calls())
+    assert new[new.index("--resume") + 1] == old[old.index("--session-id") + 1]
+    assert "## Earlier messages" not in project.calls()[1]["prompt"]

@@ -350,8 +350,8 @@ def _status_table(cfg: Config, state: State, names: list[str]) -> None:
 
 
 def _inputs(cfg: Config, state: State, verbose: bool = False) -> list[str]:
-    """One line per input channel: how often it is read, when it was last, and its messages; `verbose` adds
-    a line with its limits."""
+    """One line per input channel: how often it is read, when a new session starts, when it was last read, and
+    its messages; `verbose` adds a line with its limits."""
     lines = []
     for channel in channel_input.input_channels(cfg):
         row = state.input_state(channel.name)
@@ -359,8 +359,11 @@ def _inputs(cfg: Config, state: State, verbose: bool = False) -> list[str]:
         read = human(datetime.fromisoformat(row["last_read_at"])) if row and row["last_read_at"] else "never"
         error = f", last error: {row['last_error']}" if row and row["last_error"] and (
             not row["last_ok_at"] or row["last_error_at"] > row["last_ok_at"]) else ""
-        lines.append(f"input channel {channel.name}: every {_every(channel.input.interval)}, last read {read}, "
-                     f"{counts.get('new', 0)} waiting, {counts.get('answered', 0)} answered, "
+        after = channel.input.new_session_after
+        session = f"new session after {_every(after)} quiet" if after else "one session until you clear it"
+        session += ", its last reply waits for an answer" if row and row["awaits_answer"] else ""
+        lines.append(f"input channel {channel.name}: every {_every(channel.input.interval)}, {session}, "
+                     f"last read {read}, {counts.get('new', 0)} waiting, {counts.get('answered', 0)} answered, "
                      f"{counts.get('failed', 0)} failed{error}")
         if verbose:
             lines.append(f"  {_limits(channel.input)}")

@@ -31,7 +31,7 @@ Run vahtovik as `uv run vahtovik ...` in the project folder.
   3. monitors each source that is due by its `interval` or its times of the day, `at` (a source's own, or its watch's), with one AI session per source;
   4. starts a turn, in a tmux window, for each group with new artifacts or a scheduled turn that is due;
   5. retries failed reports and replies.
-- **Channel-input**: a channel with `input` in `vahtovik.yaml` is read by its type's `receive` script, and you answer the person's messages from it (`channel/SKILL.md`).
+- **Channel-input**: a channel with `input` in `vahtovik.yaml` is read by its type's `receive` script, and you answer the person's messages from it (`channel/SKILL.md`). After a quiet pause (`new_session_after`), a new session starts with the last few messages in its prompt.
 - **Configuration**: `vahtovik.yaml` holds the login mode, the model and effort per stage, how many turns work at once, and the channels. `.env` holds the shared secrets.
 - **Records**: `uv run vahtovik status [--watch W] [-v]` shows the state and costs. `uv run vahtovik log [text]` shows what happened. Each group's `context.md` has its history.
 
@@ -64,7 +64,7 @@ If the person asks you to change vahtovik's own code, work on it as a developer.
 | add artifacts to one group, to several, or to the groups they belong to | `skills/vahtovik/artifacts/SKILL.md` | `vahtovik artifact add` |
 | pass an instruction or a question to group agents | `skills/vahtovik/tell/SKILL.md` | `vahtovik tell` |
 | save a note for all agents of a watch, or remove one | | `vahtovik memory add --watch W --text '...'`, `vahtovik memory remove <number> --watch W --reason '...'`; agree first, as for other changes |
-| know what happens or happened | | `vahtovik status`, `vahtovik log`, the groups' `context.md` |
+| know what happens or happened | | `vahtovik status`, `vahtovik log`, `vahtovik messages <channel>` (an input channel's earlier messages), the groups' `context.md` |
 | talk to a group agent themselves | | tell them to run `uv run vahtovik open <watch>/<key>` in their own terminal: it attaches the terminal, so you cannot run it for them |
 | run a cycle now | | `vahtovik run [--watch W] [--stage input\|monitor\|group\|deliver] [--force] [--dry-run]`; ask first |
 | (your prompt says the person writes through a channel) | `skills/vahtovik/channel/SKILL.md` | answer by its rules |

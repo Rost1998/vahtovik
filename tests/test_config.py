@@ -206,6 +206,23 @@ def test_a_channel_with_input_is_read_every_minute_unless_set(project):
         config_mod.load(project.root)
 
 
+def test_a_channel_starts_a_new_session_after_a_quiet_hour_unless_set(project):
+    path = project.root / "vahtovik.yaml"
+    data = yaml.safe_load(path.read_text())
+    data["channels"]["log"]["input"] = {}
+    data["channels"]["other"]["input"] = {"new_session_after": 0, "history": 0}
+    path.write_text(yaml.safe_dump(data))
+    channels = config_mod.load(project.root).channels
+    assert (channels["log"].input.new_session_after, channels["log"].input.history) == (timedelta(hours=1), 5)
+    assert (channels["other"].input.new_session_after, channels["other"].input.history) == (timedelta(0), 0)
+    for settings, problem in (({"new_session_after": "soon"}, "input.new_session_after: bad interval 'soon'"),
+                              ({"history": -1}, "input.history must be a whole number, 0 or more")):
+        data["channels"]["log"]["input"] = settings
+        path.write_text(yaml.safe_dump(data))
+        with pytest.raises(ConfigError, match=problem):
+            config_mod.load(project.root)
+
+
 def test_input_sessions_get_opus_and_xhigh_unless_set(project):
     cfg = config_mod.load(project.root)
     assert cfg.stage(None, "input") == config_mod.StageSettings("opus", "xhigh")

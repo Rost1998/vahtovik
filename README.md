@@ -91,7 +91,13 @@ channels:
     input: {}                   # read it every minute; or {interval: 5m}
 ```
 
-At the start of every run, after the watchdog, vahtovik reads each such channel whose interval has passed, with its type's `receive` script (contract in [skills/README.md](skills/README.md)); no AI runs for that. When there are new messages, vahtovik resumes the channel's session: the vahtovik agent (see The vahtovik agent), in the project folder, with Opus and `xhigh` effort by default (`claude.stages.input`). One session serves the channel for all its messages, so it remembers the conversation; Claude Code compacts it when it gets long, and a new session starts if its conversation file is gone. To start over yourself, ask in the channel to clear the conversation: the agent answers, and your next message starts a new session.
+At the start of every run, after the watchdog, vahtovik reads each such channel whose interval has passed, with its type's `receive` script (contract in [skills/README.md](skills/README.md)); no AI runs for that. When there are new messages, vahtovik resumes the channel's session: the vahtovik agent (see The vahtovik agent), in the project folder, with Opus and `xhigh` effort by default (`claude.stages.input`). One session serves the channel while you write, so it remembers the conversation. After a quiet pause, the next message starts a new session, because resuming is cheaper only while Claude Code's cache still holds the conversation; then a long old session costs more than a new one. The new session gets your last few messages, with its replies, in its prompt, and reads more with `vahtovik messages` when it needs them. The session stays, however long the pause, while the agent's last reply waits for your answer, such as a plan that waits for "yes", and while it tries a message again. A new session also starts if the old one's conversation file is gone. To start over yourself, ask in the channel to clear the conversation: the agent answers, and your next message starts a new session, without the earlier messages in its prompt.
+
+```yaml
+    input:
+      new_session_after: 1h     # the default; 0: one session until you clear it
+      history: 5                # how many earlier messages a new session gets in its prompt (the default)
+```
 
 - Your messages are your own words, as in the terminal. The agent answers questions at once. Before a change, or anything that costs money, it replies with its plan, and acts once you answer "yes" in the channel.
 - It returns one reply for each message, and vahtovik sends the replies through the same channel, as answers to your messages. A message without a reply counts as a failed attempt; after 3, vahtovik replies itself that it could not handle the message.
@@ -99,7 +105,7 @@ At the start of every run, after the watchdog, vahtovik reads each such channel 
 - vahtovik keeps your messages and its replies. `vahtovik messages <channel>` shows them, and the agent reads them the same way when you refer to something its session does not know.
 - Anyone who can post in the channel's chat can give vahtovik orders, unless you limit the channel (below).
 
-The `file` and `telegram` channel types can read; see their skills. `vahtovik status` shows each input channel: when it was read last, and its messages; `-v` also shows its limits. Each input channel has a session of its own. Two Telegram input channels need two bots, because only one reader may take a bot's updates; but all Telegram channels use the one `TELEGRAM_BOT_TOKEN` from `.env`, so for now an installation reads one Telegram chat.
+The `file` and `telegram` channel types can read; see their skills. `vahtovik status` shows each input channel: when a new session starts, when it was read last, and its messages; `-v` also shows its limits. Each input channel has a session of its own. Two Telegram input channels need two bots, because only one reader may take a bot's updates; but all Telegram channels use the one `TELEGRAM_BOT_TOKEN` from `.env`, so for now an installation reads one Telegram chat.
 
 ### Limited channels
 

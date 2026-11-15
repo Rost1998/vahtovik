@@ -11,7 +11,7 @@ import json
 import logging
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .. import channel_guard, delivery, skills
@@ -148,6 +148,29 @@ def _check_replies(replies: list[dict], ids: list[str]) -> str | None:
     return "; ".join(problems) or None
 
 
+def _pause(channel: Channel, row, rows) -> str:
+    """Why the next answer starts a new session after a quiet pause, or "" to resume the session. Resuming is
+    cheaper while Claude Code's cache still holds the conversation; after a long pause a new session is cheaper.
+    The session stays while its last reply waits for the person, and while messages are tried again: it may have
+    started on them."""
+    after = channel.input.new_session_after
+    if not after or not row["answered_at"] or row["awaits_answer"] or any(r["attempts"] for r in rows):
+        return ""
+    quiet = datetime.now(timezone.utc) - datetime.fromisoformat(row["answered_at"])
+    return f": the last answer was {duration(quiet.total_seconds())} ago" if quiet >= after else ""
+
+
+def _history_part(state: State, channel: Channel, since: str | None, ids: list[str]) -> str:
+    """For a new session's prompt: the channel's last messages before the new ones, since the person last
+    cleared the conversation, and how to read more."""
+    if not state.channel_history(channel.name, 1, since, ids):
+        return ""
+    text = history_text(state, channel.name, channel.input.history, since, ids) if channel.input.history else ""
+    shown = f" The last messages before the new ones, with your replies:\n\n{text}\n\n" if text else " "
+    return (f"## Earlier messages\n\nThis session is new.{shown}Read more of them with "
+            f"`vahtovik messages --last N` when you need them.\n\n")
+
+
 def answer(cfg: Config, state: State, claude: Claude, channel: Channel, run_id: str, raw_dir: Path,
            dry_run: bool = False) -> int:
     """Let the channel agent answer the channel's waiting messages. Returns how many it answered."""
@@ -161,10 +184,12 @@ def answer(cfg: Config, state: State, claude: Claude, channel: Channel, run_id: 
         rules = f"(skill missing: {exc})"
     row = state.input_state(channel.name)
     session_id = row["session_id"] if row else None
-    mode = "resume" if claude.session_exists(session_id) else "new"
-    if mode == "new":
-        session_id = str(uuid.uuid4())
+    mode, why = ("resume", _pause(channel, row, rows)) if claude.session_exists(session_id) else ("new", "")
+    history = ""
+    if mode == "new" or why:
+        mode, session_id = "new", str(uuid.uuid4())
         state.set_input_session(channel.name, session_id)
+        history = _history_part(state, channel, row["cleared_at"] if row else None, ids)
     env = {"VAHTOVIK_CHANNEL": channel.name, "VAHTOVIK_RUN": run_id}
     if channel.input.watches is not None:
         env[SCOPE_ENV] = ",".join(channel.input.watches)
@@ -172,12 +197,12 @@ def answer(cfg: Config, state: State, claude: Claude, channel: Channel, run_id: 
         stage="input", workdir=cfg.root, settings=cfg.stage(None, "input"), schema=load_schema("channel"),
         prompt=render("channel_turn.md", channel=channel.name, run_id=run_id, now=human(),
                       channel_skill=cfg.skills_dir / CHANNEL_SKILL, format_rules=rules,
-                      limits=_limits_text(cfg, channel), messages=_messages_text(rows)),
+                      limits=_limits_text(cfg, channel), history=history, messages=_messages_text(rows)),
         mode=mode, session_id=session_id, name=f"vahtovik channel {channel.name}", env=env, scope=channel.name,
         guard=channel.name if channel.input.limited else None,
     )
-    log.info("%s: Started answering %s, %s session %s", channel.name, plural(len(ids), "message"),
-             "resumed" if mode == "resume" else "new", session_id[:8])
+    log.info("%s: Started answering %s, %s session %s%s", channel.name, plural(len(ids), "message"),
+             "resumed" if mode == "resume" else "new", session_id[:8], why)
     result = claude.run(spec, raw_dir)
     state.log_session(run_id, "input", "", channel.name, result)
     error = (result.error or "unknown error") if not result.ok else _check_replies(result.output["replies"], ids)
@@ -188,10 +213,11 @@ def answer(cfg: Config, state: State, claude: Claude, channel: Channel, run_id: 
         delivery.reply(cfg, state, channel.name, item.get("subject") or "", item["text"], str(item["to"][0]),
                        dry_run=dry_run)
     state.set_messages(channel.name, ids, "answered")
+    state.input_answered(channel.name, bool(result.output.get("awaits_answer")))
     log.info("%s: Answered %s in %s, $%.2f", channel.name, plural(len(ids), "message"),
              duration(result.duration_s), result.cost_usd)
     if result.output.get("new_session"):
-        state.set_input_session(channel.name, None)
+        state.clear_input_session(channel.name)
         log.info("%s: Cleared the session at the person's request; the next message starts a new one", channel.name)
     return len(ids)
 

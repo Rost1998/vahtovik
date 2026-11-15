@@ -72,6 +72,7 @@ COLUMNS = {
     "windows": {"checked_at": "TEXT"},
     "deliveries": {"given_up_warned_at": "TEXT", "reply_to": "TEXT"},
     "source_state": {"last_run_at": "TEXT"},
+    "channel_inputs": {"answered_at": "TEXT", "awaits_answer": "INTEGER DEFAULT 0", "cleared_at": "TEXT"},
 }
 
 
@@ -560,9 +561,19 @@ class State:
                          now, now, channel)
 
     def set_input_session(self, channel: str, session_id: str | None) -> None:
-        """None clears it: the next answer starts a new session."""
+        """A new session for the channel."""
         self.execute("INSERT OR IGNORE INTO channel_inputs (channel) VALUES (?)", channel)
         self.execute("UPDATE channel_inputs SET session_id = ? WHERE channel = ?", session_id, channel)
+
+    def clear_input_session(self, channel: str) -> None:
+        """The person asked to start over: the next answer starts a new session, without the earlier messages."""
+        self.execute("UPDATE channel_inputs SET session_id = NULL, awaits_answer = 0, cleared_at = ? "
+                     "WHERE channel = ?", utc_iso(), channel)
+
+    def input_answered(self, channel: str, awaits_answer: bool) -> None:
+        """The channel's session answered; `awaits_answer`: its last reply waits for the person's answer."""
+        self.execute("UPDATE channel_inputs SET answered_at = ?, awaits_answer = ? WHERE channel = ?",
+                     utc_iso(), int(awaits_answer), channel)
 
     def add_message(self, channel: str, message_id: str, text: str, sender: str, sent_at: str) -> bool:
         """Store a message from the channel. Returns False if it is known already."""
@@ -578,11 +589,11 @@ class State:
 
     def channel_history(self, channel: str, last: int, since: str | None = None,
                         leave_out: list[str] = ()) -> list[tuple[str, str, sqlite3.Row]]:
-        """The channel's last `last` messages (0: all) received from `since` on, without `leave_out`, and
+        """The channel's last `last` messages (0: all) received after `since`, without `leave_out`, and
         vahtovik's replies since the first of them, oldest first: (time, "message" or "reply", row)."""
         messages = self.rows(
             "SELECT * FROM (SELECT rowid AS n, * FROM channel_messages WHERE channel = ? "
-            "AND (? IS NULL OR received_at >= ?) AND id NOT IN (SELECT value FROM json_each(?)) "
+            "AND (? IS NULL OR received_at > ?) AND id NOT IN (SELECT value FROM json_each(?)) "
             "ORDER BY received_at DESC, n DESC LIMIT ?) ORDER BY received_at, n",
             channel, since, since, json.dumps(list(leave_out)), last if last > 0 else -1)
         # By time, not by reply_to: one reply may answer several messages, and it names only the first.
