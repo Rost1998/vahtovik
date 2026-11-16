@@ -6,8 +6,10 @@ path="${FILE_CHANNEL_PATH:?FILE_CHANNEL_PATH is not set}"
 body="$(cat)"
 if [[ -n "${VAHTOVIK_REPLY_TO:-}" ]]; then
     from="reply to message ${VAHTOVIK_REPLY_TO}"
+elif [[ -n "${VAHTOVIK_WATCH:-}" ]]; then
+    from="${VAHTOVIK_WATCH}/${VAHTOVIK_GROUP:-?}"
 else
-    from="${VAHTOVIK_WATCH:-?}/${VAHTOVIK_GROUP:-?}"
+    from="vahtovik"  # vahtovik's own message, such as a usage warning
 fi
 block="## $(date '+%Y-%m-%d %H:%M') · ${VAHTOVIK_SUBJECT:-report}
 _${from}_

@@ -15,6 +15,10 @@ screen does, before the prompt); "hang" (interactive: stop responding after the 
 "background_tasks" and "session_crons" (what the Stop hook hears is still running, as Claude Code tells it);
 "wake" ({"after": seconds, "actions": [...]}: then the background work ends, and like Claude Code the fake
 wakes the agent with a task notification prompt that runs these actions).
+
+With --input-format stream-json it answers the get_usage control request instead, as Claude Code does without an
+AI session: from the JSON file $FAKE_CLAUDE_USAGE ({"exit": code} fails), or with "plan limits do not apply" when
+there is no such file. These starts are logged to $FAKE_CLAUDE_LOG.usage, not to $FAKE_CLAUDE_LOG.
 """
 
 import fcntl
@@ -28,7 +32,7 @@ from pathlib import Path
 
 VALUE_OPTIONS = {"--model", "--permission-mode", "--settings", "--effort", "--resume", "--session-id", "--name",
                  "--append-system-prompt", "--add-dir", "--output-format", "--json-schema", "--max-budget-usd",
-                 "--tools"}
+                 "--tools", "--input-format"}
 
 
 def main() -> int:
@@ -40,6 +44,8 @@ def main() -> int:
             options[arg] = next(items)
         elif not arg.startswith("-"):
             positional.append(arg)
+    if options.get("--input-format") == "stream-json":
+        return usage(sys.stdin.read())
     printing = "-p" in args
     prompt = sys.stdin.read() if printing else (positional[-1] if positional else "")
 
@@ -137,6 +143,21 @@ class Session:
                                 "stderr": proc.stderr[-500:]})
                 answers.append(answer)
         return answers
+
+
+def usage(stdin: str) -> int:
+    request = json.loads(stdin.splitlines()[0])
+    _log(".usage", {"request": request, "config_dir": os.environ.get("CLAUDE_CONFIG_DIR"),
+                    "api_key": "ANTHROPIC_API_KEY" in os.environ})
+    path = Path(os.environ.get("FAKE_CLAUDE_USAGE") or "/nonexistent")
+    answer = json.loads(path.read_text()) if path.is_file() else {"rate_limits_available": False, "rate_limits": None}
+    if "exit" in answer:
+        print(answer.get("stderr", "fake usage failure"), file=sys.stderr)
+        return answer["exit"]
+    print(json.dumps({"type": "system", "subtype": "init"}))
+    print(json.dumps({"type": "control_response", "response": {
+        "subtype": "success", "request_id": request["request_id"], "response": answer}}))
+    return 0
 
 
 def perform(actions: list[dict], hook=lambda event, payload: []) -> None:

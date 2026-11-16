@@ -117,6 +117,15 @@ def reply(cfg: Config, state: State, channel: str, subject: str, body: str, repl
     return attempt(cfg, state, delivery_id, dry_run)
 
 
+def notice(cfg: Config, state: State, channel: str, subject: str, body: str, dry_run: bool = False):
+    """A plain message from vahtovik itself that belongs to no group and answers no message, such as a warning
+    that the Claude plan's usage limits fill up. Failed ones are retried like reports."""
+    if channel not in cfg.channels:
+        raise DeliveryError(f"unknown channel {channel!r}")
+    delivery_id = state.add_delivery("", "", channel, subject, body, "notice", None)
+    return attempt(cfg, state, delivery_id, dry_run)
+
+
 def retry_failed(cfg: Config, state: State, dry_run: bool) -> tuple[int, int]:
     sent = failed = 0
     for row in state.retryable_deliveries(MAX_ATTEMPTS):
