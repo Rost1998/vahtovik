@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -7,7 +8,10 @@ import yaml
 
 from vahtovik import usage_limits
 
-NOW = datetime.now(timezone.utc)
+
+
+def now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 @pytest.fixture
@@ -23,14 +27,15 @@ def usage(project, monkeypatch):
     answer = project.tmp / "usage.json"
     monkeypatch.setenv("FAKE_CLAUDE_USAGE", str(answer))
 
-    def set_usage(session=10, weekly=5, fable=0, session_reset=NOW + timedelta(hours=3, minutes=11), raw=None):
+    def set_usage(session=10, weekly=5, fable=0, session_reset=None, raw=None):
+        session_reset = session_reset or now() + timedelta(hours=3, minutes=11)
         rows = [
             {"kind": "session", "group": "session", "percent": session, "resets_at": session_reset.isoformat(),
              "scope": None, "severity": "normal", "is_active": True},
             {"kind": "weekly_all", "group": "weekly", "percent": weekly,
-             "resets_at": (NOW + timedelta(days=6, hours=7)).isoformat(), "scope": None},
+             "resets_at": (now() + timedelta(days=6, hours=7)).isoformat(), "scope": None},
             {"kind": "weekly_scoped", "group": "weekly", "percent": fable,
-             "resets_at": (NOW + timedelta(days=6, hours=7)).isoformat(),
+             "resets_at": (now() + timedelta(days=6, hours=7)).isoformat(),
              "scope": {"model": {"id": None, "display_name": "Fable"}, "surface": None}},
         ]
         answer.write_text(json.dumps(raw or {"rate_limits_available": True, "rate_limits": {"limits": rows}}))
@@ -70,16 +75,16 @@ def test_each_limit_gets_one_warning_at_each_level_it_passes(project, usage):
 def test_a_limit_warns_again_after_it_resets(project, usage):
     usage(session=91)
     _check(project)
-    usage(session=5, session_reset=NOW + timedelta(hours=5))  # the percent fell: a new window
+    usage(session=5, session_reset=now() + timedelta(hours=5))  # the percent fell: a new window
     _check(project)
-    usage(session=81, session_reset=NOW + timedelta(hours=5))
+    usage(session=81, session_reset=now() + timedelta(hours=5))
     assert _warnings(_check(project))[-1].startswith("The 5-hour limit is at 81% (past 80%).")
 
 
 def test_a_limit_warns_again_once_its_reset_time_has_passed(project, usage):
-    usage(session=91, session_reset=NOW - timedelta(minutes=5))  # the reset came, but the next check saw it late
+    usage(session=91, session_reset=now() - timedelta(minutes=5))  # the reset came, but the next check saw it late
     _check(project)
-    usage(session=93, session_reset=NOW + timedelta(hours=5))
+    usage(session=93, session_reset=now() + timedelta(hours=5))
     assert len(_warnings(_check(project))) == 2
 
 
@@ -99,12 +104,13 @@ def test_warnings_go_to_the_persons_own_input_channels_or_to_those_set(project, 
 
 
 def test_older_answers_without_rows_are_read_from_their_fields(project, usage):
-    reset = (NOW + timedelta(hours=2)).isoformat()
+    reset = (now() + timedelta(hours=2)).isoformat()
     usage(raw={"rate_limits_available": True, "rate_limits": {
         "five_hour": {"utilization": 99, "resets_at": reset}, "seven_day": {"utilization": 10, "resets_at": reset},
         "seven_day_opus": {"utilization": 85.4, "resets_at": None}, "seven_day_sonnet": None}})
     lines = _warnings(_check(project))[0].splitlines()
-    assert lines[0].startswith("The 5-hour limit is at 99% (past 99%). It resets today at ")
+    assert re.match(r"The 5-hour limit is at 99% \(past 99%\)\. It resets (today|tomorrow) at \d\d:\d\d, in 2 hours\.$",
+                    lines[0])
     assert lines[1] == "The weekly Opus limit is at 85% (past 80%). It has no reset time."
 
 
@@ -137,3 +143,16 @@ def test_no_plan_limits_no_warnings(project, usage):
     usage(raw={"rate_limits_available": False, "rate_limits": None})
     state = _check(project)
     assert _warnings(state) == [] and usage_limits.last(state)[1] == []
+
+
+def test_a_run_checks_the_usage_and_status_shows_it(project, usage, capsys):
+    from vahtovik import cli
+    usage(session=82, weekly=7)
+    cli.main(["run", "--stage", "deliver"])
+    cfg, state, _ = project.load()
+    assert _warnings(state)[0].startswith("The 5-hour limit is at 82% (past 80%).")
+    capsys.readouterr()
+    cli.main(["status"])
+    out = capsys.readouterr().out
+    assert re.search(r"\(warnings at: 80, 90, 95, 99\):\n  5-hour limit: 82%, resets (today|tomorrow) at ", out)
+    assert "\n  weekly limit for all models: 7%, resets on " in out

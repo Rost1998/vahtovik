@@ -15,7 +15,7 @@ from pathlib import Path
 
 from . import config as config_mod
 from . import (channel_guard, costs, delivery, group_session, group_status, journal, memory, operations, skills,
-               timer, watchdog, windows)
+               timer, usage_limits, watchdog, windows)
 from .claude_session import Claude
 from .config import Config, ConfigError
 from .stages import channel_input, group_turn, monitor
@@ -110,6 +110,7 @@ def _run(cfg: Config, state: State, args, run_id: str) -> int:
     tmux, claude = Tmux(cfg), Claude(cfg)
     costs.update(state, claude)  # before Claude Code deletes old conversation files
     _watchdog(cfg, state, tmux, claude, run_id)
+    usage_limits.check(cfg, state, claude, args.dry_run)  # once usage.every has passed
     now = datetime.now(timezone.utc)
     watches = [cfg.watch(args.watch)] if args.watch else [w for w in cfg.watches.values() if w.enabled]
     sources = {w.name: _due_sources(state, w, now, args.force) for w in watches} \
@@ -343,7 +344,7 @@ def _status_table(cfg: Config, state: State, names: list[str]) -> None:
                        right=(4, 5, 6)):
         print(line)
     print()
-    for line in _inputs(cfg, state):
+    for line in _inputs(cfg, state) + _usage(cfg, state):
         print(line)
     for line in _cost_summary(state, dict(PERIODS)):
         print(line)
@@ -367,6 +368,22 @@ def _inputs(cfg: Config, state: State, verbose: bool = False) -> list[str]:
                      f"{counts.get('failed', 0)} failed{error}")
         if verbose:
             lines.append(f"  {_limits(channel.input)}")
+    return lines + [""] if lines else []
+
+
+def _usage(cfg: Config, state: State) -> list[str]:
+    """The Claude plan's usage limits at the last check, and the error of a check that fails now."""
+    if cfg.claude.auth != "subscription":
+        return []
+    lines, last, now = [], usage_limits.last(state), datetime.now(timezone.utc)
+    if last and last[1]:
+        warn = ", ".join(map(str, cfg.usage.warn_at)) if cfg.usage.every else "off"
+        lines.append(f"Claude usage at {human(last[0])} (warnings at: {warn}):")
+        lines += [f"  {m.name.removeprefix('the ')}: {round(m.percent)}%, {usage_limits.resets(m, now)}"
+                  for m in last[1]]
+    error = state.get_meta("usage_error")
+    if error:
+        lines.append(f"Claude usage: the last check failed: {error}")
     return lines + [""] if lines else []
 
 
@@ -484,7 +501,7 @@ def _status_details(cfg: Config, state: State, names: list[str]) -> None:
     failed = state.undelivered()
     print(f"undelivered reports: {failed}")
     print()
-    for line in _inputs(cfg, state, verbose=True):
+    for line in _inputs(cfg, state, verbose=True) + _usage(cfg, state):
         print(line)
     for line in _cost_summary(state, DETAIL_PERIODS):
         print(line)

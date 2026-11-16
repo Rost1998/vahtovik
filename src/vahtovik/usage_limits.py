@@ -141,7 +141,9 @@ def resets(meter: Meter, now: datetime) -> str:
         return "has no reset time"
     local, today = at.astimezone(), now.astimezone().date()
     days = (local.date() - today).days
-    day = {0: "today", 1: "tomorrow"}.get(days) or local.strftime("on %a %d %b")
+    day = {0: "today", 1: "tomorrow", -1: "yesterday"}.get(days) or local.strftime("on %a %d %b")
+    if at <= now:
+        return f"reset {day} at {local:%H:%M}"  # for `vahtovik status` after an old check
     return f"resets {day} at {local:%H:%M}, {_wait((at - now).total_seconds())}"
 
 
