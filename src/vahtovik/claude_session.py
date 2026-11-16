@@ -21,7 +21,14 @@ from .util import tail
 log = logging.getLogger(__name__)
 
 SESSION_MISSING = "No conversation found"
+USAGE_REQUEST = {"type": "control_request", "request_id": "vahtovik-usage",  # what /usage shows, see plan_usage()
+                 "request": {"subtype": "get_usage", "skip_behaviors": True}}
+USAGE_TIMEOUT = 60
 CONTEXT_USAGE = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")  # a step's context
+
+
+class UsageError(Exception):
+    pass
 
 
 @dataclass
@@ -168,8 +175,7 @@ class Claude:
         return args + [spec.prompt] if spec.prompt else args
 
     def env(self, spec: SessionSpec) -> dict[str, str]:
-        env = dict(os.environ)
-        env.update(spec.env)
+        env = self._base_env(spec.env)
         env["VAHTOVIK_HOME"] = str(self.cfg.root)
         env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"  # context.md is the memory
         # A suggestion shows as grey text in the input box, and the watchdog's screen shows it as typed text.
@@ -177,13 +183,49 @@ class Claude:
         vahtovik = shutil.which("vahtovik")
         bin_dir = str(Path(vahtovik).parent if vahtovik else Path(sys.executable).parent)
         env["PATH"] = bin_dir + os.pathsep + env.get("PATH", "")
+        if self.cfg.claude.auth != "subscription":
+            env["CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD"] = "1"
+        return env
+
+    def _base_env(self, extra: dict[str, str] | None = None) -> dict[str, str]:
+        """The environment of every `claude` that vahtovik runs: its profile and its login."""
+        env = {**os.environ, **(extra or {})}
         if self.cfg.claude.config_dir:
             env["CLAUDE_CONFIG_DIR"] = str(self.cfg.claude.config_dir)
         if self.cfg.claude.auth == "subscription":
             env.pop("ANTHROPIC_API_KEY", None)  # make sure the subscription login is used
-        else:
-            env["CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD"] = "1"
         return env
+
+    def plan_usage(self) -> dict | None:
+        """How full the Claude plan's usage limits are: the `rate_limits` that Claude Code's /usage shows, or None
+        when plan limits do not apply, as with an API key. Claude Code answers this control request without an AI
+        session, with its own login, which it refreshes itself. Raises UsageError when it gives no answer."""
+        args = [self.cfg.claude.binary, "-p", "--input-format", "stream-json", "--output-format", "stream-json",
+                "--verbose", "--no-session-persistence", "--strict-mcp-config"]
+        try:
+            proc = subprocess.run(args, input=json.dumps(USAGE_REQUEST) + "\n", text=True, capture_output=True,
+                                  cwd=self.cfg.root, env=self._base_env(), timeout=USAGE_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            raise UsageError(f"{self.cfg.claude.binary} gave no answer in {USAGE_TIMEOUT} s") from None
+        except OSError as exc:
+            raise UsageError(f"cannot run {self.cfg.claude.binary}: {exc}") from None
+        for line in proc.stdout.splitlines():
+            try:
+                item = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(item, dict) or item.get("type") != "control_response":
+                continue
+            response = item.get("response") or {}
+            if response.get("subtype") != "success":
+                raise UsageError(tail(str(response.get("error") or response)))
+            answer = response.get("response") or {}
+            if not answer.get("rate_limits_available"):
+                return None
+            if not isinstance(answer.get("rate_limits"), dict):
+                raise UsageError("Claude Code could not get the usage from claude.ai")
+            return answer["rate_limits"]
+        raise UsageError(tail(proc.stderr or proc.stdout) or f"exit code {proc.returncode}")
 
     def run(self, spec: SessionSpec, raw_dir: Path) -> SessionResult:
         """Run a throwaway session in print mode; run it again once if the answer does not match the schema."""
