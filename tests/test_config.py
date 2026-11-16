@@ -128,6 +128,27 @@ def test_old_watchdog_timing_settings_are_ignored(project):
     assert settings.notify_every == timedelta(hours=2) and settings.every == timedelta(minutes=1)
 
 
+def test_usage_settings_have_defaults_and_can_be_changed(project):
+    settings = config_mod.load(project.root).usage
+    assert (settings.every, settings.warn_at, settings.channels) == (timedelta(minutes=10), [80, 90, 95, 99], None)
+    _edit_yaml(project.root / "vahtovik.yaml",
+               lambda d: d.update(usage={"every": 0, "warn_at": [95, 50, 95], "channels": ["log"]}))
+    settings = config_mod.load(project.root).usage
+    assert (settings.every, settings.warn_at, settings.channels) == (timedelta(0), [50, 95], ["log"])
+
+
+@pytest.mark.parametrize("usage, error", [
+    ({"warn_at": [80, 101]}, "usage.warn_at must be a list of whole percents"),
+    ({"warn_at": ["high"]}, "usage.warn_at must be a list of whole percents"),
+    ({"every": "soon"}, "usage.every: bad interval"),
+    ({"channels": ["nowhere"]}, "usage.channels: unknown channel nowhere"),
+])
+def test_bad_usage_settings_are_config_errors(project, usage, error):
+    _edit_yaml(project.root / "vahtovik.yaml", lambda d: d.update(usage=usage))
+    with pytest.raises(ConfigError, match=error):
+        config_mod.load(project.root)
+
+
 def test_a_source_has_the_watchs_interval_unless_it_sets_its_own(project):
     path = project.root / "watches/w1/watch.yaml"
     data = yaml.safe_load(path.read_text())

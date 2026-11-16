@@ -21,6 +21,11 @@ watchdog:                     # looks after the group session windows at the sta
   notify_every: 6h            # repeat a notice about a group that waits for you or needs attention; 0: never
   long_turn_after: 3h         # warn once about a group turn running this long; 0: never
 
+usage:                        # warns you when the Claude plan's usage limits fill up (see README, Usage limits)
+  every: 10m                  # how often vahtovik asks Claude Code for the usage; 0: never
+  warn_at: [80, 90, 95, 99]   # one warning at each percent of a limit, until the limit resets
+  # channels: [ops-telegram]  # the default: every input channel that is not limited
+
 channels:
   local-log:
     skill: file

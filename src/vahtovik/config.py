@@ -57,6 +57,13 @@ class WatchdogSettings:
 
 
 @dataclass
+class UsageSettings:
+    every: timedelta = timedelta(minutes=10)  # how often vahtovik asks Claude Code for the plan's usage; 0: never
+    warn_at: list[int] = field(default_factory=lambda: [80, 90, 95, 99])  # one warning at each percent of a limit
+    channels: list[str] | None = None  # where the warnings go; None: every input channel that is not limited
+
+
+@dataclass
 class InputSettings:
     interval: timedelta = timedelta(minutes=1)  # how often vahtovik reads the channel
     commands: list[str] | None = None  # set: a limited channel, whose agent may run only these vahtovik commands
@@ -170,6 +177,7 @@ class Config:
     watches_dir: Path
     tmux: TmuxSettings = field(default_factory=TmuxSettings)
     watchdog: WatchdogSettings = field(default_factory=WatchdogSettings)
+    usage: UsageSettings = field(default_factory=UsageSettings)
     scope: list[str] | None = None  # set: the command runs for a limited channel that sees only these watches
 
     def stage(self, watch: Watch | None, stage: str) -> StageSettings:
@@ -353,6 +361,29 @@ def _load_watchdog(raw: object) -> WatchdogSettings:
     return settings
 
 
+def _load_usage(raw: object, channels: dict[str, Channel]) -> UsageSettings:
+    if not isinstance(raw or {}, dict):
+        raise ConfigError("usage must be a mapping")
+    raw = raw or {}
+    settings = UsageSettings()
+    if "every" in raw:
+        try:
+            settings.every = timedelta(0) if raw["every"] in (0, "0", None) else parse_interval(raw["every"])
+        except ConfigError as exc:
+            raise ConfigError(f"usage.every: {exc}") from None
+    if "warn_at" in raw:
+        value = raw["warn_at"]
+        value = value if isinstance(value, list) else [value]
+        if any(isinstance(v, bool) or not isinstance(v, int) or not 1 <= v <= 100 for v in value):
+            raise ConfigError("usage.warn_at must be a list of whole percents from 1 to 100, such as [80, 90]")
+        settings.warn_at = sorted(set(value))
+    settings.channels = _names(raw, "channels", "usage")
+    unknown = [c for c in settings.channels or [] if c not in channels]
+    if unknown:
+        raise ConfigError(f"usage.channels: unknown channel {', '.join(unknown)}")
+    return settings
+
+
 def _load_channels(raw: object) -> dict[str, Channel]:
     if not isinstance(raw or {}, dict):
         raise ConfigError("channels must be a mapping of channel name to settings")
@@ -490,5 +521,6 @@ def load(root: Path | None = None) -> Config:
         watches_dir=watches_dir,
         tmux=_load_tmux(raw.get("tmux")),
         watchdog=_load_watchdog(raw.get("watchdog")),
+        usage=_load_usage(raw.get("usage"), channels),
         scope=scope,
     )
