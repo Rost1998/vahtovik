@@ -31,6 +31,8 @@ uv run vahtovik open example/uv-0-13                 # talk to a group's agent
 3. **Group turn**: for each group with new artifacts, vahtovik resumes the group's session in a tmux window and goes on: it does not wait for the turn to end. The agent processes the artifacts by `process/*.md`, updates `context.md`, reports by `report.md` with `vahtovik report`, and ends the turn with its status (see below). At most `claude.parallel_turns` (5) turns work at once; turns that wait for their background work or for a person do not count. The rest start at a later run: every run starts the turns that can start, even when no source is due.
 4. **Deliver**: failed deliveries are retried, up to 5 attempts.
 
+Before these steps, a run lets the watchdog look after the group sessions (see Watchdog), and checks how full the Claude plan's usage limits are (see Usage limits).
+
 ## Group sessions
 
 Each group has one Claude Code session, created on its first turn and resumed on every later turn. Its working folder is `data/watches/<watch>/groups/<key>/`:
@@ -156,6 +158,21 @@ It also asks an AI session (the `watchdog` stage: Sonnet with medium effort by d
 
 The AI never writes text for a session, and vahtovik never touches a window that a person is looking at. Every action except `none` also sends a notice whose subject starts with `WATCHDOG:`, so you can follow what the watchdog does while it is new. For `maintenance` this is the usual "Needs attention" notice, sent at once.
 
+## Usage limits
+
+With `auth: subscription`, all vahtovik sessions use your Claude plan's usage limits, and when a limit is full, the sessions stop until it resets. Claude plans have a 5-hour limit, a weekly limit for all models, and weekly limits for single models, such as Fable. vahtovik warns you before a limit is full.
+
+At the start of a run, once `usage.every` (10 minutes; 0: never) has passed since the last check, vahtovik asks Claude Code how full the limits are: the numbers that Claude Code's `/usage` shows. Claude Code answers without an AI session, so the check costs nothing. It uses its own login, so vahtovik never reads your login token.
+
+Each limit gets one warning at each percent of `usage.warn_at` (80, 90, 95 and 99) that it passes, until it resets; then it warns again. A limit that passes several of them between two checks gets one warning, at the highest. One message holds the warnings of one check, with the time each limit resets:
+
+```
+Claude usage
+The 5-hour limit is at 91% (past 90%). It resets today at 18:20, in 3 hours 11 minutes.
+```
+
+The warnings go to every input channel that is not limited, your own chats; `usage.channels` names other channels instead. Failed warnings are retried like reports. `vahtovik status` shows the limits at the last check, and the error if the check fails now; the journal has a line for each warning, and one line when the check starts to fail.
+
 ## Journal
 
 vahtovik writes one short line per key event to `data/journal.log`: runs, messages from input channels and their answers, monitoring, new groups, group turns, reports, interactive sessions and failures.
@@ -182,7 +199,7 @@ The second column says who wrote the line: a timer run, an `interactive` session
 
 ## Configuration
 
-- `vahtovik.yaml`: Claude login mode (`subscription` or `api-key`), the default model and effort (`opus`, the newest Opus, and `high`), model, effort and dollar cap per stage, how many group turns work at once (`claude.parallel_turns`), the watchdog's pace and notices, and channels. A watch can set its own model and effort in `watch.yaml` (`claude: {model: ..., effort: ...}`), and override the settings of a stage (`claude: {group: {effort: xhigh}}`). Later ones win: `vahtovik.yaml`'s model and effort, its stage settings, the watch's model and effort, the watch's stage settings. The watchdog belongs to no watch, so only `vahtovik.yaml` sets it.
+- `vahtovik.yaml`: Claude login mode (`subscription` or `api-key`), the default model and effort (`opus`, the newest Opus, and `high`), model, effort and dollar cap per stage, how many group turns work at once (`claude.parallel_turns`), the watchdog's pace and notices, the warnings about the Claude plan's usage limits (`usage`), and channels. A watch can set its own model and effort in `watch.yaml` (`claude: {model: ..., effort: ...}`), and override the settings of a stage (`claude: {group: {effort: xhigh}}`). Later ones win: `vahtovik.yaml`'s model and effort, its stage settings, the watch's model and effort, the watch's stage settings. The watchdog belongs to no watch, so only `vahtovik.yaml` sets it.
 - `.env`: shared secrets, such as channel tokens and `ANTHROPIC_API_KEY`; see `.env.example`.
 - `watches/<name>/`: `watch.yaml` (interval or times of the day, sources, channels), `monitor.md`, `process/*.md` (used in name order), `report.md`, and `MEMORY.md`, the notes that agents save (see Watch memory). See `watches/example/`. A source may set its own `interval` or `at`; the watch's is the default for its sources. See Scheduling.
 - `watches/<name>/.env`: the watch's own secrets, such as source tokens. Only this watch's sessions get them, so two watches can each have their own `GITHUB_TOKEN`. If one watch has two sources of the same type with different tokens, give a source `env: {GITHUB_TOKEN: GITHUB_TOKEN_ORG_B}`: its scripts then get `GITHUB_TOKEN` set to the value of `GITHUB_TOKEN_ORG_B`.

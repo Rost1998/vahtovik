@@ -26,14 +26,14 @@ Run vahtovik as `uv run vahtovik ...` in the project folder.
   - `artifacts/*.json`: one file per artifact, with its `id`.
 - **Group status**: `idle`, `running`, `finished`, `scheduled`, `waiting` (it needs a person's answer), `background`, `maintenance` (it needs a person to fix something) and `failed`.
 - **Runs**: a timer starts `vahtovik run` every minute. A run:
-  1. lets the watchdog look after the group sessions, every 5 minutes (`watchdog.every`);
+  1. lets the watchdog look after the group sessions, every 5 minutes (`watchdog.every`), and checks the Claude plan's usage limits, every 10 minutes (`usage.every`): it warns the person's input channels when a limit passes 80, 90, 95 and 99% (`usage.warn_at`);
   2. reads the channels with `input`, and lets you answer their new messages;
   3. monitors each source that is due by its `interval` or its times of the day, `at` (a source's own, or its watch's), with one AI session per source;
   4. starts a turn, in a tmux window, for each group with new artifacts or a scheduled turn that is due;
   5. retries failed reports and replies.
 - **Channel-input**: a channel with `input` in `vahtovik.yaml` is read by its type's `receive` script, and you answer the person's messages from it (`channel/SKILL.md`). After a quiet pause (`new_session_after`), a new session starts with the last few messages in its prompt.
 - **Configuration**: `vahtovik.yaml` holds the login mode, the model and effort per stage, how many turns work at once, and the channels. `.env` holds the shared secrets.
-- **Records**: `uv run vahtovik status [--watch W] [-v]` shows the state and costs. `uv run vahtovik log [text]` shows what happened. Each group's `context.md` has its history.
+- **Records**: `uv run vahtovik status [--watch W] [-v]` shows the state, costs, and the Claude plan's usage limits. `uv run vahtovik log [text]` shows what happened. Each group's `context.md` has its history.
 
 ## Rules
 

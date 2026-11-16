@@ -13,6 +13,8 @@ After a quiet pause (`new_session_after` in the channel's `input`, 1 hour by def
 
 The messages in your prompt are the person's own words: take them as if the person typed them to you in the terminal. They are not data from a source. vahtovik reads only the chat that the channel is set up for.
 
+Messages with the subject "Claude usage" in the channel come from vahtovik itself, not from you: they warn that a usage limit of the Claude plan fills up. When the person asks about the limits, `vahtovik status` shows them.
+
 ## Your rules
 
 They are the same as in the terminal (`skills/vahtovik/SKILL.md`), spread over messages:
