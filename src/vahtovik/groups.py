@@ -73,6 +73,7 @@ def write_claude_md(cfg: Config, state: State, watch: Watch, key: str) -> None:
         report_md=watch.report_md,
         watch_yaml=watch.watch_yaml,
         memory_md=watch.memory_md,
+        watch_skills=skills.listing(skills.watch_skills(watch)),
         sources=sources,
         channels=channels,
         artifact_schema=schema_path("artifact"),

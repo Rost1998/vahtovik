@@ -17,6 +17,7 @@ Everything else, including the vahtovik project at `$root`, is read-only to you,
 - Processing rules: $process_files
 - Reporting rules: `$report_md`
 - Watch config: `$watch_yaml`
+- The watch's own skills, below
 
 vahtovik's journal of events (runs, turns, reports) is `$journal`. `vahtovik log "$watch/$key:"` shows the lines about this group.
 
@@ -26,6 +27,12 @@ vahtovik's journal of events (runs, turns, reports) is `$journal`. `vahtovik log
 
 - `vahtovik memory add --text '<note>'`: save something that holds for the whole watch, not only this group.
 - `vahtovik memory remove <number> --reason '<why>'`: remove an entry that turned out wrong or stale.
+
+## The watch's skills
+
+When a skill's description fits your task, read its `SKILL.md` and follow it. Its scripts are in its folder.
+
+$watch_skills
 
 ## Sources of this watch
 

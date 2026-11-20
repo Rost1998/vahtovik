@@ -89,13 +89,19 @@ def _monitor_and_turn(project):
     return cfg, project.calls()
 
 
-def test_sessions_get_the_watch_folder_when_it_has_skills(project):
-    _skill(project)
+def test_sessions_get_the_watch_folder_and_the_list_of_its_skills(project):
+    folder = _skill(project)
     cfg, calls = _monitor_and_turn(project)
+    line = f"- `triage` (`{folder / 'SKILL.md'}`): Sort new items by urgency."
     assert len(calls) == 3
     assert all(_add_dirs(call) == [str(cfg.watch("w1").dir)] for call in calls)
+    assert all(line in call["prompt"] for call in calls)  # two monitoring prompts and the turn's prompt
+    claude_md = (cfg.group_dir("w1", "g") / "CLAUDE.md").read_text()
+    assert f"## The watch's skills\n\nWhen a skill's description fits" in claude_md and line in claude_md
 
 
 def test_sessions_of_a_watch_without_skills_get_no_add_dir(project):
-    _, calls = _monitor_and_turn(project)
+    cfg, calls = _monitor_and_turn(project)
     assert len(calls) == 3 and all(_add_dirs(call) == [] for call in calls)
+    assert all("## The watch's skills\n\nWhen a skill's description fits your task, read its `SKILL.md` and "
+               "follow it.\n\n- none\n" in call["prompt"] for call in calls)

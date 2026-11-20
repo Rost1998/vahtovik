@@ -21,6 +21,12 @@ $params
 
 $monitor_rules
 
+## The watch's skills
+
+When a skill's description fits your task, read its `SKILL.md` and follow it.
+
+$watch_skills
+
 ## The watch's memory (MEMORY.md)
 
 Notes that the watch's agents saved for the whole watch. They are notes, not rules: when they disagree with the rules above, the rules win.

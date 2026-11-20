@@ -117,7 +117,7 @@ def turn(cfg: Config, state: State, claude: Claude, tmux: Tmux, watch: Watch, ke
         "group_turn.md",
         run_id=run_id, turn_id=turn_id, now=now, session_note="\n\n".join(filter(None, notes)),
         artifacts=_artifacts_text(pending) or "- none", process_rules=_process_text(watch),
-        report_rules=_read(watch.report_md), memory=memory.prompt_text(watch), channels=_channels_text(cfg, watch),
+        watch_skills=skills.listing(skills.watch_skills(watch)), report_rules=_read(watch.report_md), memory=memory.prompt_text(watch), channels=_channels_text(cfg, watch),
         deliveries=_deliveries_text(state.deliveries_since(watch.name, key, last["started_at"] if last else None)),
     )
     spec.env.update(VAHTOVIK_TURN=turn_id, VAHTOVIK_RUN=run_id)

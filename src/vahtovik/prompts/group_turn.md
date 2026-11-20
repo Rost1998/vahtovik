@@ -12,6 +12,12 @@ $artifacts
 
 $process_rules
 
+## The watch's skills
+
+When a skill's description fits your task, read its `SKILL.md` and follow it.
+
+$watch_skills
+
 ## Reporting rules (report.md)
 
 $report_rules
