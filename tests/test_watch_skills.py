@@ -1,6 +1,10 @@
 import os
 
-from vahtovik import cli, skills
+from conftest import artifact, monitor_answer, run_turns, turn_answer, work_log
+
+from vahtovik import artifacts, cli, skills
+from vahtovik.stages import monitor
+from vahtovik.tmux import Tmux
 
 
 def _skill(project, name="triage", description="Sort new items by urgency.", link=True):
@@ -67,3 +71,31 @@ def test_check_wants_the_folder_name_as_the_skill_name_and_valid_front_matter(pr
     assert len(problems) == 1 and "front matter of" in problems[0] and "is not valid YAML" in problems[0]
     cfg, _, _ = project.load()
     assert skills.watch_skills(cfg.watch("w1")) == []
+
+
+def _add_dirs(call) -> list[str]:
+    args = call["args"]
+    return [args[i + 1] for i, arg in enumerate(args) if arg == "--add-dir"]
+
+
+def _monitor_and_turn(project):
+    """One monitoring session for each source of w1, then one group turn. Returns the calls to claude."""
+    cfg, state, claude = project.load()
+    project.queue(monitor_answer(), monitor_answer())
+    monitor.run(cfg, state, claude, cfg.watch("w1"), "r1", project.tmp / "raw")
+    artifacts.register(cfg, state, cfg.watch("w1"), artifact("a1", "g"), "src-a")
+    project.queue(turn_answer([work_log()]))
+    run_turns(cfg, state, claude, Tmux(cfg), run_id="r1")
+    return cfg, project.calls()
+
+
+def test_sessions_get_the_watch_folder_when_it_has_skills(project):
+    _skill(project)
+    cfg, calls = _monitor_and_turn(project)
+    assert len(calls) == 3
+    assert all(_add_dirs(call) == [str(cfg.watch("w1").dir)] for call in calls)
+
+
+def test_sessions_of_a_watch_without_skills_get_no_add_dir(project):
+    _, calls = _monitor_and_turn(project)
+    assert len(calls) == 3 and all(_add_dirs(call) == [] for call in calls)

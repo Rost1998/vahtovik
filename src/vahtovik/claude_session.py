@@ -45,6 +45,7 @@ class SessionSpec:
     env: dict[str, str] = field(default_factory=dict)
     scope: str = "session"  # <watch>/<source or group>, for the journal
     guard: str | None = None  # a limited input channel: its session runs with the guard (channel_guard.py)
+    add_dirs: list[Path] = field(default_factory=list)  # for --add-dir: a watch folder, whose skills Claude Code loads
 
     @property
     def label(self) -> str:
@@ -147,6 +148,8 @@ class Claude:
         if self.cfg.claude.auth == "api-key":
             # --bare skips CLAUDE.md discovery; --add-dir brings the working folder's CLAUDE.md back.
             args += ["--bare", "--add-dir", str(spec.workdir)]
+        for folder in spec.add_dirs:  # Claude Code loads the skills in its .claude/skills/
+            args += ["--add-dir", str(folder)]
         if spec.mode == "resume":
             args += ["--resume", spec.session_id]
         else:

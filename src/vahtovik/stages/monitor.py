@@ -99,7 +99,7 @@ def run(cfg: Config, state: State, claude: Claude, watch: Watch, run_id: str, ra
             schema=schema, system_prompt=shared, mode="throwaway",
             env={**watch.source_env(source),
                  "VAHTOVIK_WATCH": watch.name, "VAHTOVIK_SOURCE": source.id, "VAHTOVIK_RUN": run_id},
-            scope=scope,
+            scope=scope, add_dirs=watch.claude_dirs(),
         )
         log.info("%s: Started monitoring (%s)%s", scope, skill.name, found_by_script)
         result = claude.run(spec, raw_dir)

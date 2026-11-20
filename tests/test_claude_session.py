@@ -63,6 +63,28 @@ def test_login_modes(project, monkeypatch):
     assert env["ANTHROPIC_API_KEY"] == "key" and env["CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD"] == "1"
 
 
+def _add_dirs(args) -> list[str]:
+    return [args[i + 1] for i, arg in enumerate(args) if arg == "--add-dir"]
+
+
+def test_add_dirs_in_both_login_modes(project, monkeypatch):
+    cfg, _, claude = project.load()
+    watch_dir = cfg.watch("w1").dir
+    spec = _spec(cfg, add_dirs=[watch_dir])
+    assert _add_dirs(claude.print_args(spec)) == [str(watch_dir)]
+    assert _add_dirs(claude.interactive_args(_spec(cfg, "resume", session_id="abc", add_dirs=[watch_dir]))) == [
+        str(watch_dir)]
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
+    path = project.root / "vahtovik.yaml"
+    data = yaml.safe_load(path.read_text())
+    data["claude"]["auth"] = "api-key"
+    path.write_text(yaml.safe_dump(data))
+    cfg, _, claude = project.load()
+    spec = _spec(cfg, add_dirs=[watch_dir])
+    assert _add_dirs(claude.print_args(spec)) == [str(spec.workdir), str(watch_dir)]
+
+
 def test_invalid_answer_is_retried(project):
     cfg, _, claude = project.load()
     project.queue({"structured_output": {"wrong": True}}, {"structured_output": {"ok": True}})
