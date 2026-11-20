@@ -539,6 +539,7 @@ def cmd_check(args) -> int:
                 problems.append(f"watch {watch.name}: {path} is missing")
         if not watch.process_files():
             problems.append(f"watch {watch.name}: no process/*.md files")
+        problems += [f"watch {watch.name}: {problem}" for problem in skills.watch_skill_problems(watch)]
         for src in watch.sources:
             try:
                 skill = skills.load(cfg.skills_dir, "sources", src.skill)

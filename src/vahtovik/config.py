@@ -143,6 +143,20 @@ class Watch:
     def env_file(self) -> Path:
         return self.dir / ".env"
 
+    @property
+    def own_skills_dir(self) -> Path:
+        """The watch's own skills: skills/<skill>/SKILL.md, with optional scripts."""
+        return self.dir / "skills"
+
+    @property
+    def skill_links_dir(self) -> Path:
+        """Symlinks to the watch's own skills, where Claude Code looks for them: .claude/skills/<skill>."""
+        return self.dir / ".claude" / "skills"
+
+    def claude_dirs(self) -> list[Path]:
+        """The folders that the watch's sessions get with --add-dir, so Claude Code loads the watch's skills."""
+        return [self.dir] if self.skill_links_dir.is_dir() else []
+
     def process_files(self) -> list[Path]:
         process_dir = self.dir / "process"
         return sorted(process_dir.glob("*.md")) if process_dir.is_dir() else []
