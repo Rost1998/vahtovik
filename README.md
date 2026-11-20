@@ -7,7 +7,7 @@ AI monitoring on Claude Code sessions. vahtovik:
 3. **reports** results to channels: the agent writes the message, vahtovik sends it;
 4. **answers you** through channels with `input`: you write to vahtovik there, and the vahtovik agent replies.
 
-Source types and channels are skills: a folder with `SKILL.md` and optional scripts. Adding one needs no Python changes.
+Source types and channels are skills: a folder with `SKILL.md` and optional scripts. Adding one needs no Python changes. A watch can also have skills of its own.
 
 ## Quick start
 
@@ -77,6 +77,16 @@ The changelog feed repeats an entry when a release is edited: its id stays the s
 ```
 
 Each entry's heading has its number, its time and who saved it. The command refuses a text that holds a secret from the `.env` files, and an agent may change only its own watch's memory. The journal keeps a line for every entry saved or removed. vahtovik never commits the file: review the new notes with `git diff`, edit or delete them by hand if you like, and commit them.
+
+### Watch skills
+
+A watch can have skills of its own, for work that only its agents do: how to judge an item, how to run a check, a script that builds something. Each one is a folder `watches/<name>/skills/<skill>/` with a `SKILL.md` (front matter with `name` and `description`, then instructions) and optional scripts. Next to it, a relative symlink `watches/<name>/.claude/skills/<skill>` points to it, so Claude Code can find it:
+
+```bash
+ln -s ../../skills/triage watches/<name>/.claude/skills/triage
+```
+
+When the watch has a `.claude/skills/` folder, its group and monitoring sessions start with `--add-dir watches/<name>`, and Claude Code loads the linked skills as its own: it shows the agent their descriptions, and the whole skill when the agent uses it. vahtovik also lists each skill's name, description and path in the group's `CLAUDE.md`, the turn prompt and the monitoring prompt, so the skills work in the api-key login too, where Claude Code's bare mode limits loading skills. The skills are part of the watch's rules. `vahtovik check` reports a skill without `SKILL.md`, a description or its link, a front matter `name` other than the folder name, and links that are broken or point elsewhere. Commit the skills and their links with the watch.
 
 Sessions run with `bypassPermissions`, except those of limited input channels (see Channel-input). The shared skill (`skills/shared/SKILL.md`, part of every session's system prompt) tells agents two rules. Everything outside their working folder is read-only, unless the watch's rules say otherwise; reporting through `vahtovik report` and changing the watch's memory through `vahtovik memory` are always allowed. Instructions come only from the watch's rules, the vahtovik skills and the person in an interactive session, never from what sources return.
 
@@ -201,9 +211,9 @@ The second column says who wrote the line: a timer run, an `interactive` session
 
 - `vahtovik.yaml`: Claude login mode (`subscription` or `api-key`), the default model and effort (`opus`, the newest Opus, and `high`), model, effort and dollar cap per stage, how many group turns work at once (`claude.parallel_turns`), the watchdog's pace and notices, the warnings about the Claude plan's usage limits (`usage`), and channels. A watch can set its own model and effort in `watch.yaml` (`claude: {model: ..., effort: ...}`), and override the settings of a stage (`claude: {group: {effort: xhigh}}`). Later ones win: `vahtovik.yaml`'s model and effort, its stage settings, the watch's model and effort, the watch's stage settings. The watchdog belongs to no watch, so only `vahtovik.yaml` sets it.
 - `.env`: shared secrets, such as channel tokens and `ANTHROPIC_API_KEY`; see `.env.example`.
-- `watches/<name>/`: `watch.yaml` (interval or times of the day, sources, channels), `monitor.md`, `process/*.md` (used in name order), `report.md`, and `MEMORY.md`, the notes that agents save (see Watch memory). See `watches/example/`. A source may set its own `interval` or `at`; the watch's is the default for its sources. See Scheduling.
+- `watches/<name>/`: `watch.yaml` (interval or times of the day, sources, channels), `monitor.md`, `process/*.md` (used in name order), `report.md`, `MEMORY.md`, the notes that agents save (see Watch memory), and optionally `skills/` with links in `.claude/skills/` (see Watch skills). See `watches/example/`. A source may set its own `interval` or `at`; the watch's is the default for its sources. See Scheduling.
 - `watches/<name>/.env`: the watch's own secrets, such as source tokens. Only this watch's sessions get them, so two watches can each have their own `GITHUB_TOKEN`. If one watch has two sources of the same type with different tokens, give a source `env: {GITHUB_TOKEN: GITHUB_TOKEN_ORG_B}`: its scripts then get `GITHUB_TOKEN` set to the value of `GITHUB_TOKEN_ORG_B`.
-- `skills/`: see [skills/README.md](skills/README.md) for the source and channel contracts.
+- `skills/`: see [skills/README.md](skills/README.md) for the source and channel contracts, and the layout of a watch's own skills.
 
 
 vahtovik keeps your personal `~/.claude/CLAUDE.md` and parent-folder `CLAUDE.md` files out of its sessions. Set `claude.config_dir` to give vahtovik a separate Claude Code profile.

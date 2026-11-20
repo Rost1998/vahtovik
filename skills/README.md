@@ -8,6 +8,8 @@ A skill is a folder with a `SKILL.md` file (front matter with `name` and `descri
 - `sources/<name>/`: how to collect items from one kind of source.
 - `channels/<name>/`: how to format and send reports to one kind of channel, and optionally how to read the person's messages from it.
 
+A watch can also have skills of its own, in its folder: see Watch skill below.
+
 ## Source skill
 
 ```
@@ -58,3 +60,17 @@ channels/<name>/receive        optional executable, for channels with `input`; o
   - it prints `{"messages": [{"id": "...", "text": "...", "from": "...", "time": "..."}], "error": null}`: only messages it has not printed before for this state folder, and only messages from people, never the ones vahtovik sent; `id` must be what `send` needs in `VAHTOVIK_REPLY_TO`; `from` must be a stable id of the sender that nobody else can take, such as a username, never a display name: a channel's `senders` in `vahtovik.yaml` matches it;
   - exit code 0 and `error` null mean success. Anything else fails the read, and vahtovik puts the state folder back;
   - it runs in the vahtovik project folder with a 60-second timeout.
+
+## Watch skill
+
+```
+watches/<watch>/skills/<name>/SKILL.md
+watches/<watch>/skills/<name>/scripts/...    optional
+watches/<watch>/.claude/skills/<name>        relative symlink: ../../skills/<name>
+```
+
+- Front matter: `name`, the folder name, and `description`: what the skill does and when to use it. Agents choose a skill by its description.
+- The body tells the agent what to do. Scripts read secrets from environment variables, which come from the watch's `.env` and the shared `.env`.
+- Make the link in the vahtovik folder with `ln -s ../../skills/<name> watches/<watch>/.claude/skills/<name>`, and commit the skill and its link with the watch.
+- The watch's group and monitoring sessions start with `--add-dir watches/<watch>`, so Claude Code loads the linked skills as its own. vahtovik also lists each skill's name, description and path in the group's `CLAUDE.md` and in the prompts.
+- `vahtovik check` reports a skill without `SKILL.md`, a description or its link, a `name` other than the folder name, and links that are broken, are not links, or point elsewhere.
