@@ -72,8 +72,9 @@ def test_add_dirs_in_both_login_modes(project, monkeypatch):
     watch_dir = cfg.watch("w1").dir
     spec = _spec(cfg, add_dirs=[watch_dir])
     assert _add_dirs(claude.print_args(spec)) == [str(watch_dir)]
-    assert _add_dirs(claude.interactive_args(_spec(cfg, "resume", session_id="abc", add_dirs=[watch_dir]))) == [
-        str(watch_dir)]
+    for mode in ("new", "resume"):  # an option ends the --add-dir values before the prompt, which comes last
+        args = claude.interactive_args(_spec(cfg, mode, session_id="abc", add_dirs=[watch_dir]))
+        assert _add_dirs(args) == [str(watch_dir)] and args[args.index("--add-dir") + 2].startswith("--")
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
     path = project.root / "vahtovik.yaml"

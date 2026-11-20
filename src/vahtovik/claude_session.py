@@ -150,6 +150,8 @@ class Claude:
             args += ["--bare", "--add-dir", str(spec.workdir)]
         for folder in spec.add_dirs:  # Claude Code loads the skills in its .claude/skills/
             args += ["--add-dir", str(folder)]
+        # --add-dir takes several values, so the options below must follow it: interactive_args puts the prompt
+        # last, and right after an --add-dir value Claude Code would read the prompt as one more folder.
         if spec.mode == "resume":
             args += ["--resume", spec.session_id]
         else:
