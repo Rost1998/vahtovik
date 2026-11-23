@@ -190,7 +190,8 @@ class Claude:
         return args + self._common_args(spec)
 
     def interactive_args(self, spec: SessionSpec) -> list[str]:
-        """Arguments for the interactive mode of group session windows. The prompt is the last argument."""
+        """Arguments for the interactive mode of group session windows. The prompt is the last argument;
+        windows.launch() passes a prompt too long for one argument through a file."""
         args = [self.cfg.claude.binary, *self._common_args(spec)]
         return args + [spec.prompt] if spec.prompt else args
 

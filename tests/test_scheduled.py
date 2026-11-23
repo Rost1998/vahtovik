@@ -102,7 +102,7 @@ def test_finished_in_a_reply_keeps_the_scheduled_turn(project):
         group_status.declare(cfg, state, cfg.watch("w1"), "g", "scheduled")
 
 
-def test_a_failed_scheduled_turn_is_tried_again(project):
+def test_a_failed_scheduled_turn_is_tried_again(project, caplog):
     cfg, state, _ = project.load()
     state.add_group("w1", "g", "G")
     operations.set_schedule(cfg, state, "w1/g", next_turn="1h", reason="check")
@@ -113,5 +113,7 @@ def test_a_failed_scheduled_turn_is_tried_again(project):
         group = state.group("w1", "g")
         assert group["status"] == "failed" and group["scheduled_attempts"] == attempt and group["scheduled_at"]
     assert state.pending_groups("w1", 3) == []
+    attempts = [m.split("(attempt ")[1].split(")")[0] for m in caplog.messages if "Failed group turn" in m]
+    assert attempts == ["1 of 3", "2 of 3", "3 of 3, giving up"]
     _turns(project, "run4")
     assert len(project.calls()) == 3

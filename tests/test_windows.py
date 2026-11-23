@@ -1,10 +1,11 @@
 import logging
+from pathlib import Path
 from datetime import timedelta
 
 import pytest
 from conftest import artifact, launch_turn, run_turns, status_action, turn_answer, until, work_log
 
-from vahtovik import artifacts, group_session, groups, watchdog
+from vahtovik import artifacts, group_session, groups, watchdog, windows
 from vahtovik.claude_session import Claude
 from vahtovik.config import ConfigError
 from vahtovik.tmux import Tmux, Window
@@ -45,6 +46,51 @@ def test_turn_runs_in_a_window_that_closes_after_the_watchdog_checks_it(project)
     assert tmux._run("list-windows", "-t", f"={tmux.session}", "-F", "#{window_name}").stdout.split() == ["journal"]
     call = project.calls()[0]
     assert "-p" not in call["args"] and call["prompt"].startswith("# Processing turn")
+
+
+def _launch_long(cfg, state, claude, tmux, prompt: str) -> str:
+    spec, _ = group_session.spec_for(cfg, claude, state, cfg.watch("w1"), "g")
+    spec.prompt = prompt
+    spec.env["VAHTOVIK_TURN"] = "t1"
+    state.start_turn("t1", "run1", "w1", "g", ["a1"], 0)
+    state.prompt_submitted("w1", "g")
+    return windows.launch(cfg, state, tmux, claude, spec, "turn", "t1")
+
+
+LONG_PROMPT = "# Processing turn\n" + "Rule line, long enough to add up.\n" * 6000  # about 200 KB
+
+
+def test_a_prompt_too_long_for_one_argument_goes_through_a_file(project):
+    cfg, state, claude, tmux = _setup(project)
+    project.queue({"hang": True})
+    window_id = _launch_long(cfg, state, claude, tmux, LONG_PROMPT)
+    until(lambda: len(project.calls()) == 1)
+    note = project.calls()[0]["prompt"]
+    assert "too long to pass on the command line" in note and len(note.encode()) < 1024
+    path = Path(note.split("to the file ")[1].split(" (")[0])
+    assert path.parent == cfg.data_dir / "tmp" and path.read_text() == LONG_PROMPT
+    assert path.stat().st_mode & 0o777 == 0o600
+    tmux.close(window_id)
+    until(lambda: not _locked(cfg))
+
+
+def test_the_window_deletes_the_prompt_file_when_claude_ends(project):
+    cfg, state, claude, tmux = _setup(project)
+    project.queue({"exit": 0})
+    _launch_long(cfg, state, claude, tmux, LONG_PROMPT)
+    until(lambda: state.window_record("w1", "g")["exit_code"] == 0)
+    assert list((cfg.data_dir / "tmp").glob("prompt-*.md")) == []
+
+
+def test_claude_that_cannot_start_fails_the_turn_with_the_reason(project, monkeypatch):
+    cfg, state, claude, tmux = _setup(project)
+    monkeypatch.setattr(windows, "INLINE_PROMPT_LIMIT", 10 ** 9)  # as before prompt files: one huge argument
+    _launch_long(cfg, state, claude, tmux, LONG_PROMPT)
+    until(lambda: state.window_record("w1", "g")["exit_code"] is not None)
+    assert project.calls() == []
+    watchdog.tidy(cfg, state, tmux)
+    error = state.turn("t1")["error"]
+    assert error.startswith("claude could not start: [Errno 7] Argument list too long"), error
 
 
 def test_window_holds_the_group_lock_and_runs_skip_the_group(project, caplog):

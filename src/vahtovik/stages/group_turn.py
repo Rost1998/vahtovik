@@ -142,9 +142,12 @@ def fail(state: State, turn, error: str | None, seconds: float) -> None:
         error = group["status_reason"]
     error = error or "the session ended before the agent ran `vahtovik turn`"
     ids = json.loads(turn["artifact_ids"] or "[]")
-    attempt = 1 + max((r["attempts"] for r in state.rows(
+    failed = [r["attempts"] for r in state.rows(
         "SELECT attempts FROM artifacts WHERE watch = ? AND group_key = ? AND id IN (SELECT value FROM json_each(?))",
-        watch, key, turn["artifact_ids"] or "[]")), default=0)
+        watch, key, turn["artifact_ids"] or "[]")]
+    if turn["scheduled_for"]:  # a scheduled turn counts its own attempts, also without artifacts
+        failed.append(group["scheduled_attempts"] or 0)
+    attempt = 1 + max(failed, default=0)
     state.mark_attempt_failed(watch, key, ids, MAX_ATTEMPTS)
     state.restore_schedule(turn)
     state.finish_turn(turn["id"], False, None, error)
