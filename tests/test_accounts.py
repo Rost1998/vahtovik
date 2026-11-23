@@ -109,3 +109,24 @@ def test_status_shows_a_watchs_account(project, capsys):
     _accounts(project)
     cli.main(["status", "-v"])
     assert "\nw1: enabled, account work, last monitored never, " in "\n" + capsys.readouterr().out
+
+
+def test_check_shows_each_login_and_the_problems_of_its_profile(project, capsys):
+    from vahtovik import cli
+    _accounts(project)
+    work, home = project.tmp / "claude-work", project.root / "profiles/home"
+    home.mkdir(parents=True)
+    (home / "fake-auth.json").write_text(json.dumps({"loggedIn": False, "authMethod": "none"}))
+    work.mkdir()
+    (work / ".claude.json").write_text(json.dumps({"projects": {str(project.root): {"hasTrustDialogAccepted": False}}}))
+    assert cli.main(["check"]) == 1
+    lines = capsys.readouterr().out.splitlines()
+    assert "claude default login: logged in as person@example.com (max), login ends 2027-01-20" in lines
+    assert "claude account work: logged in as person@example.com (max), login ends 2027-01-20" in lines
+    assert [line for line in lines if line.startswith("problem:")] == [  # safe_dump sorted the accounts
+        f"problem: claude account home: not logged in, in {home}; run `CLAUDE_CONFIG_DIR={home} "
+        f"{project.tmp / 'fake-claude'}` in {project.root}, log in, and accept the trust screen",
+        f"problem: claude account work: Claude Code does not trust {project.root / 'data'} or a folder above it, so "
+        f"group sessions would stop at its \"trust this folder\" screen; run `CLAUDE_CONFIG_DIR={work} "
+        f"{project.tmp / 'fake-claude'}` in {project.root} and accept",
+    ]

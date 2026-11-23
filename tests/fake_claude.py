@@ -20,6 +20,8 @@ With --input-format stream-json it answers the get_usage control request instead
 AI session: from the JSON file fake-usage.json in $CLAUDE_CONFIG_DIR, else from $FAKE_CLAUDE_USAGE ({"exit": code}
 fails), or with "plan limits do not apply" when there is no such file. These starts are logged to
 $FAKE_CLAUDE_LOG.usage, not to $FAKE_CLAUDE_LOG.
+
+`claude auth status` prints fake-auth.json in $CLAUDE_CONFIG_DIR, or a login to a Max plan. It is not logged.
 """
 
 import fcntl
@@ -47,6 +49,8 @@ def main() -> int:
             positional.append(arg)
     if options.get("--input-format") == "stream-json":
         return usage(sys.stdin.read())
+    if positional[:2] == ["auth", "status"]:
+        return auth_status()
     printing = "-p" in args
     prompt = sys.stdin.read() if printing else (positional[-1] if positional else "")
 
@@ -159,6 +163,16 @@ def usage(stdin: str) -> int:
     print(json.dumps({"type": "system", "subtype": "init"}))
     print(json.dumps({"type": "control_response", "response": {
         "subtype": "success", "request_id": request["request_id"], "response": answer}}))
+    return 0
+
+
+def auth_status() -> int:
+    """`claude auth status`: from fake-auth.json in $CLAUDE_CONFIG_DIR, or logged in to a Max plan."""
+    path = Path(os.environ.get("CLAUDE_CONFIG_DIR") or "/nonexistent") / "fake-auth.json"
+    answer = json.loads(path.read_text()) if path.is_file() else {
+        "loggedIn": True, "authMethod": "claude.ai", "email": "person@example.com", "planTier": "max",
+        "loginExpiresAt": "2027-01-20T07:13:39.646Z"}
+    print(json.dumps(answer, indent=2))
     return 0
 
 

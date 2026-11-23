@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -249,6 +250,24 @@ class Claude:
                 raise UsageError("Claude Code could not get the usage from claude.ai")
             return answer["rate_limits"]
         raise UsageError(tail(proc.stderr or proc.stdout) or f"exit code {proc.returncode}")
+
+    def login(self, account: str | None = None) -> dict | None:
+        """What `claude auth status` says about the login of the account's profile, such as loggedIn and email;
+        None when it gives no answer."""
+        try:
+            proc = subprocess.run([self.cfg.claude.binary, "auth", "status", "--json"], text=True,
+                                  capture_output=True, cwd=self.cfg.root, env=self._base_env(account=account),
+                                  timeout=USAGE_TIMEOUT)
+            answer = json.loads(proc.stdout)
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            return None
+        return answer if isinstance(answer, dict) else None
+
+    def start_command(self, account: str | None = None) -> str:
+        """The command that starts Claude Code with the account's profile, for a person to log in with."""
+        if account or self.cfg.claude.config_dir:
+            return f"CLAUDE_CONFIG_DIR={shlex.quote(str(self.profile(account)))} {self.cfg.claude.binary}"
+        return self.cfg.claude.binary
 
     def run(self, spec: SessionSpec, raw_dir: Path) -> SessionResult:
         """Run a throwaway session in print mode; run it again once if the answer does not match the schema."""

@@ -565,9 +565,9 @@ def cmd_check(args) -> int:
         print(f"claude: {version} ({cfg.claude.auth} login)")
     if cfg.claude.auth == "api-key" and not os.environ.get("ANTHROPIC_API_KEY"):
         problems.append("claude: auth is api-key but ANTHROPIC_API_KEY is not set")
-    if Claude(cfg).trusts(cfg.data_dir) is False:
-        problems.append(f"claude: Claude Code does not trust {cfg.data_dir} or a folder above it, so group sessions "
-                        f"would stop at its \"trust this folder\" screen; run `claude` once in {cfg.root} and accept")
+    claude = Claude(cfg)
+    for account in [None, *cfg.claude.accounts]:
+        problems += _check_login(cfg, claude, account, logins=bool(binary) and cfg.claude.auth == "subscription")
     if not Tmux.installed():
         problems.append("tmux: not found; group sessions run in tmux windows")
     print(f"watches: {', '.join(cfg.watches) or 'none'} · channels: {', '.join(cfg.channels) or 'none'}")
@@ -575,6 +575,28 @@ def cmd_check(args) -> int:
         print(f"problem: {problem}")
     print("ok" if not problems else f"{len(problems)} problem(s)")
     return 1 if problems else 0
+
+
+def _check_login(cfg: Config, claude: Claude, account: str | None, logins: bool) -> list[str]:
+    """Print which Claude account a login of the subscription uses. Returns the problems of its profile: no login,
+    or no trust in the data folder."""
+    name = f"claude account {account}" if account else "claude default login"
+    run = f"run `{claude.start_command(account)}` in {cfg.root}"
+    if logins:
+        status = claude.login(account)
+        if status is None:
+            print(f"{name}: unknown, `{cfg.claude.binary} auth status` gave no answer")
+        elif not status.get("loggedIn"):
+            return [f"{name}: not logged in, in {claude.profile(account)}; {run}, log in, and accept the trust screen"]
+        else:
+            plan = status.get("planTier") or status.get("subscriptionType") or status.get("authMethod")
+            ends = str(status.get("loginExpiresAt") or "")[:10]
+            print(f"{name}: logged in" + (f" as {status['email']}" if status.get("email") else "")
+                  + (f" ({plan})" if plan else "") + (f", login ends {ends}" if ends else ""))
+    if claude.trusts(cfg.data_dir, account) is False:
+        return [f"{name}: Claude Code does not trust {cfg.data_dir} or a folder above it, so group sessions would "
+                f"stop at its \"trust this folder\" screen; {run} and accept"]
+    return []
 
 
 def cmd_test_channel(args) -> int:
