@@ -140,6 +140,6 @@ def watch_skill_problems(watch: Watch) -> list[str]:
                             "and link to it")
         elif not link.exists():
             problems.append(f"link {link} is broken: it points to {os.readlink(link)}")
-        elif link.resolve() != own / link.name:
+        elif link.resolve() != (own / link.name).resolve():  # the skill folder may itself be a link to a skill
             problems.append(f"link {link} points to {link.resolve()}, not to {own / link.name}")
     return problems

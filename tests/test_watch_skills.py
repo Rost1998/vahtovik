@@ -61,6 +61,20 @@ def test_check_reports_skill_and_link_problems(project, capsys):
     ]
 
 
+def test_check_accepts_a_skill_folder_that_links_to_a_skill_elsewhere(project, capsys):
+    shared = project.root / "elsewhere/shared"
+    shared.mkdir(parents=True)
+    (shared / "SKILL.md").write_text("---\nname: shared\ndescription: Kept in another repository.\n---\nBody.\n")
+    watch = project.root / "watches/w1"
+    (watch / "skills").mkdir()
+    (watch / ".claude/skills").mkdir(parents=True)
+    os.symlink(shared, watch / "skills/shared")
+    os.symlink("../../skills/shared", watch / ".claude/skills/shared")
+    assert _problems(capsys) == []
+    cfg, _, _ = project.load()
+    assert [s.name for s in skills.watch_skills(cfg.watch("w1"))] == ["shared"]
+
+
 def test_check_wants_the_folder_name_as_the_skill_name_and_valid_front_matter(project, capsys):
     folder = _skill(project)
     (folder / "SKILL.md").write_text("---\nname: Triage\ndescription: Sort.\n---\nBody.\n")

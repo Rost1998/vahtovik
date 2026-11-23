@@ -80,7 +80,7 @@ Each entry's heading has its number, its time and who saved it. The command refu
 
 ### Watch skills
 
-A watch can have skills of its own, for work that only its agents do: how to judge an item, how to run a check, a script that builds something. Each one is a folder `watches/<name>/skills/<skill>/` with a `SKILL.md` (front matter with `name` and `description`, then instructions) and optional scripts. Next to it, a relative symlink `watches/<name>/.claude/skills/<skill>` points to it, so Claude Code can find it:
+A watch can have skills of its own, for work that only its agents do: how to judge an item, how to run a check, a script that builds something. Each one is a folder `watches/<name>/skills/<skill>/` with a `SKILL.md` (front matter with `name` and `description`, then instructions) and optional scripts. The folder may also be a symlink to a skill kept elsewhere, such as in another repository. Next to it, a relative symlink `watches/<name>/.claude/skills/<skill>` points to it, so Claude Code can find it:
 
 ```bash
 ln -s ../../skills/triage watches/<name>/.claude/skills/triage
