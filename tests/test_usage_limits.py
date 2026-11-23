@@ -27,7 +27,7 @@ def usage(project, monkeypatch):
     answer = project.tmp / "usage.json"
     monkeypatch.setenv("FAKE_CLAUDE_USAGE", str(answer))
 
-    def set_usage(session=10, weekly=5, fable=0, session_reset=None, raw=None):
+    def set_usage(session=10, weekly=5, fable=0, session_reset=None, raw=None, profile=None):
         session_reset = session_reset or now() + timedelta(hours=3, minutes=11)
         rows = [
             {"kind": "session", "group": "session", "percent": session, "resets_at": session_reset.isoformat(),
@@ -38,13 +38,17 @@ def usage(project, monkeypatch):
              "resets_at": (now() + timedelta(days=6, hours=7)).isoformat(),
              "scope": {"model": {"id": None, "display_name": "Fable"}, "surface": None}},
         ]
-        answer.write_text(json.dumps(raw or {"rate_limits_available": True, "rate_limits": {"limits": rows}}))
+        path = profile / "fake-usage.json" if profile else answer  # an account's profile answers on its own
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(raw or {"rate_limits_available": True, "rate_limits": {"limits": rows}}))
     set_usage()
     return set_usage
 
 
 def _check(project):
     cfg, state, claude = project.load()
+    for account in cfg.claude.accounts:
+        state.set_meta(f"usage_checked_at:{account}", "")
     state.set_meta("usage_checked_at", "")  # due now
     usage_limits.check(cfg, state, claude)
     return state
@@ -156,3 +160,46 @@ def test_a_run_checks_the_usage_and_status_shows_it(project, usage, capsys):
     out = capsys.readouterr().out
     assert re.search(r"\(warnings at: 80, 90, 95, 99\):\n  5-hour limit: 82%, resets (today|tomorrow) at ", out)
     assert "\n  weekly limit for all models: 7%, resets on " in out
+
+
+def _account(project) -> object:
+    """Account `work` in vahtovik.yaml. Returns its profile folder."""
+    profile = project.tmp / "claude-work"
+    path = project.root / "vahtovik.yaml"
+    data = yaml.safe_load(path.read_text())
+    data["claude"]["accounts"] = {"work": {"config_dir": str(profile)}}
+    path.write_text(yaml.safe_dump(data))
+    return profile
+
+
+def test_each_account_has_its_own_limits_and_warnings(project, usage, capsys):
+    from vahtovik import cli
+    work = _account(project)
+    usage(session=82)
+    usage(session=91, weekly=30, profile=work)
+    state = _check(project)
+    checks = project._lines(project.log_file.with_name("calls.jsonl.usage"))
+    assert [c["config_dir"] for c in checks] == [str(project.tmp / "claude-home"), str(work)]
+    deliveries = state.rows("SELECT subject, body FROM deliveries WHERE channel = 'chat' ORDER BY id")
+    assert [r["subject"] for r in deliveries] == ["Claude usage", "Claude usage, account work"]
+    assert deliveries[0]["body"].startswith("The 5-hour limit is at 82% (past 80%).")
+    assert deliveries[1]["body"].startswith("The 5-hour limit is at 91% (past 90%).")
+    usage(session=85)  # the default login's 80% was warned; the account's levels are its own
+    usage(session=96, weekly=30, profile=work)
+    assert [body[:37] for body in _warnings(_check(project))[2:]] == ["The 5-hour limit is at 96% (past 95%)"]
+    cli.main(["status"])
+    out = capsys.readouterr().out
+    assert re.search(r"\nClaude usage at .*:\n  5-hour limit: 85%, .*\n  weekly limit for all models: 5%", out)
+    assert re.search(r"\nClaude usage of account work at .*:\n  5-hour limit: 96%, ", out)
+
+
+def test_a_failing_account_does_not_stop_the_other_checks(project, usage, caplog):
+    work = _account(project)
+    usage(raw={"exit": 1, "stderr": "not logged in"}, profile=work)
+    usage(session=90)
+    caplog.set_level(logging.INFO, logger="vahtovik")
+    state = _check(project)
+    assert [r.getMessage() for r in caplog.records if "Claude usage" in r.getMessage()][-1] == \
+        "Failed checking Claude usage of account work: not logged in"
+    assert _warnings(state)[0].startswith("The 5-hour limit is at 90% (past 90%).")
+    assert usage_limits.failure(state, "work") == "not logged in" and usage_limits.failure(state) == ""

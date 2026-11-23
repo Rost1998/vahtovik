@@ -372,18 +372,18 @@ def _inputs(cfg: Config, state: State, verbose: bool = False) -> list[str]:
 
 
 def _usage(cfg: Config, state: State) -> list[str]:
-    """The Claude plan's usage limits at the last check, and the error of a check that fails now."""
-    if cfg.claude.auth != "subscription":
-        return []
-    lines, last, now = [], usage_limits.last(state), datetime.now(timezone.utc)
-    if last and last[1]:
-        warn = ", ".join(map(str, cfg.usage.warn_at)) if cfg.usage.every else "off"
-        lines.append(f"Claude usage at {human(last[0])} (warnings at: {warn}):")
-        lines += [f"  {m.name.removeprefix('the ')}: {round(m.percent)}%, {usage_limits.resets(m, now)}"
-                  for m in last[1]]
-    error = state.get_meta("usage_error")
-    if error:
-        lines.append(f"Claude usage: the last check failed: {error}")
+    """The usage limits of each Claude login at its last check, and the error of a check that fails now."""
+    lines, now = [], datetime.now(timezone.utc)
+    warn = ", ".join(map(str, cfg.usage.warn_at)) if cfg.usage.every else "off"
+    for account in usage_limits.logins(cfg):
+        last, of = usage_limits.last(state, account), f" of account {account}" if account else ""
+        if last and last[1]:
+            lines.append(f"Claude usage{of} at {human(last[0])} (warnings at: {warn}):")
+            lines += [f"  {m.name.removeprefix('the ')}: {round(m.percent)}%, {usage_limits.resets(m, now)}"
+                      for m in last[1]]
+        error = usage_limits.failure(state, account)
+        if error:
+            lines.append(f"Claude usage{of}: the last check failed: {error}")
     return lines + [""] if lines else []
 
 
@@ -476,7 +476,8 @@ def _status_details(cfg: Config, state: State, names: list[str]) -> None:
         watch = cfg.watch(name)
         last = state.watch_last_run(name)
         print(f"{name}: {'enabled' if watch.enabled else 'disabled'}, "
-              f"last monitored {human(datetime.fromisoformat(last)) if last else 'never'}, "
+              + (f"account {watch.account}, " if watch.account else "")
+              + f"last monitored {human(datetime.fromisoformat(last)) if last else 'never'}, "
               f"group sessions {_spent(group_costs, lambda k: k[0] == name)}")
         for src in watch.sources:
             row = state.row("SELECT * FROM source_state WHERE watch = ? AND source_id = ?", name, src.id)

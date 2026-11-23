@@ -17,8 +17,9 @@ screen does, before the prompt); "hang" (interactive: stop responding after the 
 wakes the agent with a task notification prompt that runs these actions).
 
 With --input-format stream-json it answers the get_usage control request instead, as Claude Code does without an
-AI session: from the JSON file $FAKE_CLAUDE_USAGE ({"exit": code} fails), or with "plan limits do not apply" when
-there is no such file. These starts are logged to $FAKE_CLAUDE_LOG.usage, not to $FAKE_CLAUDE_LOG.
+AI session: from the JSON file fake-usage.json in $CLAUDE_CONFIG_DIR, else from $FAKE_CLAUDE_USAGE ({"exit": code}
+fails), or with "plan limits do not apply" when there is no such file. These starts are logged to
+$FAKE_CLAUDE_LOG.usage, not to $FAKE_CLAUDE_LOG.
 """
 
 import fcntl
@@ -149,7 +150,8 @@ def usage(stdin: str) -> int:
     request = json.loads(stdin.splitlines()[0])
     _log(".usage", {"request": request, "config_dir": os.environ.get("CLAUDE_CONFIG_DIR"),
                     "api_key": "ANTHROPIC_API_KEY" in os.environ})
-    path = Path(os.environ.get("FAKE_CLAUDE_USAGE") or "/nonexistent")
+    own = Path(os.environ.get("CLAUDE_CONFIG_DIR") or "/nonexistent") / "fake-usage.json"  # a profile's own
+    path = own if own.is_file() else Path(os.environ.get("FAKE_CLAUDE_USAGE") or "/nonexistent")
     answer = json.loads(path.read_text()) if path.is_file() else {"rate_limits_available": False, "rate_limits": None}
     if "exit" in answer:
         print(answer.get("stderr", "fake usage failure"), file=sys.stderr)

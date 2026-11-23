@@ -102,3 +102,10 @@ def test_trust_is_read_from_the_accounts_profile(project):
     config.write_text(json.dumps({"projects": {str(cfg.root): {"hasTrustDialogAccepted": True}}}))
     assert claude.trusts(cfg.data_dir, "work") is True
     assert claude.trusts(cfg.data_dir) is None and claude.trusts(cfg.data_dir, "home") is None
+
+
+def test_status_shows_a_watchs_account(project, capsys):
+    from vahtovik import cli
+    _accounts(project)
+    cli.main(["status", "-v"])
+    assert "\nw1: enabled, account work, last monitored never, " in "\n" + capsys.readouterr().out

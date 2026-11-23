@@ -4,7 +4,8 @@ At the start of a run, once `usage.every` has passed, vahtovik asks Claude Code 
 (Claude.plan_usage): the 5-hour limit, the weekly limit for all models, and the weekly limits of single models.
 Each limit gets one warning at each percent of `usage.warn_at` that it passes, until it resets. A limit that passes
 several percents between two checks gets one warning, at the highest. The warnings go to `usage.channels`, by
-default to every input channel that is not limited.
+default to every input channel that is not limited. The default login and each account of `claude.accounts` have
+limits of their own, and each is checked on its own.
 """
 
 from __future__ import annotations
@@ -76,40 +77,62 @@ def channels(cfg: Config) -> list[str]:
     return [c.name for c in cfg.channels.values() if c.input and not c.input.limited]
 
 
+def logins(cfg: Config) -> list[str | None]:
+    """The logins whose limits vahtovik checks: the default login (None), then each account."""
+    return [None, *cfg.claude.accounts] if cfg.claude.auth == "subscription" else []
+
+
+def _key(name: str, account: str | None) -> str:
+    """The state key of a login: the default login's keys have no suffix."""
+    return f"{name}:{account}" if account else name
+
+
+def _of(account: str | None) -> str:
+    return f" of account {account}" if account else ""
+
+
 def check(cfg: Config, state: State, claude: Claude, dry_run: bool = False) -> None:
-    """Ask Claude Code for the usage once `usage.every` has passed, and warn about the limits that passed a level."""
-    if not cfg.usage.every or cfg.claude.auth != "subscription":
+    """For each login, ask Claude Code for the usage once `usage.every` has passed, and warn about the limits that
+    passed a level."""
+    if not cfg.usage.every:
         return
+    for account in logins(cfg):
+        _check(cfg, state, claude, account, dry_run)
+
+
+def _check(cfg: Config, state: State, claude: Claude, account: str | None, dry_run: bool) -> None:
     now = datetime.now(timezone.utc)
-    last = state.get_meta("usage_checked_at")
+    last = state.get_meta(_key("usage_checked_at", account))
     if last and datetime.fromisoformat(last) + cfg.usage.every > now:
         return
-    state.set_meta("usage_checked_at", utc_iso(now))
+    state.set_meta(_key("usage_checked_at", account), utc_iso(now))
     try:
-        rate_limits = claude.plan_usage()
+        rate_limits = claude.plan_usage(account)
     except UsageError as exc:
-        if not state.get_meta("usage_error"):  # one line until a check works again
-            log.error("Failed checking Claude usage: %s", exc)
-        state.set_meta("usage_error", str(exc) or "failed")
+        if not state.get_meta(_key("usage_error", account)):  # one line until a check works again
+            log.error("Failed checking Claude usage%s: %s", _of(account), exc)
+        state.set_meta(_key("usage_error", account), str(exc) or "failed")
         return
-    if state.get_meta("usage_error"):
-        log.info("Checked Claude usage again after a failure")
-        state.set_meta("usage_error", "")
+    if state.get_meta(_key("usage_error", account)):
+        log.info("Checked Claude usage%s again after a failure", _of(account))
+        state.set_meta(_key("usage_error", account), "")
     found = meters(rate_limits) if rate_limits else []
-    state.set_meta("usage_last", json.dumps({"at": utc_iso(now), "meters": [asdict(m) for m in found]}))
-    warnings = _warnings(cfg, state, found, now)
+    state.set_meta(_key("usage_last", account),
+                   json.dumps({"at": utc_iso(now), "meters": [asdict(m) for m in found]}))
+    warnings = _warnings(cfg, state, account, found, now)
     if not warnings:
         return
     targets = channels(cfg)
     if not targets:
-        log.warning("Skipped Claude usage warning: no channel to send it to; see usage.channels")
+        log.warning("Skipped Claude usage warning%s: no channel to send it to; see usage.channels", _of(account))
+    subject = f"{SUBJECT}, account {account}" if account else SUBJECT
     for channel in targets:
-        delivery.notice(cfg, state, channel, SUBJECT, "\n".join(warnings), dry_run)
+        delivery.notice(cfg, state, channel, subject, "\n".join(warnings), dry_run)
 
 
-def _warnings(cfg: Config, state: State, found: list[Meter], now: datetime) -> list[str]:
+def _warnings(cfg: Config, state: State, account: str | None, found: list[Meter], now: datetime) -> list[str]:
     """A line for each limit that passed a level of `usage.warn_at` since its last warning. Keeps the levels."""
-    before = json.loads(state.get_meta("usage_warned") or "{}")
+    before = json.loads(state.get_meta(_key("usage_warned", account)) or "{}")
     warned, lines = {}, []
     for meter in found:
         level = int((before.get(meter.key) or {}).get("level") or 0)
@@ -120,10 +143,10 @@ def _warnings(cfg: Config, state: State, found: list[Meter], now: datetime) -> l
         if passed:
             level = passed[-1]
             lines.append(text(meter, level, now))
-            log.warning("Claude usage: %s is at %d%%, past %d%%; %s", meter.name, round(meter.percent), level,
-                        resets(meter, now))
+            log.warning("Claude usage%s: %s is at %d%%, past %d%%; %s", _of(account), meter.name,
+                        round(meter.percent), level, resets(meter, now))
         warned[meter.key] = {"level": level, "resets_at": meter.resets_at}
-    state.set_meta("usage_warned", json.dumps(warned))
+    state.set_meta(_key("usage_warned", account), json.dumps(warned))
     return lines
 
 
@@ -167,10 +190,15 @@ def _time(value: object) -> datetime | None:
     return at if at is None or at.tzinfo else at.replace(tzinfo=timezone.utc)
 
 
-def last(state: State) -> tuple[datetime, list[Meter]] | None:
-    """The limits at the last check that worked, for `vahtovik status`."""
-    raw = state.get_meta("usage_last")
+def last(state: State, account: str | None = None) -> tuple[datetime, list[Meter]] | None:
+    """The login's limits at its last check that worked, for `vahtovik status`."""
+    raw = state.get_meta(_key("usage_last", account))
     if not raw:
         return None
     data = json.loads(raw)
     return datetime.fromisoformat(data["at"]), [Meter(**m) for m in data["meters"]]
+
+
+def failure(state: State, account: str | None = None) -> str:
+    """The error of the login's last check, when that check failed."""
+    return state.get_meta(_key("usage_error", account)) or ""
