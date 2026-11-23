@@ -3,6 +3,8 @@
 claude:
   auth: subscription          # subscription (your Claude login) or api-key (ANTHROPIC_API_KEY, runs with --bare)
   config_dir: null            # optional separate CLAUDE_CONFIG_DIR for vahtovik sessions
+  # accounts:                 # optional: other Claude logins; a watch picks one with claude: {account: work}
+  #   work: {config_dir: ~/.claude-work}   # log in once: CLAUDE_CONFIG_DIR=~/.claude-work claude (README)
   model: opus                 # an alias: Claude Code uses the newest Opus
   effort: high                # low, medium, high, xhigh or max
   stages:                     # settings per stage; a watch can set its own model and effort, and override these

@@ -90,11 +90,14 @@ sources:
     env: {GITHUB_TOKEN: GITHUB_TOKEN_ORG_A}   # optional: fill a variable from a secret with another name
 channels: [team-telegram]       # channels from vahtovik.yaml this watch may use
 claude:                         # optional overrides of vahtovik.yaml
+  account: work                 # a Claude account of claude.accounts in vahtovik.yaml; the default login if unset
   model: opus                   # the model of all the watch's sessions; opus, the newest Opus, by default
   effort: high                  # low, medium, high, xhigh or max; high by default
   group: {effort: xhigh}        # a stage's own settings win over the two above
   monitor: {max_budget_usd: 2}
 ```
+
+A Claude account is a Claude Code profile folder with its own login, so that watches spread over the usage limits of several plans. To add one, write it in `vahtovik.yaml` (`claude: {accounts: {work: {config_dir: ~/.claude-work}}}`). Then the person runs `CLAUDE_CONFIG_DIR=~/.claude-work claude` in the project folder, logs in with that account, and accepts "trust this folder". Never log in for them, and never read the profile's login files. `vahtovik check` shows who each account is logged in as. See README, Claude accounts.
 
 `monitor.md`, given to every source of the watch:
 - what counts as an artifact, and what to skip;
@@ -147,6 +150,7 @@ Read the watch's files and `uv run vahtovik status --watch <name> -v` first, and
 - `enabled: false` in `watch.yaml` stops the watch: no monitoring, no group turns, no scheduled turns. `enabled: true` starts it again.
 - `interval` is how often monitoring runs, and `at` is one time of the day or a list of them, such as `["08:00", "20:00"]`, in the computer's local time. Set one of them, not both. The watch's is the default for its sources, and a source may set its own. A source cannot be monitored more often than the timer fires (1 minute by default). After a change, the next monitoring of a source comes its `interval` after the last one, or at the first of its times after the last one; `uv run vahtovik run --watch <name> --force` monitors every source of the watch now (ask first: it starts AI sessions).
 - `claude:` sets the model and effort of the watch's sessions, or of one stage (`monitor`, `group`); see section 4.
+- `claude: {account: ...}` moves the watch to another Claude account. Claude Code keeps conversations per account, so each of its groups then starts a new session, and the agent rebuilds its picture from `context.md`. Tell the person so before the change.
 - A new source `id` is a new source: its "already seen" state starts empty, so old items can come back, and only exact id matches are dropped. A removed source keeps its state folder in `data/`; adding it back with the same id goes on from there.
 - A channel must be in `vahtovik.yaml` before a watch can list it.
 - New grouping rules do not move artifacts that are already grouped. To move them, use the groups skill (`skills/vahtovik/groups/SKILL.md`).

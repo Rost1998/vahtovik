@@ -183,6 +183,30 @@ The 5-hour limit is at 91% (past 90%). It resets today at 18:20, in 3 hours 11 m
 
 The warnings go to every input channel that is not limited, your own chats; `usage.channels` names other channels instead. Failed warnings are retried like reports. `vahtovik status` shows the limits at the last check, and the error if the check fails now; the journal has a line for each warning, and one line when the check starts to fail.
 
+Each account of `claude.accounts` (see Claude accounts) has limits of its own. vahtovik checks the default login and each account on its own, and an account's warnings say which account they are about, as in the subject "Claude usage, account work".
+
+## Claude accounts
+
+By default, all vahtovik sessions use one Claude login: Claude Code's own profile, or the one in `claude.config_dir`. A watch can use another Claude account instead, so that watches spread over the usage limits of several plans. Each account is a Claude Code profile folder of its own (`CLAUDE_CONFIG_DIR`), with its own login, which Claude Code keeps and refreshes. vahtovik never reads the login.
+
+```yaml
+# vahtovik.yaml
+claude:
+  accounts:
+    work: {config_dir: ~/.claude-work}
+
+# watches/<name>/watch.yaml
+claude: {account: work}
+```
+
+Set up an account once: run `CLAUDE_CONFIG_DIR=~/.claude-work claude` in the project folder, log in with the account, and accept "trust this folder". `vahtovik check` shows who each login is logged in as, and reports a profile that is not logged in or does not trust the project folder.
+
+- The watch's group sessions and monitoring sessions use its account. Its `vahtovik open` and `vahtovik tell` do too.
+- Channel-input and watchdog sessions belong to no watch, so they use the default login.
+- Claude Code keeps a session's conversation in the profile it ran with. A watch that moves to another account therefore starts new group sessions: each agent rebuilds its picture from `context.md`, as after a lost session. The costs of the old sessions still count.
+- Accounts work only with `auth: subscription`.
+- Claude Code's personal settings, such as `settings.json`, belong to each profile. vahtovik keeps each profile's `CLAUDE.md` out of its sessions, as it does with `~/.claude/CLAUDE.md`.
+
 ## Journal
 
 vahtovik writes one short line per key event to `data/journal.log`: runs, messages from input channels and their answers, monitoring, new groups, group turns, reports, interactive sessions and failures.
@@ -209,14 +233,14 @@ The second column says who wrote the line: a timer run, an `interactive` session
 
 ## Configuration
 
-- `vahtovik.yaml`: Claude login mode (`subscription` or `api-key`), the default model and effort (`opus`, the newest Opus, and `high`), model, effort and dollar cap per stage, how many group turns work at once (`claude.parallel_turns`), the watchdog's pace and notices, the warnings about the Claude plan's usage limits (`usage`), and channels. A watch can set its own model and effort in `watch.yaml` (`claude: {model: ..., effort: ...}`), and override the settings of a stage (`claude: {group: {effort: xhigh}}`). Later ones win: `vahtovik.yaml`'s model and effort, its stage settings, the watch's model and effort, the watch's stage settings. The watchdog belongs to no watch, so only `vahtovik.yaml` sets it.
+- `vahtovik.yaml`: Claude login mode (`subscription` or `api-key`), the Claude accounts that watches can use (`claude.accounts`, see Claude accounts), the default model and effort (`opus`, the newest Opus, and `high`), model, effort and dollar cap per stage, how many group turns work at once (`claude.parallel_turns`), the watchdog's pace and notices, the warnings about the Claude plan's usage limits (`usage`), and channels. A watch can set its own model and effort in `watch.yaml` (`claude: {model: ..., effort: ...}`), and override the settings of a stage (`claude: {group: {effort: xhigh}}`). Later ones win: `vahtovik.yaml`'s model and effort, its stage settings, the watch's model and effort, the watch's stage settings. The watchdog belongs to no watch, so only `vahtovik.yaml` sets it.
 - `.env`: shared secrets, such as channel tokens and `ANTHROPIC_API_KEY`; see `.env.example`.
-- `watches/<name>/`: `watch.yaml` (interval or times of the day, sources, channels), `monitor.md`, `process/*.md` (used in name order), `report.md`, `MEMORY.md`, the notes that agents save (see Watch memory), and optionally `skills/` with links in `.claude/skills/` (see Watch skills). See `watches/example/`. A source may set its own `interval` or `at`; the watch's is the default for its sources. See Scheduling.
+- `watches/<name>/`: `watch.yaml` (interval or times of the day, sources, channels, and optionally its Claude account), `monitor.md`, `process/*.md` (used in name order), `report.md`, `MEMORY.md`, the notes that agents save (see Watch memory), and optionally `skills/` with links in `.claude/skills/` (see Watch skills). See `watches/example/`. A source may set its own `interval` or `at`; the watch's is the default for its sources. See Scheduling.
 - `watches/<name>/.env`: the watch's own secrets, such as source tokens. Only this watch's sessions get them, so two watches can each have their own `GITHUB_TOKEN`. If one watch has two sources of the same type with different tokens, give a source `env: {GITHUB_TOKEN: GITHUB_TOKEN_ORG_B}`: its scripts then get `GITHUB_TOKEN` set to the value of `GITHUB_TOKEN_ORG_B`.
 - `skills/`: see [skills/README.md](skills/README.md) for the source and channel contracts, and the layout of a watch's own skills.
 
 
-vahtovik keeps your personal `~/.claude/CLAUDE.md` and parent-folder `CLAUDE.md` files out of its sessions. Set `claude.config_dir` to give vahtovik a separate Claude Code profile.
+vahtovik keeps your personal `~/.claude/CLAUDE.md` and parent-folder `CLAUDE.md` files out of its sessions. Set `claude.config_dir` to give vahtovik a separate Claude Code profile, and `claude.accounts` to give a watch an account of its own.
 
 ## The vahtovik agent
 
@@ -256,10 +280,10 @@ The sessions that vahtovik starts never load the root `CLAUDE.md`: monitoring, g
 | `messages [C] [-n N]` | an input channel's last N messages (default 20, 0 for all), with vahtovik's replies, oldest first; inside a channel session, the channel comes from the environment |
 | `acknowledge --text T [--to ID]` | for channel agents: send one short line at once that the person's messages arrived, with the session's context size added, such as "(22k)"; by default in reply to the last waiting message; once per batch, never retried |
 | `log [TEXT] [-n N] [-f]` | the last N journal lines (default 40, 0 for all) that contain TEXT; `-f` keeps showing new lines |
-| `status [--watch W] [-v]` | a table of watches and their groups: each watch's state (enabled or disabled), its sources' intervals or times of the day, and the time left until a run monitors its next source; each group's status, processed artifacts and cost in the last 24 hours and 30 days; the totals per watch and for all; and undelivered reports; then the input channels and their messages; then the cost of group, monitor, input and watchdog sessions in the same periods, and in total. `-v` gives all details as text instead: sources with their schedules and next times, sessions, status reasons, and costs for all time too |
+| `status [--watch W] [-v]` | a table of watches and their groups: each watch's state (enabled or disabled), its sources' intervals or times of the day, and the time left until a run monitors its next source; each group's status, processed artifacts and cost in the last 24 hours and 30 days; the totals per watch and for all; and undelivered reports; then the input channels and their messages; then the cost of group, monitor, input and watchdog sessions in the same periods, and in total. `-v` gives all details as text instead: each watch's Claude account, sources with their schedules and next times, sessions, status reasons, and costs for all time too |
 | `install-timer [--every 1m]` | start vahtovik periodically with a systemd user timer |
 | `uninstall-timer` | remove that timer |
-| `check` | validate config, skills, environment variables, `claude`, its trust of the project folder, and tmux |
+| `check` | validate config, skills, environment variables, `claude`, who each Claude login is logged in as, their trust of the project folder, and tmux |
 | `test-channel C [--dry-run]` | send a test message, no AI |
 
 ## Scheduling

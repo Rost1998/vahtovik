@@ -12,7 +12,7 @@ Run vahtovik as `uv run vahtovik ...` in the project folder.
 ## The parts
 
 - **Watch**, `watches/<name>/`: what to monitor and what to do with it.
-  - `watch.yaml`: enabled, interval or times of the day (`at`, the default for its sources), sources (each may set its own interval or `at`), channels, and the model and effort of its sessions.
+  - `watch.yaml`: enabled, interval or times of the day (`at`, the default for its sources), sources (each may set its own interval or `at`), channels, the model and effort of its sessions, and optionally their Claude account.
   - `monitor.md`: what counts as an artifact, how to make its id, title and summary, and how to group artifacts.
   - `process/*.md`: how group agents process new artifacts, in name order.
   - `report.md`: when and what to report, to which channel.
@@ -33,7 +33,7 @@ Run vahtovik as `uv run vahtovik ...` in the project folder.
   4. starts a turn, in a tmux window, for each group with new artifacts or a scheduled turn that is due;
   5. retries failed reports and replies.
 - **Channel-input**: a channel with `input` in `vahtovik.yaml` is read by its type's `receive` script, and you answer the person's messages from it (`channel/SKILL.md`). After a quiet pause (`new_session_after`), a new session starts with the last few messages in its prompt.
-- **Configuration**: `vahtovik.yaml` holds the login mode, the model and effort per stage, how many turns work at once, and the channels. `.env` holds the shared secrets.
+- **Configuration**: `vahtovik.yaml` holds the login mode, the Claude accounts that watches can use (`claude.accounts`: Claude Code profile folders), the model and effort per stage, how many turns work at once, and the channels. `.env` holds the shared secrets.
 - **Records**: `uv run vahtovik status [--watch W] [-v]` shows the state, costs, and the Claude plan's usage limits. `uv run vahtovik log [text]` shows what happened. Each group's `context.md` has its history.
 
 ## Rules
@@ -60,7 +60,7 @@ If the person asks you to change vahtovik's own code, work on it as a developer.
 
 | The person wants to | Read first | Commands |
 |---|---|---|
-| set up a watch, or change one: sources, channels, interval or times of the day, enabled, model, effort, rules, its own skills | `skills/vahtovik/create-watch/SKILL.md` | edit `watches/<name>/`; `vahtovik check` |
+| set up a watch, or change one: sources, channels, interval or times of the day, enabled, model, effort, Claude account, rules, its own skills | `skills/vahtovik/create-watch/SKILL.md` | edit `watches/<name>/`; `vahtovik check` |
 | create a group, merge groups, split a group, or schedule a group's turns | `skills/vahtovik/groups/SKILL.md` | `vahtovik group create`, `merge`, `split`, `set` |
 | add artifacts to one group, to several, or to the groups they belong to | `skills/vahtovik/artifacts/SKILL.md` | `vahtovik artifact add` |
 | pass an instruction or a question to group agents | `skills/vahtovik/tell/SKILL.md` | `vahtovik tell` |
