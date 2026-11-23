@@ -171,7 +171,7 @@ def test_the_acknowledgment_shows_the_sessions_context_size(project, chat):
     cfg, state, claude = project.load()
     channel_input.receive(cfg, state, cfg.channels["chat"])
     state.set_input_session("chat", "s1")
-    folder = claude.config_dir / "projects" / "here"
+    folder = claude.profile() / "projects" / "here"
     folder.mkdir(parents=True)
 
     def step(tokens: tuple[int, int, int], **more) -> str:

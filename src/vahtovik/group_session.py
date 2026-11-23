@@ -38,8 +38,10 @@ def spec_for(cfg: Config, claude: Claude, state: State, watch: Watch, key: str,
         env={**watch.secrets(), "VAHTOVIK_WATCH": watch.name, "VAHTOVIK_GROUP": key},
         scope=f"{watch.name}/{key}",
         add_dirs=watch.claude_dirs(),
+        account=watch.account,
     )
-    if stored and not force_new and claude.session_exists(stored):
+    # A session in another account's profile, as after the watch moved to another account, cannot be resumed.
+    if stored and not force_new and claude.session_exists(stored, watch.account):
         spec.mode, spec.session_id = "resume", stored
         return spec, None
     spec.mode, spec.session_id = "new", str(uuid.uuid4())

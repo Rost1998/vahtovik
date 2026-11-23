@@ -14,7 +14,7 @@ def _ago(**delta) -> str:
 def _conversation(claude, session_id: str, *totals: float | tuple[str, float], other: str = ""):
     """Add `cost-state` lines to a session's conversation file, as Claude Code does when its window ends.
     A total given as (time, total) comes after a message of that time."""
-    path = claude.config_dir / "projects" / "fake" / f"{session_id}.jsonl"
+    path = claude.profile() / "projects" / "fake" / f"{session_id}.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a") as handle:
         handle.write(other)

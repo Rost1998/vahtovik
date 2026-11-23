@@ -36,7 +36,8 @@ class StageSettings:
 class ClaudeSettings:
     auth: str = "subscription"
     binary: str = "claude"
-    config_dir: Path | None = None
+    config_dir: Path | None = None  # the default login's Claude Code profile; None: Claude Code's own default
+    accounts: dict[str, Path] = field(default_factory=dict)  # other logins that watches can use: name -> profile
     model: str = "opus"  # an alias: Claude Code uses the newest Opus
     effort: str = "high"
     stages: dict[str, dict] = field(default_factory=dict)
@@ -122,6 +123,7 @@ class Watch:
     model: str | None = None  # the model and effort of all the watch's sessions, unless a stage sets its own
     effort: str | None = None
     at: list[time] = field(default_factory=list)  # set: the default times of the day of its sources, over interval
+    account: str | None = None  # set: its group and monitoring sessions use this account of claude.accounts
 
     @property
     def watch_yaml(self) -> Path:
@@ -341,7 +343,10 @@ def _load_claude(raw: dict, root: Path) -> ClaudeSettings:
         raise ConfigError(f"claude.auth must be one of {', '.join(AUTH_MODES)}")
     settings.binary = str(raw.get("binary", settings.binary))
     if raw.get("config_dir"):
-        settings.config_dir = (root / Path(raw["config_dir"]).expanduser()).resolve()
+        settings.config_dir = _folder(root, raw["config_dir"])
+    settings.accounts = _load_accounts(raw.get("accounts"), root)
+    if settings.accounts and settings.auth != "subscription":
+        raise ConfigError("claude.accounts work only with auth: subscription")
     settings.model = str(raw.get("model", settings.model))
     settings.effort = _effort(raw.get("effort", settings.effort), "claude") or settings.effort
     settings.stages = _stage_overrides(raw.get("stages"), "claude.stages")
@@ -350,6 +355,22 @@ def _load_claude(raw: dict, root: Path) -> ClaudeSettings:
         raise ConfigError("claude.parallel_turns must be a whole number, 1 or more")
     settings.parallel_turns = parallel
     return settings
+
+
+def _folder(root: Path, value: object) -> Path:
+    return (root / Path(str(value)).expanduser()).resolve()
+
+
+def _load_accounts(raw: object, root: Path) -> dict[str, Path]:
+    """claude.accounts: name -> {config_dir: the account's Claude Code profile}."""
+    if not isinstance(raw or {}, dict):
+        raise ConfigError("claude.accounts must be a mapping of account name to {config_dir: ...}")
+    accounts = {}
+    for name, item in (raw or {}).items():
+        if not isinstance(item, dict) or not item.get("config_dir"):
+            raise ConfigError(f"claude.accounts: account {name!r} needs a config_dir, its Claude Code profile")
+        accounts[str(name)] = _folder(root, item["config_dir"])
+    return accounts
 
 
 def _load_tmux(raw: object) -> TmuxSettings:
@@ -455,7 +476,7 @@ def _load_input(raw: dict, where: str) -> InputSettings:
     return settings
 
 
-def _load_watch(path: Path, channels: dict[str, Channel]) -> Watch:
+def _load_watch(path: Path, channels: dict[str, Channel], accounts: dict[str, Path]) -> Watch:
     raw = _read_yaml(path / WATCH_FILE)
     where = str(path / WATCH_FILE)
     interval, at = _schedule(raw, where)
@@ -488,7 +509,11 @@ def _load_watch(path: Path, channels: dict[str, Channel]) -> Watch:
     claude = raw.get("claude") or {}
     if not isinstance(claude, dict):
         raise ConfigError(f"{where} claude: must be a mapping")
-    stages = {k: v for k, v in claude.items() if k not in ("model", "effort")}
+    stages = {k: v for k, v in claude.items() if k not in ("model", "effort", "account")}
+    account = str(claude["account"]) if claude.get("account") else None
+    if account and account not in accounts:
+        raise ConfigError(f"{where} claude: unknown account {account!r}; "
+                          f"known: {', '.join(sorted(accounts)) or 'none'}; define it in {CONFIG_FILE} claude.accounts")
     return Watch(
         name=path.name,
         dir=path,
@@ -500,6 +525,7 @@ def _load_watch(path: Path, channels: dict[str, Channel]) -> Watch:
         model=str(claude["model"]) if claude.get("model") else None,
         effort=_effort(claude.get("effort"), f"{where} claude"),
         at=at,
+        account=account,
     )
 
 
@@ -511,10 +537,11 @@ def load(root: Path | None = None) -> Config:
     skills_dir = (root / paths.get("skills", "skills")).resolve()
     watches_dir = (root / paths.get("watches", "watches")).resolve()
     channels = _load_channels(raw.get("channels"))
+    claude = _load_claude(raw.get("claude") or {}, root)
     watches = {}
     if watches_dir.is_dir():
         for path in sorted(p for p in watches_dir.iterdir() if (p / WATCH_FILE).is_file()):
-            watches[path.name] = _load_watch(path, channels)
+            watches[path.name] = _load_watch(path, channels, claude.accounts)
     for channel in channels.values():
         unknown = [w for w in (channel.input.watches or []) if w not in watches] if channel.input else []
         if unknown:
@@ -527,7 +554,7 @@ def load(root: Path | None = None) -> Config:
         watches = {name: watch for name, watch in watches.items() if name in scope}
     return Config(
         root=root,
-        claude=_load_claude(raw.get("claude") or {}, root),
+        claude=claude,
         channels=channels,
         watches=watches,
         data_dir=data_dir,

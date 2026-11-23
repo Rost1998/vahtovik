@@ -46,6 +46,7 @@ class SessionSpec:
     scope: str = "session"  # <watch>/<source or group>, for the journal
     guard: str | None = None  # a limited input channel: its session runs with the guard (channel_guard.py)
     add_dirs: list[Path] = field(default_factory=list)  # for --add-dir: a watch folder, whose skills Claude Code loads
+    account: str | None = None  # the watch's account of claude.accounts; None: the default login
 
     @property
     def label(self) -> str:
@@ -69,31 +70,42 @@ class Claude:
     def __init__(self, cfg: Config):
         self.cfg = cfg
 
-    @property
-    def config_dir(self) -> Path:
+    def profile(self, account: str | None = None) -> Path:
+        """The Claude Code profile folder (CLAUDE_CONFIG_DIR) of an account of claude.accounts; None: the default
+        login's. It holds the login and the conversation files."""
+        if account:
+            return self.cfg.claude.accounts[account]
         if self.cfg.claude.config_dir:
             return self.cfg.claude.config_dir
         return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
 
-    def trusts(self, folder: Path) -> bool | None:
-        """Whether Claude Code trusts the folder or a folder above it, so interactive sessions there skip
-        the "trust this folder" screen. None if Claude Code's config file cannot be read."""
-        base = self.cfg.claude.config_dir or (Path(os.environ["CLAUDE_CONFIG_DIR"])
-                                              if os.environ.get("CLAUDE_CONFIG_DIR") else None)
-        try:
-            projects = json.loads((base / ".claude.json" if base else Path.home() / ".claude.json").read_text())
+    def profiles(self) -> list[Path]:
+        """The profile folders of the default login and of every account."""
+        return list(dict.fromkeys([self.profile(), *self.cfg.claude.accounts.values()]))
+
+    def trusts(self, folder: Path, account: str | None = None) -> bool | None:
+        """Whether Claude Code, with the account's profile, trusts the folder or a folder above it, so interactive
+        sessions there skip the "trust this folder" screen. None if Claude Code's config file cannot be read."""
+        own = account or self.cfg.claude.config_dir or os.environ.get("CLAUDE_CONFIG_DIR")
+        try:  # without CLAUDE_CONFIG_DIR, Claude Code keeps the file next to ~/.claude, not in it
+            projects = json.loads((self.profile(account) / ".claude.json" if own
+                                   else Path.home() / ".claude.json").read_text())
         except (OSError, ValueError):
             return None
         projects = projects.get("projects") or {}
         folder = folder.resolve()
         return any((projects.get(str(p)) or {}).get("hasTrustDialogAccepted") for p in (folder, *folder.parents))
 
-    def session_file(self, session_id: str | None) -> Path | None:
-        """The file where Claude Code keeps the session's conversation."""
-        return next((self.config_dir / "projects").glob(f"*/{session_id}.jsonl"), None) if session_id else None
+    def session_file(self, session_id: str | None, profiles: list[Path] | None = None) -> Path | None:
+        """The file where Claude Code keeps the session's conversation, in any profile unless profiles are given."""
+        if not session_id:
+            return None
+        return next((path for folder in profiles or self.profiles()
+                     for path in (folder / "projects").glob(f"*/{session_id}.jsonl")), None)
 
-    def session_exists(self, session_id: str | None) -> bool:
-        return self.session_file(session_id) is not None
+    def session_exists(self, session_id: str | None, account: str | None = None) -> bool:
+        """Whether the account's profile has the session, so a session with that account can resume it."""
+        return self.session_file(session_id, [self.profile(account)]) is not None
 
     def context_tokens(self, session_id: str | None) -> int | None:
         """How many tokens the session's context held at its last step: the input of the last assistant entry
@@ -126,7 +138,9 @@ class Claude:
         (the working folder's own CLAUDE.md still loads), skip the bypassPermissions warning screen,
         turn off prompt suggestions (see env()), give group sessions the hooks that keep their status
         (group_status.py), and limited input channels their guard (channel_guard.py)."""
-        excludes = [str(Path.home() / ".claude" / "CLAUDE.md"), str(Path.home() / ".claude" / "rules" / "**")]
+        excludes = []
+        for folder in dict.fromkeys([Path.home() / ".claude", self.profile(spec.account)]):  # the personal ones
+            excludes += [str(folder / "CLAUDE.md"), str(folder / "rules" / "**")]
         for parent in spec.workdir.resolve().parents:
             excludes += [str(parent / name) for name in ("CLAUDE.md", "CLAUDE.local.md", ".claude/CLAUDE.md")]
         settings = {"claudeMdExcludes": excludes, "skipDangerousModePermissionPrompt": True,
@@ -180,7 +194,7 @@ class Claude:
         return args + [spec.prompt] if spec.prompt else args
 
     def env(self, spec: SessionSpec) -> dict[str, str]:
-        env = self._base_env(spec.env)
+        env = self._base_env(spec.env, spec.account)
         env["VAHTOVIK_HOME"] = str(self.cfg.root)
         env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"  # context.md is the memory
         # A suggestion shows as grey text in the input box, and the watchdog's screen shows it as typed text.
@@ -192,24 +206,28 @@ class Claude:
             env["CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD"] = "1"
         return env
 
-    def _base_env(self, extra: dict[str, str] | None = None) -> dict[str, str]:
+    def _base_env(self, extra: dict[str, str] | None = None, account: str | None = None) -> dict[str, str]:
         """The environment of every `claude` that vahtovik runs: its profile and its login."""
         env = {**os.environ, **(extra or {})}
-        if self.cfg.claude.config_dir:
-            env["CLAUDE_CONFIG_DIR"] = str(self.cfg.claude.config_dir)
+        if account or self.cfg.claude.config_dir:
+            env["CLAUDE_CONFIG_DIR"] = str(self.profile(account))
         if self.cfg.claude.auth == "subscription":
             env.pop("ANTHROPIC_API_KEY", None)  # make sure the subscription login is used
+        if account:  # Claude Code would use these before the login in the account's profile
+            env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+            env.pop("ANTHROPIC_AUTH_TOKEN", None)
         return env
 
-    def plan_usage(self) -> dict | None:
+    def plan_usage(self, account: str | None = None) -> dict | None:
         """How full the Claude plan's usage limits are: the `rate_limits` that Claude Code's /usage shows, or None
         when plan limits do not apply, as with an API key. Claude Code answers this control request without an AI
-        session, with its own login, which it refreshes itself. Raises UsageError when it gives no answer."""
+        session, with the login of the account's profile, which it refreshes itself. Raises UsageError when it
+        gives no answer."""
         args = [self.cfg.claude.binary, "-p", "--input-format", "stream-json", "--output-format", "stream-json",
                 "--verbose", "--no-session-persistence", "--strict-mcp-config"]
         try:
             proc = subprocess.run(args, input=json.dumps(USAGE_REQUEST) + "\n", text=True, capture_output=True,
-                                  cwd=self.cfg.root, env=self._base_env(), timeout=USAGE_TIMEOUT)
+                                  cwd=self.cfg.root, env=self._base_env(account=account), timeout=USAGE_TIMEOUT)
         except subprocess.TimeoutExpired:
             raise UsageError(f"{self.cfg.claude.binary} gave no answer in {USAGE_TIMEOUT} s") from None
         except OSError as exc:

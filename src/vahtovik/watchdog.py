@@ -301,7 +301,7 @@ def _act(cfg: Config, state: State, tmux: Tmux, claude: Claude, session: Session
         log.warning("%s: Watchdog did not %s: the session window is open or the group is busy (%s)", ref, action, reason)
         return
     if action == "resume":
-        if not claude.session_exists(group["session_id"]):
+        if not claude.session_exists(group["session_id"], session.watch.account):
             action, reason = "maintenance", f"the session to resume is gone: {reason}"
         else:
             groups.write_claude_md(cfg, state, session.watch, key)
