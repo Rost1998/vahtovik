@@ -1,7 +1,9 @@
-"""Group turns: start each group's session in a tmux window to process its new artifacts and report.
+"""Worker turns: start each worker's session in a tmux window for its new artifacts, its messages, or its scheduled
+turn.
 
 The run does not wait for a turn. The agent ends it with `vahtovik turn`, and the watchdog looks after the
-windows: it ends the turns whose window ended first, and closes the windows of done turns.
+windows: it ends the turns whose window ended first, and closes the windows of done turns. A worker whose window is
+open gets its messages typed in instead, when its agent is idle and nobody is looking.
 """
 
 from __future__ import annotations
@@ -9,14 +11,13 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from pathlib import Path
 
-from .. import context_file, group_session, groups, memory, skills, windows
+from .. import context_file, inbox, knowledge, windows, worker_status, workers
 from ..claude_session import Claude
-from ..config import Config, Watch
+from ..config import Config, ConfigError
 from ..state import State
 from ..tmux import Tmux, TmuxError
-from ..util import LockBusy, duration, human, plural, render, utc_iso
+from ..util import duration, human, plural, render, utc_iso
 
 log = logging.getLogger(__name__)
 
@@ -25,49 +26,62 @@ SCHEDULED_NOTE = ("This is a scheduled turn: {reason}. Do that check by your rul
                   "artifacts.")
 
 
-def run(cfg: Config, state: State, claude: Claude, tmux: Tmux, watch: Watch, run_id: str) -> list[str]:
-    """Start a turn for each group with new artifacts. Returns the ids of the turns started."""
+def run(cfg: Config, state: State, claude: Claude, tmux: Tmux, run_id: str,
+        roles: list[str] | None = None) -> list[str]:
+    """Start a turn for each worker with new artifacts, messages or a due scheduled turn, and type the messages of
+    open windows. Returns the ids of the turns started."""
     if not Tmux.installed():
-        log.error("%s: Skipped group turns: tmux is not installed", watch.name)
+        log.error("Skipped worker turns: tmux is not installed")
         return []
-    started = []
-    pending = state.pending_groups(watch.name, MAX_ATTEMPTS)
-    for index, key in enumerate(pending):
-        if state.working_turns() >= cfg.claude.parallel_turns:
-            log.info("%s: Held back %s for a later run: already as many work as claude.parallel_turns (%d) "
-                     "allows", watch.name, plural(len(pending) - index, "group turn"), cfg.claude.parallel_turns)
-            break
-        busy = _busy(cfg, tmux, watch, key)
-        if busy:
-            log.warning("%s/%s: Skipped group turn: %s; a later run will process it", watch.name, key, busy)
+    started, held = [], 0
+    for worker_id in state.pending_workers(MAX_ATTEMPTS, roles):
+        row = state.worker(worker_id)
+        if row["role"] not in cfg.roles:
+            continue  # its role left the config, or the command sees only some roles
+        window = tmux.window(worker_id)
+        if window:
+            if not inbox.deliver_typed(cfg, state, tmux, row, window) and _waits(state, row):
+                log.warning("%s: Skipped turn: its session window is open; a later run will start it",
+                            workers.label(row))
             continue
-        turn_id = turn(cfg, state, claude, tmux, watch, key, run_id)
+        if state.working_turns() >= cfg.claude.parallel_turns:
+            held += 1
+            continue
+        if workers.is_busy(cfg, row):
+            log.warning("%s: Skipped turn: the worker is busy; a later run will start it", workers.label(row))
+            continue
+        turn_id = turn(cfg, state, claude, tmux, row, run_id)
         if turn_id:
             started.append(turn_id)
+    if held:
+        log.info("Held back %s for a later run: already as many work as claude.parallel_turns (%d) allows",
+                 plural(held, "worker turn"), cfg.claude.parallel_turns)
     return started
 
 
-def can_start(cfg: Config, state: State, tmux: Tmux, watches: list[Watch]) -> bool:
-    """Whether a run would start a group turn of these watches now."""
-    if not Tmux.installed() or state.working_turns() >= cfg.claude.parallel_turns:
+def _waits(state: State, row) -> bool:
+    """Whether the worker waits for a turn for more than messages: new artifacts, or a due scheduled turn."""
+    return bool(state.pending_artifacts(row["id"], MAX_ATTEMPTS)) or (
+        bool(row["scheduled_at"]) and row["scheduled_at"] <= utc_iso() and row["status"] in ("scheduled", "failed"))
+
+
+def can_start(cfg: Config, state: State, tmux: Tmux, roles: list[str] | None = None) -> bool:
+    """Whether a run would start a worker turn now, or type messages into an open window."""
+    if not Tmux.installed():
         return False
-    return any(not _busy(cfg, tmux, watch, key)
-               for watch in watches for key in state.pending_groups(watch.name, MAX_ATTEMPTS))
-
-
-def _busy(cfg: Config, tmux: Tmux, watch: Watch, key: str) -> str | None:
-    """Why the group's turn cannot start now, or None."""
-    if tmux.window(f"{watch.name}/{key}"):
-        return "its session window is open"
-    try:
-        with groups.lock(cfg.group_dir(watch.name, key)):
-            return None
-    except LockBusy:
-        return "the group is busy"
-
-
-def _read(path: Path) -> str:
-    return path.read_text().strip() if path.is_file() else f"({path.name} is missing)"
+    open_windows = {w.worker: w for w in tmux.windows()}
+    for worker_id in state.pending_workers(MAX_ATTEMPTS, roles):
+        row = state.worker(worker_id)
+        if row["role"] not in cfg.roles:
+            continue
+        window = open_windows.get(worker_id)
+        if window:
+            if state.pending_messages(worker_id, MAX_ATTEMPTS) and not window.clients and row["idle"] \
+                    and row["status"] != "maintenance":
+                return True
+        elif state.working_turns() < cfg.claude.parallel_turns and not workers.is_busy(cfg, row):
+            return True
+    return False
 
 
 def _artifacts_text(rows) -> str:
@@ -75,79 +89,78 @@ def _artifacts_text(rows) -> str:
                      for r in rows)
 
 
-def _process_text(watch: Watch) -> str:
-    files = watch.process_files()
-    return "\n\n".join(f"### {p.name}\n\n{p.read_text().strip()}" for p in files) or "(no process/*.md files)"
-
-
-def _channels_text(cfg: Config, watch: Watch) -> str:
-    parts = []
-    for name in watch.channels:
-        try:
-            body = skills.load(cfg.skills_dir, "channels", cfg.channels[name].skill).body.strip()
-        except skills.SkillError as exc:
-            body = f"(skill missing: {exc})"
-        parts.append(f"### `{name}`\n\n{body}")
-    return "\n\n".join(parts) or "This watch has no channels; do not report."
-
-
-def _deliveries_text(rows) -> str:
-    lines = []
-    for r in rows:
-        status = f"sent ({r['external_id']})" if r["status"] == "sent" else f"{r['status']}: {r['last_error']}"
-        lines.append(f"- delivery {r['id']} to `{r['channel']}`, \"{r['subject']}\": {status}, "
-                     f"attempts {r['attempts']}")
-    return "\n".join(lines) or "- none"
-
-
-def turn(cfg: Config, state: State, claude: Claude, tmux: Tmux, watch: Watch, key: str, run_id: str) -> str | None:
-    """Start the group's turn in a session window. Returns the turn's id, or None if the window did not start."""
-    pending = state.pending_artifacts(watch.name, key, MAX_ATTEMPTS)
-    ids = [r["id"] for r in pending]
-    context = cfg.group_dir(watch.name, key) / "context.md"
-    groups.write_claude_md(cfg, state, watch, key)
-    spec, note = group_session.spec_for(cfg, claude, state, watch, key)
-    last = state.last_turn(watch.name, key)
+def turn(cfg: Config, state: State, claude: Claude, tmux: Tmux, row, run_id: str) -> str | None:
+    """Start the worker's turn in a session window. Returns the turn's id, or None if the window did not start."""
+    pending = state.pending_artifacts(row["id"], MAX_ATTEMPTS)
+    messages = state.pending_messages(row["id"], MAX_ATTEMPTS)
+    ids, message_ids = [r["id"] for r in pending], [m["id"] for m in messages]
     turn_id = uuid.uuid4().hex[:12]
     now = human()
-    state.start_turn(turn_id, run_id, watch.name, key, ids, context_file.fingerprint(context).work_log_entries)
-    scheduled = state.take_schedule(watch.name, key, turn_id, utc_iso())
+    state.start_turn(turn_id, run_id, row["id"], ids, message_ids,
+                     context_file.fingerprint(workers.context_md(cfg, row)).work_log_entries)
+    scheduled = state.take_schedule(row["id"], turn_id, utc_iso())
+    state.deliver_messages(message_ids, "turn", turn_id)
+    row = state.worker(row["id"])
+    try:
+        spec, note = workers.spec_for(cfg, claude, state, row)
+        role = workers.role_of(cfg, row)
+        found, _ = workers.skills_of(cfg, row)
+    except (ConfigError, knowledge.SkillError) as exc:
+        fail(cfg, state, state.turn(turn_id), str(exc), 0)
+        return None
     notes = [note, SCHEDULED_NOTE.format(reason=scheduled) if scheduled else None]
     spec.prompt = render(
-        "group_turn.md",
-        run_id=run_id, turn_id=turn_id, now=now, session_note="\n\n".join(filter(None, notes)),
-        artifacts=_artifacts_text(pending) or "- none", process_rules=_process_text(watch),
-        watch_skills=skills.listing(skills.watch_skills(watch)), report_rules=_read(watch.report_md), memory=memory.prompt_text(watch), channels=_channels_text(cfg, watch),
-        deliveries=_deliveries_text(state.deliveries_since(watch.name, key, last["started_at"] if last else None)),
+        "worker_turn.md",
+        name=workers.name(row), run_id=run_id, turn_id=turn_id, now=now,
+        session_note="\n\n".join(filter(None, notes)), artifacts=_artifacts_text(pending) or "- none",
+        messages=inbox.prompt_text(state, row, messages), role=role.name,
+        role_rules=role.body or "(the role has no rules)", skills=knowledge.listing(found),
+        memory=workers.memory_text(cfg, row), schedule=workers.schedule_text(row),
     )
     spec.env.update(VAHTOVIK_TURN=turn_id, VAHTOVIK_RUN=run_id)
-    state.prompt_submitted(watch.name, key)  # running until the agent reports its status
+    state.prompt_submitted(row["id"])  # running until the agent reports its status
     try:
         window_id = windows.launch(cfg, state, tmux, claude, spec, "turn", turn_id)
     except TmuxError as exc:
-        fail(state, state.turn(turn_id), str(exc), 0)
+        fail(cfg, state, state.turn(turn_id), str(exc), 0)
         return None
-    log.info("%s: Started group turn: %s%s, %s, tmux window %s", spec.scope, plural(len(ids), "artifact"),
-             ", scheduled" if scheduled else "", group_session.describe(spec, note), window_id)
+    what = [plural(len(ids), "artifact")] + ([plural(len(message_ids), "message")] if message_ids else [])
+    what += ["scheduled"] if scheduled else []
+    log.info("%s: Started turn: %s, %s, tmux window %s", workers.label(row), ", ".join(what),
+             workers.describe(spec, note), window_id)
     return turn_id
 
 
-def fail(state: State, turn, error: str | None, seconds: float) -> None:
-    """Close an unfinished turn as failed. Its artifacts are retried, up to MAX_ATTEMPTS turns."""
+def retries_left(state: State, row) -> bool:
+    """Whether a later run will try the worker's failed work again: artifacts, messages or a scheduled turn."""
+    return bool(state.pending_artifacts(row["id"], MAX_ATTEMPTS) or state.pending_messages(row["id"], MAX_ATTEMPTS)
+                or (row["scheduled_at"] and row["scheduled_attempts"] < MAX_ATTEMPTS))
+
+
+def fail(cfg: Config, state: State, turn, error: str | None, seconds: float) -> None:
+    """Close an unfinished turn as failed. Its artifacts, messages and scheduled turn are tried again, up to
+    MAX_ATTEMPTS turns. When nothing is left to try, the worker's parent hears of it (report-back)."""
     if turn["finished_at"]:
         return
-    watch, key = turn["watch"], turn["group_key"]
-    group = state.group(watch, key)
-    if group["status"] == "failed" and group["status_reason"]:
-        error = group["status_reason"]
+    row = state.worker(turn["worker"])
+    if row["status"] == "failed" and row["status_reason"]:
+        error = row["status_reason"]
     error = error or "the session ended before the agent ran `vahtovik turn`"
     ids = json.loads(turn["artifact_ids"] or "[]")
-    attempt = 1 + max((r["attempts"] for r in state.rows(
-        "SELECT attempts FROM artifacts WHERE watch = ? AND group_key = ? AND id IN (SELECT value FROM json_each(?))",
-        watch, key, turn["artifact_ids"] or "[]")), default=0)
-    state.mark_attempt_failed(watch, key, ids, MAX_ATTEMPTS)
+    message_ids = json.loads(turn["message_ids"] or "[]")
+    tries = [r["attempts"] for r in state.rows(
+        "SELECT attempts FROM artifacts WHERE worker = ? AND id IN (SELECT value FROM json_each(?))",
+        row["id"], turn["artifact_ids"] or "[]")]
+    tries += [m["attempts"] for m in state.messages(message_ids)]
+    tries += [row["scheduled_attempts"]] if turn["scheduled_for"] else []
+    attempt = 1 + max(tries, default=0)
+    state.mark_attempt_failed(row["id"], ids, MAX_ATTEMPTS)
+    state.messages_failed(message_ids, MAX_ATTEMPTS)
     state.restore_schedule(turn)
     state.finish_turn(turn["id"], False, None, error)
-    state.set_status(watch, key, "failed", error)
-    log.error("%s/%s: Failed group turn after %s (attempt %d of %d%s): %s", watch, key, duration(seconds),
-              attempt, MAX_ATTEMPTS, ", giving up" if attempt >= MAX_ATTEMPTS else "", error)
+    state.set_status(row["id"], "failed", error)
+    log.error("%s: Failed turn after %s (attempt %d of %d%s): %s", workers.label(row), duration(seconds), attempt,
+              MAX_ATTEMPTS, ", giving up" if attempt >= MAX_ATTEMPTS else "", error)
+    row = state.worker(row["id"])
+    if not retries_left(state, row):
+        worker_status.report_back(state, row, "failed", reason=error)
