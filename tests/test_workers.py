@@ -239,6 +239,28 @@ def test_a_new_session_of_an_existing_worker_reads_the_memory_again(project):
     assert "Read your role's memory before you work" in prompt and "Changed since your last turn" not in prompt
 
 
+def test_nothing_is_typed_into_a_window_whose_worker_has_changes_to_hear_of(project):
+    give(project, artifact("a1", "g"))
+    project.queue(turn_answer([work_log()]))
+    cfg, state, claude = project.load()
+    tmux = Tmux(cfg)
+    run_turns(cfg, state, claude, tmux)  # the window stays open, its agent idle, with the CLAUDE.md of its start
+    row = state.active_worker("r1", "g")
+    assert not workers.has_changes(cfg, row)
+    project.role("r1", ROLE.replace("Assess each item.", "Assess each item twice."))
+    cfg, state, claude = project.load()
+    assert workers.has_changes(cfg, row)
+    assert operations.tell(cfg, state, tmux, [row["id"]], "One more thing.") == [
+        f"{row['id']}-g: queued: its rules, skills or memory changed, so it gets the message in its next turn, "
+        "which tells it what changed"]
+    assert not worker_turn.can_start(cfg, state, tmux) and state.pending_messages(row["id"], 3)
+    tmux.close(tmux.window(row["id"]).id)  # as the watchdog does after its check
+    project.queue(turn_answer([work_log("Second.")]))
+    run_turns(cfg, state, claude, tmux, run_id="run2")
+    prompt = project.calls()[-1]["prompt"]
+    assert "- Your role's rules changed." in prompt and "One more thing." in prompt
+
+
 def test_after_a_compaction_the_agent_is_told_what_to_read_again(project, monkeypatch, capsys, caplog):
     cfg, state, _ = project.load()
     row = worker(cfg, state)

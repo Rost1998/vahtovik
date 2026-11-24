@@ -55,16 +55,18 @@ def prompt_text(state: State, row, messages) -> str:
     return "\n\n".join(f"### {prefix(state, m['sender'], row)}\n\n{m['text'].strip()}" for m in messages) or "- none"
 
 
-def typed_text(state: State, row, window: Window) -> tuple[list, str] | None:
+def typed_text(cfg: Config, state: State, row, window: Window) -> tuple[list, str] | None:
     """The worker's waiting messages and the one line to type them as, or None when they cannot be typed into its
     open window now. They can when its agent is idle and nobody is looking at the window. Not into a window that
     has just started: Claude Code may still be starting in it, and would lose the keys. Not a long text either.
+    And not when the worker's rules, skills or memory changed since its last turn: the session in the window still
+    holds the CLAUDE.md of its start, and only a turn's prompt tells the agent what changed.
     Messages that cannot be typed wait for a later run, or for the worker's next turn."""
     messages = state.pending_messages(row["id"], MAX_ATTEMPTS)
     row = state.worker(row["id"])
     if not messages or window.clients or not row["idle"] or row["status"] == "maintenance":
         return None
-    if windows.age(state, row["id"]) < STARTING:
+    if windows.age(state, row["id"]) < STARTING or workers.has_changes(cfg, row):
         return None
     # With the time: a session has no clock, and the agent dates its Work log entry by it.
     text = " ".join(" ".join(f"{prefix(state, m['sender'], row)} [{human()}] {m['text']}".split()) for m in messages)
@@ -74,7 +76,7 @@ def typed_text(state: State, row, window: Window) -> tuple[list, str] | None:
 def deliver_typed(cfg: Config, state: State, tmux: Tmux, row, window: Window) -> bool:
     """Type the worker's waiting messages into its open window, as one prompt, if they can be typed now
     (typed_text). Returns whether it did."""
-    found = typed_text(state, row, window)
+    found = typed_text(cfg, state, row, window)
     if found is None:
         return False
     messages, text = found

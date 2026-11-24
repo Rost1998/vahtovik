@@ -301,9 +301,16 @@ def status_note(cfg: Config, state: State, row, spec: SessionSpec, found: list[k
     says the same again."""
     snap = snapshot(cfg, row, found)
     seen = json.loads(row["seen"]) if row["seen"] and spec.mode == "resume" else None
-    memory_md = role_of(cfg, row).memory_md
     if seen is None:
-        return (READ_MEMORY.format(path=memory_md) if memory.entries(role_of(cfg, row)) else None), snap
+        role = role_of(cfg, row)
+        return (READ_MEMORY.format(path=role.memory_md) if memory.entries(role) else None), snap
+    lines = _changes(cfg, row, seen, snap, found)
+    if not lines:
+        return None, snap
+    return "Changed since your last turn:\n" + "\n".join(f"- {line}" for line in lines), snap
+
+
+def _changes(cfg: Config, row, seen: dict, snap: dict, found: list[knowledge.Skill]) -> list[str]:
     lines = []
     if seen.get("rules") != snap["rules"]:
         lines.append(RULES_CHANGED.format(path=knowledge.worker_rules(cfg).skill_md))
@@ -319,9 +326,19 @@ def status_note(cfg: Config, state: State, row, spec: SessionSpec, found: list[k
         elif seen[key] != snap[key]:
             lines.append(f"The skill `{skill}` changed: read `{paths[key]}` again before you use it.")
     lines += filter(None, [_memory_changes(cfg, row, seen, snap)])
-    if not lines:
-        return None, snap
-    return "Changed since your last turn:\n" + "\n".join(f"- {line}" for line in lines), snap
+    return lines
+
+
+def has_changes(cfg: Config, row) -> bool:
+    """Whether the worker's next turn will tell it of changes (status_note). The open window of such a worker
+    still holds the CLAUDE.md of its start, so nothing is typed into it: its messages wait for that turn."""
+    if not row["seen"]:
+        return False
+    try:
+        found, _ = skills_of(cfg, row)
+        return bool(_changes(cfg, row, json.loads(row["seen"]), snapshot(cfg, row, found), found))
+    except (ConfigError, knowledge.SkillError, OSError):
+        return False
 
 
 def spec_for(cfg: Config, claude: Claude, state: State, row, force_new: bool = False) -> tuple[SessionSpec, str | None]:

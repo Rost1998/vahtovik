@@ -82,7 +82,7 @@ def can_start(cfg: Config, state: State, tmux: Tmux, roles: list[str] | None = N
             continue
         window = open_windows.get(worker_id)
         if window:
-            if inbox.typed_text(state, row, window):
+            if inbox.typed_text(cfg, state, row, window):
                 return True
         elif state.working_turns() < cfg.claude.parallel_turns and not workers.is_busy(cfg, row):
             return True

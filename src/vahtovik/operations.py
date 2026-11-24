@@ -417,6 +417,9 @@ def tell(cfg: Config, state: State, tmux: Tmux, refs: list[str], message: str,
         elif window and window.clients:
             lines.append(f"{workers.name(row)}: queued: a person is looking at its window; vahtovik types the "
                          "message in once they leave")
+        elif window and workers.has_changes(cfg, row):
+            lines.append(f"{workers.name(row)}: queued: its rules, skills or memory changed, so it gets the message "
+                         "in its next turn, which tells it what changed")
         elif window:
             lines.append(f"{workers.name(row)}: queued: its window is busy or just started; vahtovik types the "
                          "message in at a later run")
