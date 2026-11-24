@@ -1,7 +1,7 @@
 import os
 
 import yaml
-from conftest import ROLE, artifact, give, monitor_answer, run_turns, turn_answer, work_log
+from conftest import ROLE, artifact, copy_knowledge, give, monitor_answer, run_turns, turn_answer, work_log
 
 from vahtovik import cli, delivery, knowledge, workers
 from vahtovik.stages import monitor
@@ -35,6 +35,29 @@ def test_skills_are_found_and_listed(project):
 
 def test_check_accepts_the_project(project, capsys):
     assert _problems(capsys) == []
+
+
+def test_a_test_project_keeps_links_and_leaves_real_credentials_out(tmp_path):
+    """Every test project gets a copy of the knowledge layer of the project the tests run in. That project may link
+    skills that are kept elsewhere, and has real credentials."""
+    source, elsewhere = tmp_path / "knowledge", tmp_path / "elsewhere"
+    for folder in (source / "skills/own", elsewhere / "kept"):
+        folder.mkdir(parents=True)
+        (folder / "SKILL.md").write_text(f"---\nname: {folder.name}\ndescription: d\n---\nBody.\n")
+    (source / "skills/kept").symlink_to(elsewhere / "kept", target_is_directory=True)
+    (source / "skills/gone").symlink_to(tmp_path / "missing", target_is_directory=True)
+    (source / "credentials").mkdir()
+    (source / "credentials/example.env").write_text("# KEY=value\n")
+    (source / "credentials/real.env").write_text("TOKEN=a-real-secret\n")
+    (source / "skills/own/notes.env").write_text("NOT=a-credentials-file\n")
+
+    copy = tmp_path / "copy"
+    copy_knowledge(source, copy)
+    assert (copy / "skills/own/SKILL.md").is_file() and not (copy / "skills/own").is_symlink()
+    assert (copy / "skills/kept").is_symlink() and (copy / "skills/kept/SKILL.md").is_file()
+    assert (copy / "skills/gone").is_symlink() and not (copy / "skills/gone").exists()
+    assert [p.name for p in (copy / "credentials").iterdir()] == ["example.env"]
+    assert (copy / "skills/own/notes.env").is_file()
 
 
 def test_check_reports_skill_problems(project, capsys):

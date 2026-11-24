@@ -127,10 +127,19 @@ def project(tmp_path, monkeypatch) -> Project:
     subprocess.run(["tmux", "-L", socket, "kill-server"], capture_output=True)
 
 
+def copy_knowledge(source: Path, target: Path) -> None:
+    """Copy a project's knowledge layer for a test project. A link stays a link: a skill that is kept elsewhere is
+    not copied with all it holds, and a link whose target is missing does not fail the copy, as vahtovik leaves such
+    a skill out. The project's real credentials stay out of the tests: of credentials/, only example.env is copied."""
+    credentials = source / "credentials"
+    shutil.copytree(source, target, symlinks=True,
+                    ignore=lambda folder, names: [n for n in names if Path(folder) == credentials and n != "example.env"])
+
+
 def _project(tmp_path, monkeypatch, socket: str) -> Project:
     root = tmp_path / "proj"
     shutil.copytree(REPO / "skills", root / "skills")
-    shutil.copytree(REPO / "knowledge", root / "knowledge")
+    copy_knowledge(REPO / "knowledge", root / "knowledge")
     skills = root / "knowledge/skills"
     _script(skills / "broken/send", "#!/bin/sh\necho boom >&2\nexit 3\n")
     (skills / "broken/SKILL.md").write_text("---\nname: broken\ndescription: fails\n---\nAny text.\n")
