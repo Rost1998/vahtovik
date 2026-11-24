@@ -15,7 +15,7 @@ from pathlib import Path
 
 import jsonschema
 
-from . import channel_guard, group_status
+from . import channel_guard
 from .config import Config, StageSettings
 from .util import tail
 
@@ -44,10 +44,11 @@ class SessionSpec:
     session_id: str | None = None
     name: str | None = None
     env: dict[str, str] = field(default_factory=dict)
-    scope: str = "session"  # <watch>/<source or group>, for the journal
+    scope: str = "session"  # <role>/<worker> or <poller>/<source>, for the journal
     guard: str | None = None  # a limited input channel: its session runs with the guard (channel_guard.py)
-    add_dirs: list[Path] = field(default_factory=list)  # for --add-dir: a watch folder, whose skills Claude Code loads
-    account: str | None = None  # the watch's account of claude.accounts; None: the default login
+    add_dirs: list[Path] = field(default_factory=list)  # for --add-dir: a folder whose .claude/skills Claude Code loads
+    account: str | None = None  # the account of claude.accounts of the role or poller; None: the default login
+    worker: str | None = None  # the id of the worker whose session this is
 
     @property
     def label(self) -> str:
@@ -137,8 +138,8 @@ class Claude:
     def settings_json(self, spec: SessionSpec) -> str:
         """Keep the user's personal and parent-folder CLAUDE.md files out of vahtovik sessions
         (the working folder's own CLAUDE.md still loads), skip the bypassPermissions warning screen,
-        turn off prompt suggestions (see env()), give group sessions the hooks that keep their status
-        (group_status.py), and limited input channels their guard (channel_guard.py)."""
+        turn off prompt suggestions (see env()), give worker sessions the hooks that keep their status
+        (worker_status.py), and limited input channels their guard (channel_guard.py)."""
         excludes = []
         for folder in dict.fromkeys([Path.home() / ".claude", self.profile(spec.account)]):  # the personal ones
             excludes += [str(folder / "CLAUDE.md"), str(folder / "rules" / "**")]
@@ -146,8 +147,9 @@ class Claude:
             excludes += [str(parent / name) for name in ("CLAUDE.md", "CLAUDE.local.md", ".claude/CLAUDE.md")]
         settings = {"claudeMdExcludes": excludes, "skipDangerousModePermissionPrompt": True,
                     "promptSuggestionEnabled": False}
-        if spec.stage == "group":
-            settings["hooks"] = group_status.hooks()
+        if spec.stage == "worker":
+            from .worker_status import hooks  # worker_status needs the workers module, which needs this one
+            settings["hooks"] = hooks()
         if spec.guard:
             settings["hooks"] = channel_guard.hooks(spec.guard)
         return json.dumps(settings)
@@ -190,14 +192,14 @@ class Claude:
         return args + self._common_args(spec)
 
     def interactive_args(self, spec: SessionSpec) -> list[str]:
-        """Arguments for the interactive mode of group session windows. The prompt is the last argument."""
+        """Arguments for the interactive mode of worker session windows. The prompt is the last argument."""
         args = [self.cfg.claude.binary, *self._common_args(spec)]
         return args + [spec.prompt] if spec.prompt else args
 
     def env(self, spec: SessionSpec) -> dict[str, str]:
         env = self._base_env(spec.env, spec.account)
         env["VAHTOVIK_HOME"] = str(self.cfg.root)
-        env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"  # context.md is the memory
+        env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"  # context.md and the role's MEMORY.md are the memory
         # A suggestion shows as grey text in the input box, and the watchdog's screen shows it as typed text.
         env["CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION"] = "false"
         vahtovik = shutil.which("vahtovik")

@@ -1,4 +1,4 @@
-"""The group record context.md: skeleton, section appends, and the turn check."""
+"""The worker record context.md: skeleton, section appends, and the turn check."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 from .util import human, write_atomic
 
 TEMPLATE = """# {title}
-Watch: {watch} · Group key: {key} · Created: {created}
+Role: {role} · Worker: {name} · Created: {created}
 
 ## Summary
 _Not processed yet._
@@ -21,14 +21,12 @@ _None._
 {artifacts_header}
 
 ## Work log
-
-## Reports
 """
 
 
-def create(path: Path, title: str, watch: str, key: str) -> None:
+def create(path: Path, title: str, role: str, name: str) -> None:
     if not path.exists():
-        write_atomic(path, TEMPLATE.format(title=title, watch=watch, key=key, created=human(),
+        write_atomic(path, TEMPLATE.format(title=title, role=role, name=name, created=human(),
                                            artifacts_header=ARTIFACTS_HEADER))
 
 
@@ -96,7 +94,7 @@ def artifact_row(source: str, title: str, url: str, seen: datetime | None = None
 
 
 def write_artifacts(path: Path, rows) -> None:
-    """Write the Artifacts section anew from the database rows of the group's artifacts."""
+    """Write the Artifacts section anew from the database rows of the worker's artifacts."""
     lines = [artifact_row(r["source_id"] or "", r["title"] or r["id"], r["url"] or "",
                           datetime.fromisoformat(r["first_seen_at"]) if r["first_seen_at"] else None) for r in rows]
     replace_section(path, "Artifacts", "\n".join([ARTIFACTS_HEADER, *lines]), after="Open questions")
@@ -107,12 +105,6 @@ def section_text(path: Path, section: str) -> str:
     lines = path.read_text().splitlines() if path.exists() else []
     found = _section(lines, section)
     return "\n".join(lines[found[0] + 1:found[1]]).strip() if found else ""
-
-
-def report_line(channel: str, ok: bool, detail: str, subject: str, dry_run: bool = False) -> str:
-    status = ("sent" if ok else "failed") + (" (dry run)" if dry_run else "")
-    detail = f" ({_cell(detail)})" if detail else ""
-    return f"- {human()} · {channel} · {status}{detail} · {_cell(subject)}"
 
 
 @dataclass(frozen=True)

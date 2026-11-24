@@ -1,4 +1,4 @@
-"""The tmux session where every running group session has a window of its own."""
+"""The tmux session where every running worker session has a window of its own."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from pathlib import Path
 
 from .config import Config
 
-OPTION = "@vahtovik"  # window option that names the group: <watch>/<key>
+OPTION = "@vahtovik"  # window option that names the worker: its id
 
 
 class TmuxError(Exception):
@@ -22,7 +22,7 @@ class TmuxError(Exception):
 @dataclass(frozen=True)
 class Window:
     id: str  # tmux window id, like @12
-    ref: str  # <watch>/<key>
+    worker: str  # the worker's id
     clients: int  # how many terminals show this window now
 
 
@@ -70,7 +70,7 @@ class Tmux:
             raise TmuxError(f"cannot create tmux session {self.session}: {proc.stderr.strip()}")
 
     def windows(self) -> list[Window]:
-        """vahtovik's group session windows."""
+        """vahtovik's worker session windows."""
         if not self.installed():
             return []
         proc = self._run("list-windows", "-t", f"={self.session}",
@@ -79,20 +79,22 @@ class Tmux:
             return []
         found = []
         for line in proc.stdout.splitlines():
-            window_id, ref, clients = line.split("\t")
-            if ref:
-                found.append(Window(window_id, ref, int(clients or 0)))
+            window_id, worker, clients = line.split("\t")
+            if worker:
+                found.append(Window(window_id, worker, int(clients or 0)))
         return found
 
-    def window(self, ref: str) -> Window | None:
-        return next((w for w in self.windows() if w.ref == ref), None)
+    def window(self, worker: str) -> Window | None:
+        """The window of the worker with this id."""
+        return next((w for w in self.windows() if w.worker == worker), None)
 
-    def new_window(self, ref: str, command: list[str], cwd: Path) -> str:
+    def new_window(self, worker: str, title: str, command: list[str], cwd: Path) -> str:
+        """A window for the worker with this id; `title` is the window's name, such as <role>/<key>."""
         self.ensure_session()
-        window_id = self._run("new-window", "-d", "-t", f"={self.session}:", "-n", ref, "-c", str(cwd),
+        window_id = self._run("new-window", "-d", "-t", f"={self.session}:", "-n", title, "-c", str(cwd),
                               "-e", f"VAHTOVIK_HOME={self.cfg.root}", "-P", "-F", "#{window_id}",
                               "--", *command).stdout.strip()
-        self._run("set-option", "-w", "-t", window_id, OPTION, ref, check=False)
+        self._run("set-option", "-w", "-t", window_id, OPTION, worker, check=False)
         return window_id
 
     def capture(self, target: str) -> str:

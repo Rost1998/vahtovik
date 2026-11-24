@@ -1,6 +1,6 @@
-"""Group sessions run as interactive Claude Code in tmux windows, so a person can watch and join them.
+"""Worker sessions run as interactive Claude Code in tmux windows, so a person can watch and join them.
 
-Each window runs `vahtovik window <spec file>`, which holds the group lock while `claude` runs in it.
+Each window runs `vahtovik window <spec file>`, which holds the worker's lock while `claude` runs in it.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import groups, journal
+from . import journal, workers
 from .claude_session import Claude, SessionSpec
 from .config import Config
 from .state import State
@@ -30,18 +30,19 @@ TERMINAL_VARS = ("TERM", "COLORTERM", "TMUX", "TMUX_PANE")  # from the window, n
 
 def launch(cfg: Config, state: State, tmux: Tmux, claude: Claude, spec: SessionSpec, purpose: str,
            turn_id: str | None = None) -> str:
-    """Start the group session in a new window. Returns the window id."""
-    watch, key = groups.parse_ref(spec.scope)
+    """Start the worker's session in a new window. Returns the window id."""
+    row = state.worker(spec.worker)
     folder = cfg.data_dir / "tmp"
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / f"window-{uuid.uuid4().hex}.json"
-    data = {"ref": spec.scope, "who": journal.who_from_env(spec.env), "cwd": str(spec.workdir),
+    data = {"worker": row["id"], "who": journal.who_from_env(spec.env), "cwd": str(spec.workdir),
             "args": claude.interactive_args(spec), "env": claude.env(spec)}
-    # The environment holds the watch's secrets: only this user may read the file, and the window deletes it.
+    # The environment holds the worker's credentials: only this user may read the file, and the window deletes it.
     with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as handle:
         json.dump(data, handle)
-    state.window_started(watch, key, purpose, turn_id)
-    return tmux.new_window(spec.scope, [sys.executable, "-m", "vahtovik", "window", str(path)], spec.workdir)
+    state.window_started(row["id"], purpose, turn_id)
+    title = f"{row['role']}/{row['key']}"
+    return tmux.new_window(row["id"], title, [sys.executable, "-m", "vahtovik", "window", str(path)], spec.workdir)
 
 
 def read_spec(path: Path) -> dict:
@@ -51,36 +52,35 @@ def read_spec(path: Path) -> dict:
 
 
 def run_window(cfg: Config, state: State, tmux: Tmux, data: dict) -> int:
-    """The program of a session window: hold the group lock while claude runs, then record how it ended."""
-    watch, key = groups.parse_ref(data["ref"])
+    """The program of a session window: hold the worker's lock while claude runs, then record how it ended."""
     env = {**data["env"], **{k: os.environ[k] for k in TERMINAL_VARS if k in os.environ}}
     # Ctrl-C belongs to claude. A handler, unlike SIG_IGN, is not passed on to claude.
     signal.signal(signal.SIGINT, lambda *_: None)
     try:
-        with groups.lock(cfg.group_dir(watch, key)):
+        with workers.lock(Path(data["cwd"])):
             code = subprocess.run(data["args"], cwd=data["cwd"], env=env).returncode
             screen = tmux.capture(os.environ["TMUX_PANE"]) if os.environ.get("TMUX_PANE") else ""
     except LockBusy:
-        code, screen = BUSY_EXIT, "another process is using the group"
-    state.window_ended(watch, key, code, screen)
+        code, screen = BUSY_EXIT, "another process is using the worker"
+    state.window_ended(data["worker"], code, screen)
     return code
 
 
-def exit_error(state: State, watch: str, key: str) -> str:
+def exit_error(state: State, worker_id: str) -> str:
     """Why a session window closed before the agent reported its status."""
-    record = state.window_record(watch, key)
+    record = state.window_record(worker_id)
     if not record or record["exit_code"] is None:
         return "the session window closed before the agent ran `vahtovik turn`"
     lines = [line.strip() for line in (record["exit_screen"] or "").splitlines() if line.strip()]
     if record["exit_code"] == BUSY_EXIT:
-        return "another process was using the group"
+        return "another process was using the worker"
     if record["exit_code"] == 0:
         return "claude exited before the agent ran `vahtovik turn`"
     return f"claude exited with code {record['exit_code']}" + (f": {' / '.join(lines[-3:])}" if lines else "")
 
 
-def age(state: State, watch: str, key: str) -> timedelta:
-    record = state.window_record(watch, key)
+def age(state: State, worker_id: str) -> timedelta:
+    record = state.window_record(worker_id)
     if not record or not record["started_at"]:
         return timedelta.max
     return datetime.now(timezone.utc) - datetime.fromisoformat(record["started_at"])

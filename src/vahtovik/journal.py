@@ -1,6 +1,6 @@
 """The journal: one short line per key event, in data/journal.log.
 
-    2026-10-17 14:03:40 run 20261017-140312 example/uv-0-13: Started group turn: 2 artifacts, resumed session d097ae50
+    2026-10-17 14:03:40 run 20261017-140312 uv-tracker/a3f9c2-uv-0-13: Started turn: 2 artifacts, resumed session d097ae50
 
 The second column says who wrote the line: a timer run, an interactive session, or a person at the command line.
 Modules write to the journal through ordinary `logging` loggers under "vahtovik".
@@ -32,7 +32,7 @@ def who_from_env(env: Mapping[str, str] | None = None) -> str:
     env = os.environ if env is None else env
     if env.get("VAHTOVIK_RUN"):
         return f"run {env['VAHTOVIK_RUN']}"
-    return "interactive" if env.get("VAHTOVIK_GROUP") else "manual"
+    return "interactive" if env.get("VAHTOVIK_WORKER") else "manual"
 
 
 class _Formatter(logging.Formatter):
@@ -65,7 +65,7 @@ def setup(cfg: Config, who: str | None = None, echo: bool = False) -> None:
 def read(journal: Path, count: int = 0, text: str = "", follow: bool = False,
          poll: float = 1.0, about: list[str] | None = None) -> Iterator[str]:
     """The last `count` lines that contain `text` (all of them if `count` is 0), and, with `about`, are about one
-    of these watches or channels. With `follow`, then keep yielding such lines as they are added."""
+    of these roles or channels. With `follow`, then keep yielding such lines as they are added."""
     data = journal.read_bytes() if journal.is_file() else b""
     position = data.rfind(b"\n") + 1  # an unfinished last line is read when it is finished
     matching = [line for line in data[:position].decode("utf-8", "replace").splitlines()
