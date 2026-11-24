@@ -39,13 +39,14 @@ def test_check_accepts_the_project(project, capsys):
 
 def test_a_test_project_keeps_links_and_leaves_real_credentials_out(tmp_path):
     """Every test project gets a copy of the knowledge layer of the project the tests run in. That project may link
-    skills that are kept elsewhere, and has real credentials."""
+    skills that are kept elsewhere, has real credentials, and may have shared skills of its own."""
     source, elsewhere = tmp_path / "knowledge", tmp_path / "elsewhere"
-    for folder in (source / "skills/own", elsewhere / "kept"):
+    for folder in (source / "skills/own", elsewhere / "kept", source / "shared/workers", source / "shared/added"):
         folder.mkdir(parents=True)
         (folder / "SKILL.md").write_text(f"---\nname: {folder.name}\ndescription: d\n---\nBody.\n")
     (source / "skills/kept").symlink_to(elsewhere / "kept", target_is_directory=True)
     (source / "skills/gone").symlink_to(tmp_path / "missing", target_is_directory=True)
+    (source / "shared/linked").symlink_to(elsewhere / "kept", target_is_directory=True)
     (source / "credentials").mkdir()
     (source / "credentials/example.env").write_text("# KEY=value\n")
     (source / "credentials/real.env").write_text("TOKEN=a-real-secret\n")
@@ -58,6 +59,7 @@ def test_a_test_project_keeps_links_and_leaves_real_credentials_out(tmp_path):
     assert (copy / "skills/gone").is_symlink() and not (copy / "skills/gone").exists()
     assert [p.name for p in (copy / "credentials").iterdir()] == ["example.env"]
     assert (copy / "skills/own/notes.env").is_file()
+    assert [p.name for p in (copy / "shared").iterdir()] == ["workers"]  # the project's own shared skills stay out
 
 
 def test_check_reports_skill_problems(project, capsys):

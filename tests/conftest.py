@@ -130,10 +130,13 @@ def project(tmp_path, monkeypatch) -> Project:
 def copy_knowledge(source: Path, target: Path) -> None:
     """Copy a project's knowledge layer for a test project. A link stays a link: a skill that is kept elsewhere is
     not copied with all it holds, and a link whose target is missing does not fail the copy, as vahtovik leaves such
-    a skill out. The project's real credentials stay out of the tests: of credentials/, only example.env is copied."""
-    credentials = source / "credentials"
+    a skill out. Two folders are copied in part:
+    - credentials/: only example.env, so the project's real credentials stay out of the tests;
+    - shared/: only vahtovik's own worker rules. A shared skill that the project added would be in every session of
+      every test, and the tests name the skills they expect."""
+    keep = {source / "credentials": "example.env", source / knowledge.SHARED: knowledge.WORKER_RULES}
     shutil.copytree(source, target, symlinks=True,
-                    ignore=lambda folder, names: [n for n in names if Path(folder) == credentials and n != "example.env"])
+                    ignore=lambda folder, names: [n for n in names if keep.get(Path(folder), n) != n])
 
 
 def _project(tmp_path, monkeypatch, socket: str) -> Project:
