@@ -54,7 +54,7 @@ Before these steps, a run lets the watchdog look after the worker sessions (see 
 
 `knowledge/README.md` gives the details and the contracts of the scripts.
 
-- **Shared skills**, `knowledge/shared/<skill>/`: every worker and every monitoring session has them. `knowledge/shared/vahtovik/SKILL.md` holds the rules of every worker; vahtovik also puts it in their system prompt.
+- **Shared skills**, `knowledge/shared/<skill>/`: every worker and every monitoring session has them. `knowledge/shared/vahtovik/SKILL.md` holds the rules of every worker; vahtovik also puts it in their system prompt. Claude Code keeps a session's system prompt as it was when the session was created, so when you change these rules, vahtovik tells each worker that exists already, in its next turn, to read the file again.
 - **Specialized skills**, `knowledge/skills/<skill>/`: only the sessions that name them have them:
   - a role names skills for all its workers;
   - `vahtovik worker spawn --skill` gives one worker more;
@@ -138,17 +138,17 @@ When the agent stops, Claude Code tells vahtovik what background work it still r
 
 A Claude Code hook does not let the agent stop before it runs the command. An automated turn counts as done only then; otherwise it is retried, up to 3 attempts. The statuses are `idle`, `running`, `finished`, `scheduled`, `waiting`, `background`, `maintenance` (set by the watchdog, below) and `failed`.
 
-A run starts a scheduled turn once its time comes, or earlier when new artifacts or messages come, and the agent gets the reason in its prompt. A failed scheduled turn is tried again at the next runs, up to 3 attempts. You or the vahtovik agent can schedule a worker too: `vahtovik worker schedule <worker> --after 6h|--at 08:00|--off`.
+A run starts a scheduled turn once its time comes, and the agent gets the reason in its prompt. New artifacts or messages give the worker a turn earlier, and its scheduled turn stays. A worker has one scheduled turn at most, and nothing repeats by itself: a worker that checks something again and again ends each of those turns with `scheduled` again, as its role's rules say. A failed scheduled turn is tried again at the next runs, up to 3 attempts. You or the vahtovik agent can schedule a worker too: `vahtovik worker schedule <worker> --after 6h|--at 08:00|--off`.
 
 ### The inbox
 
-`vahtovik tell <worker>` and `vahtovik worker spawn --message` put a message into the worker's inbox. If the worker's window is open, its agent is idle and nobody is looking at it, vahtovik types the message in at once. Otherwise the next run starts a turn with it, together with new artifacts and a scheduled turn that is due; that turn counts toward `parallel_turns`. The agent gets each message with who sent it: "Message from the person, sent through vahtovik:" or "Message from worker a3f9c2-uv-0-13 (your parent), sent through vahtovik:". A message whose turn fails is tried again in the next turn, up to 3 attempts.
+`vahtovik tell <worker>` and `vahtovik worker spawn --message` put a message into the worker's inbox. If the worker's window is open, its agent is idle and nobody is looking at it, vahtovik types the message in at once. Otherwise the next run starts a turn with it, together with new artifacts and a scheduled turn that is due; that turn counts toward `parallel_turns`. The agent gets each message with who sent it: "Message from the person, sent through vahtovik:" or "Message from worker a3f9c2-uv-0-13 (your parent), sent through vahtovik:". A message whose turn fails is tried again in the next turn, up to 3 attempts. vahtovik types nothing into a window that started less than 20 seconds ago, and no message longer than 4000 characters: those wait for a later run, or for the worker's next turn. A turn's prompt that is too long for a program argument goes to the file `turn-prompt.md` in the worker's folder, and the agent is told to read it.
 
 ### Workers and other workers
 
 Workers see each other and work together:
 
-- `vahtovik worker list [--role R] [--status S] [--tree] [--all]` shows every worker: its status, its parent, and the summary of its last turn, which says what it does. `--tree` shows children under their parents, and `--all` includes archived workers. `vahtovik worker show <worker>` shows one worker in full, with its children, its artifacts and messages, and the path of its `context.md`, which any worker may read.
+- `vahtovik worker list [--role R] [--status S] [--tree] [--all]` shows every worker: its status, who spawned it, and what it does: the summary of its last turn, or its task before its first turn has ended. `--tree` shows children under their parents, and `--all` includes archived workers. `vahtovik worker show <worker>` shows one worker in full, with its children, its artifacts and messages, and the path of its `context.md`, which any worker may read.
 - A worker spawns a worker with `vahtovik worker spawn <role>/<key> --message "<the task>"`, and becomes its parent. With `--report-back`, vahtovik tells the parent each time the child ends a turn as `finished` or `waiting`, or fails and vahtovik stops retrying: the child's status and summary go into the parent's inbox, and the parent gets a turn for them.
 - A worker tells another worker something with `vahtovik tell <worker>`, and gives it artifacts with `vahtovik artifact add --worker <worker>`.
 
@@ -377,11 +377,11 @@ A worker is `<id>`, `<id>-<key>` or `<role>/<key>`.
 
 | Command | What it does |
 |---|---|
-| `run [--poller P] [--stage input\|monitor\|workers\|deliver] [--force] [--dry-run]` | one cycle; `--force` reads every input channel and monitors every source, whatever their schedules; `--poller` monitors only that poller, starts only the turns of its roles' workers, and leaves the input channels out; `--dry-run` makes vahtovik's channels print instead of send |
+| `run [--poller P] [--stage input\|monitor\|workers\|deliver] [--force] [--dry-run]` | one cycle; `--force` reads every input channel and monitors every source, whatever their schedules; `--poller` monitors only that poller, starts only the turns of its roles' workers, and leaves the input channels out; `--dry-run` makes vahtovik's channels, and the `send` scripts that the run's workers report with, print instead of send |
 | `open WORKER [--new-session]` | show a worker's session window, starting the session if it is not running |
 | `turn finished\|scheduled\|waiting\|background [--importance I] [--summary S] [--question Q ...] [--reason R] [--after 6h] [--at 08:00] [--check-after 30m]` | for agents: end a turn with the worker's status |
 | `worker spawn ROLE/KEY [--title T] [--skill S ...] [--message M] [--report-back]` | spawn a worker; inside a worker, that worker is its parent; with a message, it starts with it at the next run |
-| `worker list [--role R] [--status S] [--tree] [--all]` | the workers: status, parent, and the summary of their last turn |
+| `worker list [--role R] [--status S] [--tree] [--all]` | the workers: status, who spawned them, and what they do |
 | `worker show WORKER` | all about one worker: status, schedule, parent, children, artifacts, messages, latest turn, folder |
 | `worker merge B [C ...] --into A` | merge workers into worker A, which keeps its role: their artifacts, turns, costs and waiting messages move to A, their record goes into A's Work log, they are archived, and their keys lead to A from then on |
 | `worker split A --artifact ID [--artifact ID ...] --into C [--title T]` | move artifacts of worker A to worker C, existing or new as `<role>/<key>`; they wait for C's next turn |

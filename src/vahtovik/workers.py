@@ -13,6 +13,7 @@ Every command takes a worker as <id>, <id>-<key> or <role>/<key>.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -37,6 +38,10 @@ LOCK_NAME = ".lock"
 NEW_FOR_EXISTING = (
     "Note: this is a new session for an existing worker; the earlier session was lost or reset. "
     "Read CLAUDE.md, context.md and the files in artifacts/ to rebuild your picture before you start."
+)
+RULES_CHANGED = (
+    "Note: the rules of every vahtovik worker changed since your session started. Read `{path}` now. Where it "
+    "differs from the rules in your system prompt, the file is right."
 )
 OPEN_NEW_PROMPT = (
     "A person opened this worker's session. Read CLAUDE.md and context.md, then tell them in a few lines "
@@ -234,6 +239,23 @@ def write_claude_md(cfg: Config, state: State, row, found: list[knowledge.Skill]
     (folder(cfg, row) / "CLAUDE.md").write_text(text)
 
 
+def rules_hash(cfg: Config) -> str:
+    return hashlib.sha256(knowledge.worker_rules(cfg).body.encode()).hexdigest()[:16]
+
+
+def rules_note(cfg: Config, state: State, row, spec: SessionSpec) -> str | None:
+    """For a turn's prompt: a note that the worker rules changed since the worker's session was created.
+
+    Claude Code keeps a session's system prompt as it was at its creation, and ignores a new one on resume. So a
+    resumed session never sees a later change of knowledge/shared/vahtovik in its system prompt: the turn that
+    follows the change tells the agent to read the file, once."""
+    current = rules_hash(cfg)
+    if spec.mode != "resume" or row["rules_hash"] == current:
+        return None
+    state.set_rules_hash(row["id"], current)
+    return RULES_CHANGED.format(path=knowledge.worker_rules(cfg).skill_md) if row["rules_hash"] else None
+
+
 def spec_for(cfg: Config, claude: Claude, state: State, row, force_new: bool = False) -> tuple[SessionSpec, str | None]:
     """Prepare the worker's folder and build its session spec. Returns (spec, note for the prompt or None)."""
     found = prepare(cfg, state, row)
@@ -256,6 +278,7 @@ def spec_for(cfg: Config, claude: Claude, state: State, row, force_new: bool = F
     spec.mode, spec.session_id = "new", str(uuid.uuid4())
     spec.name = f"vahtovik: {label(row)}"
     spec.system_prompt = knowledge.worker_rules(cfg).body
+    state.set_rules_hash(row["id"], rules_hash(cfg))  # the new session gets these rules, for all its life
     return spec, NEW_FOR_EXISTING if stored else None
 
 

@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from vahtovik import artifacts, knowledge, watchdog, windows, workers
+from vahtovik import artifacts, inbox, knowledge, watchdog, windows, workers
 from vahtovik import config as config_mod
 from vahtovik.claude_session import Claude
 from vahtovik.stages import worker_turn
@@ -122,6 +122,7 @@ def project(tmp_path, monkeypatch) -> Project:
     socket = f"vahtovik-test-{os.getpid()}-{tmp_path.name}"
     monkeypatch.setattr(Tmux, "use_systemd_run", False)
     monkeypatch.setattr(watchdog, "GRACE", timedelta(0))
+    monkeypatch.setattr(inbox, "STARTING", timedelta(0))
     yield _project(tmp_path, monkeypatch, socket)
     subprocess.run(["tmux", "-L", socket, "kill-server"], capture_output=True)
 

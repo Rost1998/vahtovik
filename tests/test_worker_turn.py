@@ -169,3 +169,21 @@ def test_a_failed_turn_gives_its_messages_back(project):
     project.queue(turn_answer([work_log()]))
     _turns(project)
     assert "Do it." in project.calls()[1]["prompt"]
+
+
+def test_a_long_prompt_goes_to_a_file_and_a_long_message_is_not_typed(project, monkeypatch):
+    cfg, state, _ = project.load()
+    row = worker(cfg, state)
+    long_text = "Check this. " * 6000  # over 60 kilobytes
+    inbox.send(state, row, "person", long_text)
+    project.queue(turn_answer([work_log()]))
+    cfg, state = _turns(project)
+    prompt = project.calls()[0]["prompt"]
+    path = workers.folder(cfg, row) / "turn-prompt.md"
+    assert prompt.startswith(f"The prompt of this turn is long, so vahtovik wrote it to the file `{path}`.")
+    assert path.read_text().startswith("# Turn") and "Check this. Check this." in path.read_text()
+    assert state.worker(row["id"])["status"] == "finished"
+
+    tmux = Tmux(cfg)  # the window is still open, its agent idle
+    assert "queued" in operations.tell(cfg, state, tmux, [row["id"]], "Again. " * 1000)[0]
+    assert not worker_turn.can_start(cfg, state, tmux) and len(state.pending_messages(row["id"], 3)) == 1

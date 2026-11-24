@@ -3,7 +3,7 @@ from datetime import timedelta
 import pytest
 from conftest import ROLE, artifact, give, run_turns, turn_answer, work_log, worker
 
-from vahtovik import cli, operations, watchdog, worker_status, workers
+from vahtovik import cli, inbox, operations, watchdog, worker_status, workers
 from vahtovik.config import ConfigError
 from vahtovik.stages import worker_turn
 from vahtovik.tmux import Tmux
@@ -123,8 +123,8 @@ def test_workers_see_each_other_from_inside(project, monkeypatch, capsys):
     monkeypatch.setenv("VAHTOVIK_WORKER", parent["id"])
     assert cli.main(["worker", "list", "--tree"]) == 0
     out = capsys.readouterr().out.splitlines()
-    assert out[0].startswith(f"{parent['id']}-p · r1 · idle · parent none · P")
-    assert out[2].startswith(f"  {child['id']}-c · r1 · idle · parent {parent['id']}-p · Child")
+    assert out[0] == f"{parent['id']}-p · r1 · idle · spawned by the person · P"
+    assert out[2] == f"  {child['id']}-c · r1 · idle · spawned by worker {parent['id']}-p · Child"
     assert out[3] == "    Reading the changelog."
     assert cli.main(["worker", "show", "r1/c"]) == 0
     shown = capsys.readouterr().out
@@ -132,6 +132,57 @@ def test_workers_see_each_other_from_inside(project, monkeypatch, capsys):
     assert str(workers.context_md(cfg, child)) in shown
     assert cli.main(["worker", "show", parent["id"]]) == 0
     assert f"children: {child['id']}-c (idle)" in capsys.readouterr().out
+
+
+def test_a_worker_before_its_first_turn_shows_its_task(project):
+    cfg, state, _ = project.load()
+    operations.spawn(cfg, state, "r1/research", message="Find the\ndocs of uv 0.13.")
+    row = state.active_worker("r1", "research")
+    assert operations.list_workers(cfg, state)[1] == "  task: Find the docs of uv 0.13."
+    assert "  what it does: task: Find the docs of uv 0.13." in operations.show(cfg, state, row["id"])
+    state.set_summary(row["id"], "The docs are found.")
+    assert operations.list_workers(cfg, state)[1] == "  The docs are found."
+
+
+def test_a_resumed_worker_is_told_once_that_the_worker_rules_changed(project):
+    give(project, artifact("a1", "g"))
+    project.queue(turn_answer([work_log()]))
+    cfg, state = _turns(project)
+    row = state.active_worker("r1", "g")
+    assert row["rules_hash"] == workers.rules_hash(cfg)
+    give(project, artifact("a2", "g"))
+    project.queue(turn_answer([work_log("Second.")]))
+    _turns(project, "run2")
+    assert "the rules of every vahtovik worker changed" not in project.calls()[1]["prompt"]
+
+    rules = cfg.knowledge_dir / "shared/vahtovik/SKILL.md"
+    rules.write_text(rules.read_text() + "\nA new rule.\n")
+    for number, told in ((3, True), (4, False)):  # the turn after the change says so, the next one does not
+        give(project, artifact(f"a{number}", "g"))
+        project.queue(turn_answer([work_log(f"Turn {number}.")]))
+        _turns(project, f"run{number}")
+        call = project.calls()[-1]
+        assert "--resume" in call["args"]
+        assert (f"the rules of every vahtovik worker changed since your session started. Read `{rules}` now."
+                in call["prompt"]) is told
+
+
+def test_nothing_is_typed_into_a_window_that_has_just_started(project, monkeypatch):
+    give(project, artifact("a1", "g"))
+    project.queue(turn_answer([work_log()]))
+    cfg, state, claude = project.load()
+    tmux = Tmux(cfg)
+    run_turns(cfg, state, claude, tmux)  # the window stays open, its agent idle
+    row = state.active_worker("r1", "g")
+    monkeypatch.setattr(inbox, "STARTING", timedelta(hours=1))
+    assert operations.tell(cfg, state, tmux, [row["id"]], "One more thing.") == [
+        f"{row['id']}-g: queued: its window is busy or just started; vahtovik types the message in at a later run"]
+    assert not worker_turn.can_start(cfg, state, tmux) and state.pending_messages(row["id"], 3)
+    monkeypatch.setattr(inbox, "STARTING", timedelta(0))
+    assert worker_turn.can_start(cfg, state, tmux)
+    project.queue({"mode": "interactive", "actions": [{"run": ["vahtovik", "turn", "finished"]}]})
+    worker_turn.run(cfg, state, claude, tmux, "run2")
+    assert state.row("SELECT how FROM inbox")["how"] == "typed"
 
 
 def test_memory_belongs_to_the_role(project, monkeypatch):

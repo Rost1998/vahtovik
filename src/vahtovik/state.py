@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS source_state (
 CREATE TABLE IF NOT EXISTS workers (
     id TEXT PRIMARY KEY, role TEXT, key TEXT, title TEXT, skills TEXT DEFAULT '[]',
     spawned_by TEXT, parent TEXT, report_back INTEGER DEFAULT 0, created_at TEXT, updated_at TEXT,
-    session_id TEXT, session_created_at TEXT,
+    session_id TEXT, session_created_at TEXT, rules_hash TEXT,
     status TEXT DEFAULT 'idle', status_at TEXT, status_reason TEXT, questions TEXT, summary TEXT,
     prompt_at TEXT, idle INTEGER DEFAULT 1, stop_blocks INTEGER DEFAULT 0, notified_at TEXT,
     check_after TEXT, checked_at TEXT,
@@ -202,6 +202,11 @@ class State:
         self.execute("UPDATE workers SET session_id = ?, session_created_at = ? WHERE id = ?",
                      session_id, utc_iso(), worker_id)
         self.execute("INSERT OR IGNORE INTO session_costs (session_id, worker) VALUES (?, ?)", session_id, worker_id)
+
+    def set_rules_hash(self, worker_id: str, rules_hash: str) -> None:
+        """Which worker rules the worker's session knows: Claude Code keeps a session's system prompt as it was
+        when the session was created (see workers.spec_for)."""
+        self.execute("UPDATE workers SET rules_hash = ? WHERE id = ?", rules_hash, worker_id)
 
     def archive_worker(self, worker_id: str, reason: str, merged_into: str | None = None) -> None:
         self.execute("UPDATE workers SET archived_at = ?, archive_reason = ?, merged_into = ?, scheduled_at = NULL, "

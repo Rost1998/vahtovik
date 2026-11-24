@@ -54,7 +54,7 @@ Monitoring sessions write only inside their source's state folder. They follow o
 ## 4. Check
 
 1. `uv run vahtovik check`, and fix every problem it reports.
-2. Ask the person before `uv run vahtovik run --poller <poller> --force --dry-run`. It starts real AI sessions, which cost money, and the workers it spawns start their turns in the same run. `--dry-run` only stops vahtovik's channels from sending; workers' own reports go out as their rules say.
+2. Ask the person before `uv run vahtovik run --poller <poller> --force --dry-run`. It starts real AI sessions, which cost money, and the workers it spawns start their turns in the same run. `--dry-run` makes vahtovik's channels print instead of send. The workers' sessions get `VAHTOVIK_DRY_RUN=1` too, so the `send` scripts they report with (`file`, `telegram`, and any skill that follows the send contract) also print instead of send; a script that ignores it sends for real.
 3. `uv run vahtovik log <poller>`, `uv run vahtovik status --role <role>` and `uv run vahtovik worker list --role <role>` show the results.
 
 If an interval is shorter than the timer period (`vahtovik install-timer --every`, 1 minute by default), tell the person: a source can only be monitored as often as the timer fires. With `at`, monitoring starts at the first timer fire at or after each time.

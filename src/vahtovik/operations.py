@@ -70,9 +70,19 @@ def status_text(row) -> str:
     return text
 
 
+def doing(state: State, row) -> str:
+    """What a worker does, in one line: the summary of its last ended turn, or, before its first turn has ended,
+    the task it was spawned with."""
+    if row["summary"]:
+        return " ".join(row["summary"].split())
+    task = state.row("SELECT text FROM inbox WHERE worker = ? ORDER BY id LIMIT 1", row["id"])
+    return f"task: {' '.join(task['text'].split())}" if task else "(no turn has ended yet)"
+
+
 def list_workers(cfg: Config, state: State, role: str | None = None, status: str | None = None,
                  tree: bool = False, archived: bool = False) -> list[str]:
-    """One line per worker, and a line with the summary of its last turn: what it does."""
+    """Two lines per worker: its name, role, status, who spawned it (a worker that spawned it is its parent) and
+    title; then what it does."""
     if role:
         cfg.role(role)
     roles = [role] if role else (None if cfg.scope is None else cfg.scope)
@@ -82,11 +92,9 @@ def list_workers(cfg: Config, state: State, role: str | None = None, status: str
     by_id = {r["id"]: r for r in rows}
 
     def lines_for(row, depth: int) -> list[str]:
-        parent = state.worker(row["parent"]) if row["parent"] else None
         head = (f"{'  ' * depth}{workers.name(row)} · {row['role']} · {status_text(row)} · "
-                f"parent {workers.name(parent) if parent else 'none'} · {row['title']}")
-        summary = row["summary"] or "(no turn has ended yet)"
-        return [head, f"{'  ' * depth}  {summary[:300]}"]
+                f"spawned by {workers.describe_spawner(state, row['spawned_by'])} · {row['title']}")
+        return [head, f"{'  ' * depth}  {doing(state, row)[:300]}"]
 
     if not tree:
         return [line for row in rows for line in lines_for(row, 0)]
@@ -123,7 +131,7 @@ def show(cfg: Config, state: State, ref: str) -> list[str]:
     lines += [f"  open question: {q}" for q in questions]
     if row["scheduled_at"]:
         lines.append(f"  scheduled turn: {_ago(row['scheduled_at'])}: {row['scheduled_reason']}")
-    lines.append(f"  last summary: {row['summary'] or '(no turn has ended yet)'}")
+    lines.append(f"  what it does: {doing(state, row)}")
     lines.append(f"  spawned by {workers.describe_spawner(state, row['spawned_by'])} on {_ago(row['created_at'])}; "
                  f"parent: {workers.name(parent) if parent else 'none'}"
                  + ("; reports back to its parent" if row["report_back"] and parent else ""))
@@ -132,7 +140,10 @@ def show(cfg: Config, state: State, ref: str) -> list[str]:
                  + "; messages: " + (", ".join(f"{n} {s}" for s, n in sorted(messages.items())) or "none"))
     if turn:
         how = "not finished" if not turn["finished_at"] else ("finished" if turn["ok"] else f"failed: {turn['error']}")
-        lines.append(f"  latest turn: {turn['id']}, started {_ago(turn['started_at'])}, {how}")
+        about = (f"{plural(len(json.loads(turn['artifact_ids'] or '[]')), 'artifact')}, "
+                 f"{plural(len(json.loads(turn['message_ids'] or '[]')), 'message')}"
+                 + (", scheduled" if turn["scheduled_for"] else ""))
+        lines.append(f"  latest turn: {turn['id']}, started {_ago(turn['started_at'])}, for {about}, {how}")
     lines.append(f"  session: {row['session_id'] or 'none yet'}; updated {_ago(row['updated_at'])}")
     if row["merged_into"]:
         target = state.worker(row["merged_into"])
@@ -407,7 +418,8 @@ def tell(cfg: Config, state: State, tmux: Tmux, refs: list[str], message: str,
             lines.append(f"{workers.name(row)}: queued: a person is looking at its window; vahtovik types the "
                          "message in once they leave")
         elif window:
-            lines.append(f"{workers.name(row)}: queued: its agent is busy; it gets the message when it is idle")
+            lines.append(f"{workers.name(row)}: queued: its window is busy or just started; vahtovik types the "
+                         "message in at a later run")
         else:
             lines.append(f"{workers.name(row)}: queued: it gets the message in a turn at the next run")
     return lines

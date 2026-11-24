@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -167,8 +168,9 @@ def test_tell_queues_the_message_or_types_it_into_an_open_window(project, monkey
         f"{name}: typed the message into its open window"]
     typed = Path(f"{project.log_file}.typed")
     until(lambda: typed.exists() and "1.1 notes" in typed.read_text())
-    assert json.loads(typed.read_text().splitlines()[-1])["line"] == (
-        "Message from the person, sent through vahtovik: And the 1.1 notes.")
+    line = json.loads(typed.read_text().splitlines()[-1])["line"]
+    assert re.fullmatch(r"Message from the person, sent through vahtovik: \[\d{4}-\d\d-\d\d \d\d:\d\d\] "
+                        r"And the 1\.1 notes\.", line)
 
     monkeypatch.setattr(Tmux, "windows", lambda self: [Window(window.id, row["id"], 1)])
     assert "a person is looking at its window" in operations.tell(cfg, state, tmux, [name], "Hi.")[0]

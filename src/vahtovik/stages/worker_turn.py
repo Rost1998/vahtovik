@@ -23,7 +23,13 @@ log = logging.getLogger(__name__)
 
 MAX_ATTEMPTS = 3
 SCHEDULED_NOTE = ("This is a scheduled turn: {reason}. Do that check by your rules, even if there are no new "
-                  "artifacts.")
+                  "artifacts. It was your only scheduled turn. If what you check for has not happened yet, or your "
+                  "rules want this check again, end this turn with `vahtovik turn scheduled --after ...` or "
+                  "`--at ...`: `finished` means that you need no more checks.")
+PROMPT_LIMIT = 60_000  # bytes. The prompt is one argument of `claude`, and Linux allows 128 KiB for one argument
+PROMPT_FILE = "turn-prompt.md"
+LONG_PROMPT = ("The prompt of this turn is long, so vahtovik wrote it to the file `{path}`. Read the whole file now: "
+               "it is your prompt for this turn, from vahtovik. Follow it as if it were written here.")
 
 
 def run(cfg: Config, state: State, claude: Claude, tmux: Tmux, run_id: str,
@@ -76,8 +82,7 @@ def can_start(cfg: Config, state: State, tmux: Tmux, roles: list[str] | None = N
             continue
         window = open_windows.get(worker_id)
         if window:
-            if state.pending_messages(worker_id, MAX_ATTEMPTS) and not window.clients and row["idle"] \
-                    and row["status"] != "maintenance":
+            if inbox.typed_text(state, row, window):
                 return True
         elif state.working_turns() < cfg.claude.parallel_turns and not workers.is_busy(cfg, row):
             return True
@@ -108,7 +113,8 @@ def turn(cfg: Config, state: State, claude: Claude, tmux: Tmux, row, run_id: str
     except (ConfigError, knowledge.SkillError) as exc:
         fail(cfg, state, state.turn(turn_id), str(exc), 0)
         return None
-    notes = [note, SCHEDULED_NOTE.format(reason=scheduled) if scheduled else None]
+    notes = [note, workers.rules_note(cfg, state, row, spec),
+             SCHEDULED_NOTE.format(reason=scheduled) if scheduled else None]
     spec.prompt = render(
         "worker_turn.md",
         name=workers.name(row), run_id=run_id, turn_id=turn_id, now=now,
@@ -117,6 +123,9 @@ def turn(cfg: Config, state: State, claude: Claude, tmux: Tmux, row, run_id: str
         role_rules=role.body or "(the role has no rules)", skills=knowledge.listing(found),
         memory=workers.memory_text(cfg, row), schedule=workers.schedule_text(row),
     )
+    if len(spec.prompt.encode()) > PROMPT_LIMIT:  # a large memory, or long messages
+        (spec.workdir / PROMPT_FILE).write_text(spec.prompt)
+        spec.prompt = LONG_PROMPT.format(path=spec.workdir / PROMPT_FILE)
     spec.env.update(VAHTOVIK_TURN=turn_id, VAHTOVIK_RUN=run_id)
     state.prompt_submitted(row["id"])  # running until the agent reports its status
     try:

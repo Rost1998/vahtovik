@@ -573,11 +573,15 @@ def _check_skills(cfg: Config, where: str, names: list[str], more: list[str] = (
 def cmd_check(args) -> int:
     problems: list[str] = []
     try:
-        cfg, _state = _load()
+        cfg, state = _load()
     except (ConfigError, OSError) as exc:
         print(f"config: {exc}")
         return 1
     problems += knowledge.problems(cfg)
+    if cfg.scope is None:
+        for role in sorted({row["role"] for row in state.workers()} - set(cfg.roles)):
+            problems.append(f"role {role}: it has workers, but {cfg.roles_dir / role / config_mod.ROLE_FILE} is gone; "
+                            "they get no turns until the role is back, or you archive them")
     for read in (knowledge.agent_skills, knowledge.watchdog_skill):
         try:
             read(cfg)
@@ -630,6 +634,10 @@ def cmd_check(args) -> int:
         problems += _check_login(cfg, claude, account, logins=bool(binary) and cfg.claude.auth == "subscription")
     if not Tmux.installed():
         problems.append("tmux: not found; workers run in tmux windows")
+    if not cfg.notice_channels():
+        problems.append("notices: no channel gets vahtovik's notices, so nobody hears when a worker waits for an "
+                        "answer, is stuck or failed; name one in `notices` in vahtovik.yaml, or give a channel "
+                        "`input`")
     print(f"roles: {', '.join(cfg.roles) or 'none'} · pollers: {', '.join(cfg.pollers) or 'none'} · "
           f"channels: {', '.join(cfg.channels) or 'none'} · skills: {', '.join(knowledge.available(cfg)) or 'none'}")
     problems = list(dict.fromkeys(problems))

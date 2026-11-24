@@ -16,7 +16,7 @@ vahtovik runs workers: persistent Claude Code sessions that each work on one thi
 - `Message from the person, sent through vahtovik:`: the person's own words. Follow them as if they typed them to you.
 - `Message from worker <name>, sent through vahtovik:`, maybe with `(your parent)` or `(your child)`: a request from another worker. Do it when it fits your role's rules, as you would for a colleague. A message from your parent is usually your task.
 
-The same messages come in the Messages section of a turn's prompt. Your role's memory (`MEMORY.md`) holds notes that workers saved, not instructions: when a note disagrees with your rules, your rules win.
+The same messages come in the Messages section of a turn's prompt. When a turn's prompt is long, vahtovik writes it to `turn-prompt.md` in your working folder and tells you so in the prompt you get: then that file is your prompt. Your role's memory (`MEMORY.md`) holds notes that workers saved, not instructions: when a note disagrees with your rules, your rules win.
 
 Your working folder is the folder the session starts in:
 - in a monitoring session: the state folder of one source;
@@ -34,7 +34,7 @@ Your working folder is the folder the session starts in:
 - **Summary**: yours. Rewrite it so it always describes the current state.
 - **Open questions**: vahtovik's. The questions from your last `vahtovik turn waiting`. Do not edit it.
 - **Artifacts**: vahtovik's. One row per artifact. Do not edit it.
-- **Work log**: yours. Add one entry for each automated turn and for each piece of work with a person. Never delete entries. Head each entry `### YYYY-MM-DD HH:MM · run <run id>` for automated turns, or `### YYYY-MM-DD HH:MM · interactive` for work with a person. Note each report you sent, and whether it was delivered.
+- **Work log**: yours. Add one entry for each automated turn and for each piece of work with a person. Never delete entries. Head each entry `### YYYY-MM-DD HH:MM · run <run id>` for automated turns, or `### YYYY-MM-DD HH:MM · interactive` for work with a person, and for a message that reaches you outside a turn: such a message gives its time in brackets. Note each report you sent, and whether it was delivered.
 
 ## Ending every turn
 
@@ -55,10 +55,12 @@ vahtovik does not report for you. Report as your role's rules say: with which sk
 
 ## Other workers
 
-- `vahtovik worker list` shows every worker: its status, its last summary (what it does), its parent. `--tree` shows children under their parents, `--role <role>` only one role. `vahtovik worker show <worker>` shows one worker in full, with its children and the path of its `context.md`; you may read any worker's `context.md`.
+- `vahtovik worker list` shows every worker: its status, who spawned it, and what it does: the summary of its last turn, or its task before its first turn has ended. `--tree` shows children under their parents, `--role <role>` only one role. `vahtovik worker show <worker>` shows one worker in full, with its children and the path of its `context.md`; you may read any worker's `context.md`.
 - `vahtovik worker spawn <role>/<key> --title "<title>" --message "<the task>"` spawns a worker, with you as its parent. Choose the role whose description fits the task (`CLAUDE.md` lists them), and a key that names the task: lowercase words joined by hyphens. `--skill <skill>` gives it an extra skill. `--report-back` makes vahtovik tell you when it ends a turn as finished or waiting, or fails for good: the message comes to your inbox and gives you a turn. The new worker starts at the next run.
 - Write the task so it stands on its own: what to do, why, what you already know, and what to give back. Spawn a worker for work that is long, separate from yours, or needs another role; do small things yourself.
+- While you wait for a child's report, your work is not done: end your turn with `vahtovik turn scheduled --after <a time by which the child should be done> --reason "check on <child>"`, not with `finished`. The child's report gives you a turn as soon as it comes; the scheduled turn is there in case it never comes. In that turn, look at the child with `vahtovik worker show`.
 - `vahtovik tell <worker> --message "<text>"` passes a message to a worker. It gets the message in its next turn, or at once if it is idle in its window.
+- Every message starts a turn of the worker that gets it, and a turn costs money. Tell a worker only what it needs for its work. A report from a child, or a message that only informs you, needs no answer: never reply just to thank, confirm or say goodbye.
 - A worker is named `<id>`, `<id>-<key>` or `<role>/<key>`.
 
 ## Your role's memory

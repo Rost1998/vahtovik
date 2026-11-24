@@ -140,3 +140,16 @@ def test_a_channel_gets_its_own_credentials(project):
     cfg, _, _ = project.load()
     env = delivery.channel_env(cfg, cfg.channels["tg"], knowledge.load(cfg, "telegram"))
     assert env == {"TELEGRAM_BOT_TOKEN": "ops", "TELEGRAM_CHAT_ID": "-2"}
+
+
+def test_check_reports_workers_whose_role_is_gone(project, capsys):
+    cfg, state, _ = project.load()
+    state.add_worker("aaaaaa", "old-role", "g", "G", [], "person", None, False)
+    assert _problems(capsys) == [
+        f"problem: role old-role: it has workers, but {cfg.roles_dir}/old-role/ROLE.md is gone; they get no turns "
+        "until the role is back, or you archive them"]
+
+
+def test_check_wants_a_channel_for_notices(project, capsys):
+    project.config(lambda data: data.pop("notices"))
+    assert any(line.startswith("problem: notices: no channel gets vahtovik's notices") for line in _problems(capsys))
