@@ -1,4 +1,8 @@
-"""Send reports through channel skills' `send` scripts, record them, retry failures."""
+"""Send vahtovik's own messages through its channels' `send` scripts, record them, and retry failures.
+
+vahtovik's messages are its replies to the person's messages from input channels, the first short messages of
+channel agents, and its notices: the watchdog's, and the usage warnings. Workers never use vahtovik's channels:
+they report with their skills' scripts."""
 
 from __future__ import annotations
 
@@ -7,8 +11,8 @@ import os
 import subprocess
 from dataclasses import dataclass
 
-from . import context_file, skills
-from .config import Config
+from . import knowledge
+from .config import Channel, Config
 from .state import State
 from .util import tail
 
@@ -30,15 +34,22 @@ class SendResult:
     detail: str  # delivery identifier on success, error on failure
 
 
+def channel_env(cfg: Config, channel: Channel, skill: knowledge.Skill | None = None) -> dict[str, str]:
+    """The environment of a channel's scripts, over vahtovik's own: the credentials of its skill and its own
+    credentials, then its `env` settings."""
+    found = [skill] if skill else []
+    return {**knowledge.session_env(cfg, found, channel.credentials), **channel.env}
+
+
 def run_send_script(cfg: Config, channel: str, subject: str, body: str, dry_run: bool,
                     extra_env: dict[str, str] | None = None, plain: bool = False) -> SendResult:
     settings = cfg.channels[channel]
     try:
-        skill = skills.load(cfg.skills_dir, "channels", settings.skill)
-    except skills.SkillError as exc:
+        skill = knowledge.load(cfg, settings.skill)
+    except knowledge.SkillError as exc:
         return SendResult(False, str(exc))
-    env = {**os.environ, **settings.env, **(extra_env or {}),
-           "VAHTOVIK_CHANNEL": channel, "VAHTOVIK_SUBJECT": subject}
+    env = {**os.environ, **channel_env(cfg, settings, skill), **(extra_env or {}),
+           "VAHTOVIK_CHANNEL": channel, "VAHTOVIK_SUBJECT": subject, "VAHTOVIK_WORKER_NAME": ""}
     if dry_run:
         env["VAHTOVIK_DRY_RUN"] = "1"
     if plain:
@@ -56,55 +67,38 @@ def run_send_script(cfg: Config, channel: str, subject: str, body: str, dry_run:
 
 
 def kind(row) -> str:
-    """What a delivery is: a group's `report` or `notice`, or a `reply` or `acknowledgment` of a message from a
-    channel."""
+    """What a delivery is: a `reply` or `acknowledgment` to a message from a channel, or a `notice`."""
     if row["origin"] == ACKNOWLEDGMENT:
         return ACKNOWLEDGMENT
-    return "reply" if row["reply_to"] else ("notice" if row["origin"] == "notice" else "report")
+    return "reply" if row["reply_to"] else "notice"
 
 
-def scope(row) -> str:
-    """Whose delivery it is, for the journal: the group, or the channel of a reply."""
-    return f"{row['watch']}/{row['group_key']}" if row["group_key"] else row["channel"]
+def scope(state: State, row) -> str:
+    """Whose delivery it is, for the journal: the worker a notice is about, or the channel."""
+    if row["about"]:
+        worker = state.worker(row["about"])
+        if worker is not None:
+            return f"{worker['role']}/{worker['id']}-{worker['key']}"
+    return row["channel"]
 
 
 def attempt(cfg: Config, state: State, delivery_id: int, dry_run: bool):
     row = state.delivery(delivery_id)
-    extra = {"VAHTOVIK_WATCH": row["watch"], "VAHTOVIK_GROUP": row["group_key"]}
-    if row["reply_to"]:
-        extra["VAHTOVIK_REPLY_TO"] = row["reply_to"]
+    extra = {"VAHTOVIK_REPLY_TO": row["reply_to"]} if row["reply_to"] else {}
     result = run_send_script(cfg, row["channel"], row["subject"], row["body"], dry_run, extra,
                              plain=row["origin"] in PLAIN)
     state.update_delivery(delivery_id, result.ok, None if result.ok else result.detail,
                           result.detail if result.ok else None)
-    if row["group_key"]:
-        context = cfg.group_dir(row["watch"], row["group_key"]) / "context.md"
-        context_file.append(context, "Reports",
-                            context_file.report_line(row["channel"], result.ok, result.detail, row["subject"], dry_run))
     row = state.delivery(delivery_id)
     what = f"{kind(row)} {delivery_id} to {row['channel']}"
     what += f' "{row["subject"]}"' if row["subject"] else ""
     what += " (dry run)" if dry_run else ""
     if result.ok:
-        log.info("%s: Sent %s", scope(row), what)
+        log.info("%s: Sent %s", scope(state, row), what)
     else:
         tries = "not retried" if row["origin"] == ACKNOWLEDGMENT else f"attempt {row['attempts']} of {MAX_ATTEMPTS}"
-        log.error("%s: Failed %s (%s): %s", scope(row), what, tries, result.detail)
+        log.error("%s: Failed %s (%s): %s", scope(state, row), what, tries, result.detail)
     return row
-
-
-def report(cfg: Config, state: State, watch_name: str, key: str, channel: str, subject: str, body: str,
-           origin: str, turn_id: str | None = None, dry_run: bool = False):
-    watch = cfg.watch(watch_name)
-    if channel not in watch.channels:
-        allowed = ", ".join(watch.channels) or "none"
-        raise DeliveryError(f"channel {channel!r} is not allowed for watch {watch_name}; allowed: {allowed}")
-    if state.group(watch_name, key) is None:
-        raise DeliveryError(f"unknown group {watch_name}/{key}")
-    if not body.strip():
-        raise DeliveryError("the message body is empty")
-    delivery_id = state.add_delivery(watch_name, key, channel, subject, body, origin, turn_id)
-    return attempt(cfg, state, delivery_id, dry_run)
 
 
 def reply(cfg: Config, state: State, channel: str, subject: str, body: str, reply_to: str, origin: str = "reply",
@@ -113,16 +107,17 @@ def reply(cfg: Config, state: State, channel: str, subject: str, body: str, repl
     from vahtovik itself, and ACKNOWLEDGMENT the agent's first short message, plain too."""
     if not body.strip():
         raise DeliveryError("the reply is empty")
-    delivery_id = state.add_delivery("", "", channel, subject, body, origin, None, reply_to)
+    delivery_id = state.add_delivery(channel, subject, body, origin, "", reply_to)
     return attempt(cfg, state, delivery_id, dry_run)
 
 
-def notice(cfg: Config, state: State, channel: str, subject: str, body: str, dry_run: bool = False):
-    """A plain message from vahtovik itself that belongs to no group and answers no message, such as a warning
-    that the Claude plan's usage limits fill up. Failed ones are retried like reports."""
+def notice(cfg: Config, state: State, channel: str, subject: str, body: str, about: str = "",
+           dry_run: bool = False):
+    """A plain message from vahtovik itself that answers no message: a notice `about` a worker (its id), or a
+    warning about nothing in particular, such as the Claude plan's usage limits. Failed ones are retried."""
     if channel not in cfg.channels:
         raise DeliveryError(f"unknown channel {channel!r}")
-    delivery_id = state.add_delivery("", "", channel, subject, body, "notice", None)
+    delivery_id = state.add_delivery(channel, subject, body, "notice", about)
     return attempt(cfg, state, delivery_id, dry_run)
 
 

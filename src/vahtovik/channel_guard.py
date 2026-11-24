@@ -1,5 +1,6 @@
 """The guard of a limited input channel: a Claude Code PreToolUse hook that allows its agent to read only the
-rules and the allowed watches, and to run only the channel's vahtovik commands. Everything else is denied.
+rules, the knowledge layer without its credentials, and the allowed roles and their workers, and to run only the
+channel's vahtovik commands. Everything else is denied.
 
 Only the sessions of limited channels get it (channel_input.answer). They run with `--permission-mode dontAsk` and
 only the tools in TOOLS, so a tool call that the guard does not allow is denied by Claude Code too."""
@@ -30,14 +31,16 @@ def hooks(channel: str) -> dict:
 
 
 def readable(cfg: Config, channel: Channel) -> list[Path]:
-    """The files and folders the channel's agent may read: the rules, the schemas and its watches, never a .env
-    file."""
-    paths = [cfg.skills_dir, cfg.root / "README.md", cfg.root / "CLAUDE.md", schema_path("artifact").parent]
-    if channel.input.watches is None:
-        return paths + [cfg.watches_dir, cfg.data_dir / "watches"]
-    for watch in channel.input.watches:
-        paths += [cfg.watches_dir / watch, cfg.data_dir / "watches" / watch]
-    return paths
+    """The files and folders the channel's agent may read: the rules, the knowledge layer, the schemas, and its
+    roles, their pollers and their workers; never credentials or .env files."""
+    paths = [cfg.skills_dir, cfg.knowledge_dir, cfg.root / "README.md", cfg.root / "CLAUDE.md",
+             schema_path("artifact").parent]
+    if channel.input.roles is None:
+        return paths + [cfg.roles_dir, cfg.pollers_dir, cfg.workers_dir, cfg.archive_dir]
+    for role in channel.input.roles:
+        paths += [cfg.roles_dir / role, cfg.workers_dir / role, cfg.archive_dir / role]
+    pollers = [p for p in cfg.pollers.values() if set(p.roles) & set(channel.input.roles)]
+    return paths + [p.dir for p in pollers]
 
 
 def commands_text(channel: Channel) -> str:
@@ -105,17 +108,20 @@ def _path(cfg: Config, channel: Channel, tool: str, given: object, cwd: Path) ->
     if not given:
         return False, f"This channel is limited: give {tool} a path inside {where}."
     path = (cwd / Path(str(given)).expanduser()).resolve()
-    if _is_env(path):
-        return False, "This channel may not read .env files: they hold secrets."
+    credentials = cfg.credentials_dir.resolve()
+    if _is_env(path) or path == credentials or credentials in path.parents:
+        return False, "This channel may not read credentials or .env files: they hold secrets."
     if not any(path == p.resolve() or p.resolve() in path.parents for p in allowed):
-        return False, f"This channel may read only {where}, never .env files."
-    if tool != "Read" and path.is_dir() and any(_is_env(p) for p in path.rglob(".env*")):
-        return False, f"{path} holds a .env file, so {tool} may not search it: give a folder or file inside it."
+        return False, f"This channel may read only {where}, never credentials or .env files."
+    if tool != "Read" and path.is_dir() and (path in credentials.parents or any(_is_env(p) for p in path.rglob("*"))):
+        return False, (f"{path} holds credentials or a .env file, so {tool} may not search it: give a folder or "
+                       "file inside it.")
     return True, "inside what the channel may read"
 
 
 def _is_env(path: Path) -> bool:
-    return path.name == ".env" or path.name.startswith(".env.")
+    """A file of secrets: .env, .env.<something>, or <name>.env like the files of knowledge/credentials."""
+    return path.name == ".env" or path.name.startswith(".env.") or path.name.endswith(".env")
 
 
 def answer(allowed: bool, reason: str) -> dict:

@@ -3,7 +3,7 @@
 At the start of a run, once `usage.every` has passed, vahtovik asks Claude Code how full the plan's limits are
 (Claude.plan_usage): the 5-hour limit, the weekly limit for all models, and the weekly limits of single models.
 Each limit gets one warning at each percent of `usage.warn_at` that it passes, until it resets. A limit that passes
-several percents between two checks gets one warning, at the highest. The warnings go to `usage.channels`, by
+several percents between two checks gets one warning, at the highest. The warnings go to the `notices` channels, by
 default to every input channel that is not limited. The default login and each account of `claude.accounts` have
 limits of their own, and each is checked on its own.
 """
@@ -70,13 +70,6 @@ def meters(rate_limits: dict) -> list[Meter]:
     return [m for m in found if m]
 
 
-def channels(cfg: Config) -> list[str]:
-    """Where the warnings go: `usage.channels`, or every input channel that is not limited."""
-    if cfg.usage.channels is not None:
-        return cfg.usage.channels
-    return [c.name for c in cfg.channels.values() if c.input and not c.input.limited]
-
-
 def logins(cfg: Config) -> list[str | None]:
     """The logins whose limits vahtovik checks: the default login (None), then each account."""
     return [None, *cfg.claude.accounts] if cfg.claude.auth == "subscription" else []
@@ -122,12 +115,13 @@ def _check(cfg: Config, state: State, claude: Claude, account: str | None, dry_r
     warnings = _warnings(cfg, state, account, found, now)
     if not warnings:
         return
-    targets = channels(cfg)
+    targets = cfg.notice_channels()
     if not targets:
-        log.warning("Skipped Claude usage warning%s: no channel to send it to; see usage.channels", _of(account))
+        log.warning("Skipped Claude usage warning%s: no channel to send it to; see notices in vahtovik.yaml",
+                    _of(account))
     subject = f"{SUBJECT}, account {account}" if account else SUBJECT
     for channel in targets:
-        delivery.notice(cfg, state, channel, subject, "\n".join(warnings), dry_run)
+        delivery.notice(cfg, state, channel, subject, "\n".join(warnings), dry_run=dry_run)
 
 
 def _warnings(cfg: Config, state: State, account: str | None, found: list[Meter], now: datetime) -> list[str]:

@@ -1,8 +1,8 @@
-"""What group sessions cost, and when.
+"""What worker sessions cost, and when.
 
 Claude Code adds a `cost-state` line with the session's running total to its conversation file whenever the
 session's window ends, however it ends. The total goes on across resumes. The line has no time of its own, so
-vahtovik dates each total by the last message before it. vahtovik keeps every total a group session reached,
+vahtovik dates each total by the last message before it. vahtovik keeps every total a worker session reached,
 with its time, since Claude Code deletes old conversation files. A running window's cost shows once the window
 ends, and all of it counts at that time.
 """
@@ -45,7 +45,7 @@ def points(path: Path) -> list[tuple[str, float]]:
 
 
 def update(state: State, claude: Claude) -> None:
-    """Read the totals of the group sessions whose conversation file changed since the last update. A session
+    """Read the totals of the worker sessions whose conversation file changed since the last update. A session
     whose total vahtovik kept before it kept times gets its totals and times once, from its file if Claude Code
     still has it, or else its last total at the time its file last changed."""
     tops = state.cost_tops()

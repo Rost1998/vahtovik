@@ -15,7 +15,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .. import channel_guard, delivery, skills
+from .. import channel_guard, delivery, knowledge
 from ..claude_session import Claude, SessionSpec
 from ..config import SCOPE_ENV, Channel, Config, ConfigError
 from ..state import State
@@ -55,8 +55,8 @@ def receive(cfg: Config, state: State, channel: Channel) -> int | None:
     """Read the channel with its type's `receive` script and store the new messages.
     Returns how many are new, or None if reading failed. Reading that finds nothing writes no journal line."""
     try:
-        skill = skills.load(cfg.skills_dir, "channels", channel.skill)
-    except skills.SkillError as exc:
+        skill = knowledge.load(cfg, channel.skill)
+    except knowledge.SkillError as exc:
         return _read_failed(state, channel, str(exc))
     folder = cfg.channel_dir(channel.name) / "state"
     backup = StateBackup(folder)  # until the messages are in the database
@@ -64,7 +64,8 @@ def receive(cfg: Config, state: State, channel: Channel) -> int | None:
         log.warning("%s: Restored the channel's read state: the last run stopped before it saved the messages",
                     channel.name)
     backup.take()
-    env = {**os.environ, **channel.env, "VAHTOVIK_CHANNEL": channel.name, "VAHTOVIK_STATE_DIR": str(folder)}
+    env = {**os.environ, **delivery.channel_env(cfg, channel, skill), "VAHTOVIK_CHANNEL": channel.name,
+           "VAHTOVIK_STATE_DIR": str(folder)}
     data, error = run_json_script(skill.dir / "receive", env, cfg.root, RECEIVE_TIMEOUT)
     messages = data.get("messages") if data else None
     if not error and (not isinstance(messages, list) or any(
@@ -80,8 +81,8 @@ def receive(cfg: Config, state: State, channel: Channel) -> int | None:
             log.warning("%s: Ignored message %s from %s: not one of the channel's senders", channel.name,
                         str(m["id"]).strip(), sender or "an unknown sender")  # no reply: it may be anybody
             continue
-        new += state.add_message(channel.name, str(m["id"]).strip(), str(m.get("text") or ""), sender,
-                                 str(m.get("time") or ""))
+        new += state.add_channel_message(channel.name, str(m["id"]).strip(), str(m.get("text") or ""), sender,
+                                         str(m.get("time") or ""))
     state.input_read(channel.name)
     backup.drop()
     if new:
@@ -129,9 +130,9 @@ def _limits_text(cfg: Config, channel: Channel) -> str:
             "This channel is limited (see Limited channels in your skill). vahtovik's guard denies everything else.",
             "",
             f"- Commands: {channel_guard.commands_text(channel)}.",
-            f"- Watches: {', '.join(settings.watches) or 'none'}; the commands see no other watch."
-            if settings.watches is not None else "- Watches: all.",
-            f"- Reading: {where}; never `.env` files.",
+            f"- Roles: {', '.join(settings.roles) or 'none'}; the commands see no workers of other roles."
+            if settings.roles is not None else "- Roles: all.",
+            f"- Reading: {where}; never credentials or `.env` files.",
             "- Changing files, the web and other tools: not allowed."])
     if settings.rules:
         text += f"\n\nThe person's own rules for this channel:\n\n{settings.rules}"
@@ -213,8 +214,8 @@ def answer(cfg: Config, state: State, claude: Claude, channel: Channel, run_id: 
         return 0
     ids = [r["id"] for r in rows]
     try:
-        rules = skills.load(cfg.skills_dir, "channels", channel.skill).body.strip()
-    except skills.SkillError as exc:
+        rules = knowledge.load(cfg, channel.skill).body.strip()
+    except knowledge.SkillError as exc:
         rules = f"(skill missing: {exc})"
     row = state.input_state(channel.name)
     session_id = row["session_id"] if row else None
@@ -225,8 +226,8 @@ def answer(cfg: Config, state: State, claude: Claude, channel: Channel, run_id: 
         state.set_input_session(channel.name, session_id)
         history = _history_part(state, channel, row["cleared_at"] if row else None, ids)
     env = {"VAHTOVIK_CHANNEL": channel.name, "VAHTOVIK_RUN": run_id}
-    if channel.input.watches is not None:
-        env[SCOPE_ENV] = ",".join(channel.input.watches)
+    if channel.input.roles is not None:
+        env[SCOPE_ENV] = ",".join(channel.input.roles)
     spec = SessionSpec(
         stage="input", workdir=cfg.root, settings=cfg.stage(None, "input"), schema=load_schema("channel"),
         prompt=render("channel_turn.md", channel=channel.name, run_id=run_id, now=human(),
@@ -238,7 +239,7 @@ def answer(cfg: Config, state: State, claude: Claude, channel: Channel, run_id: 
     log.info("%s: Started answering %s, %s session %s%s", channel.name, plural(len(ids), "message"),
              "resumed" if mode == "resume" else "new", session_id[:8], why)
     result = claude.run(spec, raw_dir)
-    state.log_session(run_id, "input", "", channel.name, result)
+    state.log_session(run_id, "input", channel.name, channel.name, result)
     error = (result.error or "unknown error") if not result.ok else _check_replies(result.output["replies"], ids)
     if error:
         _failed(cfg, state, channel, ids, error, result.duration_s, dry_run)
@@ -246,7 +247,7 @@ def answer(cfg: Config, state: State, claude: Claude, channel: Channel, run_id: 
     for item in result.output["replies"]:
         delivery.reply(cfg, state, channel.name, item.get("subject") or "", item["text"], str(item["to"][0]),
                        dry_run=dry_run)
-    state.set_messages(channel.name, ids, "answered")
+    state.set_channel_messages(channel.name, ids, "answered")
     state.input_answered(channel.name, bool(result.output.get("awaits_answer")))
     log.info("%s: Answered %s in %s, $%.2f", channel.name, plural(len(ids), "message"),
              duration(result.duration_s), result.cost_usd)
@@ -259,7 +260,7 @@ def answer(cfg: Config, state: State, claude: Claude, channel: Channel, run_id: 
 def _failed(cfg: Config, state: State, channel: Channel, ids: list[str], error: str, seconds: float,
             dry_run: bool) -> None:
     """Count a failed attempt. After the last one, vahtovik replies itself and gives the messages up."""
-    state.messages_failed_attempt(channel.name, ids, error)
+    state.channel_messages_failed(channel.name, ids, error)
     rows = {r["id"]: r for r in state.rows(
         "SELECT * FROM channel_messages WHERE channel = ? AND id IN (SELECT value FROM json_each(?))",
         channel.name, json.dumps(ids))}
@@ -271,4 +272,4 @@ def _failed(cfg: Config, state: State, channel: Channel, ids: list[str], error: 
         delivery.reply(cfg, state, channel.name, "vahtovik",
                        GAVE_UP.format(attempts=MAX_ATTEMPTS, error=error, channel=channel.name), message_id,
                        origin="notice", dry_run=dry_run)
-    state.set_messages(channel.name, done, "failed")
+    state.set_channel_messages(channel.name, done, "failed")
