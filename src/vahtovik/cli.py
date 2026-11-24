@@ -14,11 +14,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from . import config as config_mod
-from . import (channel_guard, costs, delivery, group_session, group_status, journal, memory, operations, skills,
-               timer, usage_limits, watchdog, windows)
+from . import (channel_guard, costs, delivery, journal, knowledge, memory, operations, timer, usage_limits,
+               watchdog, windows, worker_status, workers)
 from .claude_session import Claude
 from .config import Config, ConfigError
-from .stages import channel_input, group_turn, monitor
+from .stages import channel_input, monitor, worker_turn
 from .state import State
 from .tmux import Tmux, TmuxError
 from .util import LockBusy, duration, file_lock, human, plural, utc_iso
@@ -27,43 +27,40 @@ log = logging.getLogger("vahtovik")
 
 
 def _load(who: str | None = None, echo: bool = False) -> tuple[Config, State]:
-    root = config_mod.find_root()
-    config_mod.load_env_file(root)
-    cfg = config_mod.load(root)
+    cfg = config_mod.load(config_mod.find_root())
+    config_mod.load_env_file(cfg)
     journal.setup(cfg, who, echo)
     return cfg, State(cfg.db_path)
 
 
-def _next_monitoring(state: State, watch, source) -> datetime | None:
+def _next_monitoring(state: State, poller, source) -> datetime | None:
     """When the source is due after it was last monitored (Source.next_run), or None if it never was."""
-    last = state.source_last_run(watch.name, source.id)
+    last = state.source_last_run(poller.name, source.id)
     return source.next_run(datetime.fromisoformat(last)) if last else None
 
 
-def _due_sources(state: State, watch, now: datetime, force: bool) -> list:
-    return [s for s in watch.sources if force or (_next_monitoring(state, watch, s) or now) <= now]
+def _due_sources(state: State, poller, now: datetime, force: bool) -> list:
+    return [s for s in poller.sources if force or (_next_monitoring(state, poller, s) or now) <= now]
 
 
-def _watch_next(state: State, watch, now: datetime) -> datetime | None:
-    """When the watch's next source is due, or None for a watch without sources."""
-    return min(((_next_monitoring(state, watch, s) or now) for s in watch.sources), default=None)
+def _poller_next(state: State, poller, now: datetime) -> datetime | None:
+    """When the poller's next source is due, or None for a poller without sources."""
+    return min(((_next_monitoring(state, poller, s) or now) for s in poller.sources), default=None)
 
 
-def _nothing_due(state: State, watches, now: datetime, stage: str | None) -> str:
+def _nothing_due(cfg: Config, state: State, pollers, now: datetime, stage: str | None, roles) -> str:
     if stage == "deliver":
-        return "no failed reports to retry"
-    if stage == "group":
-        return "no group turn can start"
+        return "no failed messages to retry"
+    if stage == "workers":
+        return "no worker turn can start"
     if stage == "input":
         return "no messages to answer"
-    if not watches:
-        return "no enabled watches"
-    nexts = [(w, _watch_next(state, w, now)) for w in watches]
-    text = ", ".join(f"{w.name} in {duration((at - now).total_seconds())}" for w, at in nexts if at) or "no sources"
-    scheduled = [g for g in (state.next_scheduled(w.name) for w in watches) if g]
-    if scheduled:
-        first = min(scheduled, key=lambda g: g["scheduled_at"])
-        text += f"; next scheduled turn: {first['watch']}/{first['key']} {_left(first['scheduled_at'])}"
+    nexts = [(p, _poller_next(state, p, now)) for p in pollers]
+    text = ", ".join(f"{p.name} in {duration((at - now).total_seconds())}" for p, at in nexts if at) or (
+        "no enabled pollers" if not pollers else "no sources")
+    first = state.next_scheduled(roles)
+    if first:
+        text += f"; next scheduled turn: {workers.name(first)} {_left(first['scheduled_at'])}"
     return text
 
 
@@ -75,7 +72,7 @@ def cmd_run(args) -> int:
     run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
     cfg, state = _load(who=f"run {run_id}", echo=sys.stderr.isatty())
     if args.dry_run:
-        os.environ["VAHTOVIK_DRY_RUN"] = "1"  # sessions inherit it, so `vahtovik report` dry-runs too
+        os.environ["VAHTOVIK_DRY_RUN"] = "1"  # the channel scripts that sessions run dry-run too
     lock = cfg.data_dir / ".run.lock"
     try:
         with file_lock(lock) as handle:
@@ -112,26 +109,27 @@ def _run(cfg: Config, state: State, args, run_id: str) -> int:
     _watchdog(cfg, state, tmux, claude, run_id)
     usage_limits.check(cfg, state, claude, args.dry_run)  # once usage.every has passed
     now = datetime.now(timezone.utc)
-    watches = [cfg.watch(args.watch)] if args.watch else [w for w in cfg.watches.values() if w.enabled]
-    sources = {w.name: _due_sources(state, w, now, args.force) for w in watches} \
+    pollers = [cfg.poller(args.poller)] if args.poller else [p for p in cfg.pollers.values() if p.enabled]
+    roles = list(pollers[0].roles) if args.poller else None  # --poller: only the turns of its roles' workers
+    sources = {p.name: _due_sources(state, p, now, args.force) for p in pollers} \
         if args.stage in (None, "monitor") else {}
-    due = [w for w in watches if sources.get(w.name)]
+    due = [p for p in pollers if sources.get(p.name)]
     # Reading the channels comes before the run's first line: a read that finds nothing writes no line.
-    reading = args.stage in (None, "input") and not args.watch
+    reading = args.stage in (None, "input") and not args.poller
     for channel in channel_input.due(cfg, state, now, args.force) if reading else []:
         channel_input.receive(cfg, state, channel)
     inputs = channel_input.waiting(cfg, state) if reading else []
-    # Group turns start at every run, not only when their watch is due: groups left over by an earlier run
+    # Turns start at every run, not only when a poller is due: workers left over by an earlier run
     # (claude.parallel_turns, or an open window) start as soon as they can.
-    turns_wait = args.stage in (None, "group") and group_turn.can_start(cfg, state, tmux, watches)
+    turns_wait = args.stage in (None, "workers") and worker_turn.can_start(cfg, state, tmux, roles)
     retry = args.stage in (None, "deliver") and bool(state.retryable_deliveries(delivery.MAX_ATTEMPTS))
     if not inputs and not due and not turns_wait and not retry:
-        log.info("Nothing due: %s", _nothing_due(state, watches, now, args.stage))
+        log.info("Nothing due: %s", _nothing_due(cfg, state, pollers, now, args.stage, roles))
         return 0
     flags = [name for name, on in (("forced", args.force), ("dry run", args.dry_run)) if on]
     flags += [f"stage {args.stage}"] if args.stage else []
-    what = ", ".join([*(f"messages in {c.name}" for c in inputs), *(w.name for w in due)]) or (
-        "group turns" if turns_wait else "retrying failed reports")
+    what = ", ".join([*(f"messages in {c.name}" for c in inputs), *(p.name for p in due)]) or (
+        "worker turns" if turns_wait else "retrying failed messages")
     log.info("Started run: %s%s", what, f" ({', '.join(flags)})" if flags else "")
     started = time.monotonic()
     raw_dir = cfg.runs_dir(run_id)
@@ -142,13 +140,12 @@ def _run(cfg: Config, state: State, args, run_id: str) -> int:
         # Messages first: what the channel agent changes, such as added artifacts, counts in this run.
         for channel in inputs:
             answered += channel_input.answer(cfg, state, claude, channel, run_id, raw_dir, args.dry_run)
-        for watch in watches:
-            if watch in due:
-                new += monitor.run(cfg, state, claude, watch, run_id, raw_dir, sources[watch.name])
-                for source in sources[watch.name] if args.stage is None else []:
-                    state.set_source_run(watch.name, source.id)
-            if args.stage in (None, "group"):
-                turns += len(group_turn.run(cfg, state, claude, tmux, watch, run_id))
+        for poller in due:
+            new += monitor.run(cfg, state, claude, poller, run_id, raw_dir, sources[poller.name])
+            for source in sources[poller.name] if args.stage is None else []:
+                state.set_source_run(poller.name, source.id)
+        if args.stage in (None, "workers"):
+            turns += len(worker_turn.run(cfg, state, claude, tmux, run_id, roles))
         if args.stage in (None, "deliver"):
             delivery.retry_failed(cfg, state, args.dry_run)
     except BaseException as exc:
@@ -158,7 +155,7 @@ def _run(cfg: Config, state: State, args, run_id: str) -> int:
     finally:
         state.finish_run(run_id, status)
     # The turns go on in their windows: their results come to the journal as the agents report them.
-    done = [plural(new, "new artifact"), f"{plural(turns, 'group turn')} started"]
+    done = [plural(new, "new artifact"), f"{plural(turns, 'worker turn')} started"]
     done += [f"{plural(answered, 'message')} answered"] if inputs else []
     log.info("Finished run in %s: %s, $%.2f", duration(time.monotonic() - started), ", ".join(done),
              state.run_cost(run_id))
@@ -167,7 +164,7 @@ def _run(cfg: Config, state: State, args, run_id: str) -> int:
 
 def cmd_open(args) -> int:
     cfg, state = _load(who="interactive")
-    return group_session.open_session(cfg, state, args.ref, new_session=args.new_session)
+    return workers.open_session(cfg, state, args.ref, new_session=args.new_session)
 
 
 def cmd_window(args) -> int:
@@ -176,45 +173,32 @@ def cmd_window(args) -> int:
     return windows.run_window(cfg, state, Tmux(cfg), data)
 
 
-def cmd_report(args) -> int:
-    cfg, state = _load()
-    watch = args.watch or os.environ.get("VAHTOVIK_WATCH")
-    key = args.group or os.environ.get("VAHTOVIK_GROUP")
-    if not watch or not key:
-        raise ConfigError("give --watch and --group, or run this inside a group session")
-    if sys.stdin.isatty():
-        raise ConfigError("pipe the message body on stdin")
-    turn_id = os.environ.get("VAHTOVIK_TURN")
-    origin = "automated" if turn_id else ("interactive" if os.environ.get("VAHTOVIK_GROUP") else "manual")
-    row = delivery.report(cfg, state, watch, key, args.channel, args.subject, sys.stdin.read(), origin,
-                          turn_id, dry_run=os.environ.get("VAHTOVIK_DRY_RUN") == "1")
-    if row["status"] == "sent":
-        print(f"sent: delivery {row['id']} via {row['channel']}" + (f" ({row['external_id']})" if row["external_id"] else ""))
-        return 0
-    print(f"failed: delivery {row['id']} via {row['channel']}: {row['last_error']}. "
-          "vahtovik will retry it on the next runs.")
-    return 1
-
-
-def _session_group() -> tuple[str, str]:
-    watch, key = os.environ.get("VAHTOVIK_WATCH"), os.environ.get("VAHTOVIK_GROUP")
-    if not watch or not key:
-        raise ConfigError("run this inside a group session (VAHTOVIK_WATCH and VAHTOVIK_GROUP are not set)")
-    return watch, key
+def _session_worker(state: State):
+    worker_id = os.environ.get("VAHTOVIK_WORKER")
+    if not worker_id:
+        raise ConfigError("run this inside a worker session (VAHTOVIK_WORKER is not set)")
+    row = state.worker(worker_id)
+    if row is None:
+        raise ConfigError(f"unknown worker {worker_id}")
+    return row
 
 
 def cmd_turn(args) -> int:
     cfg, state = _load()
-    watch, key = _session_group()
+    row = _session_worker(state)
     times = {}
     for flag in ("check_after", "after"):
         value = getattr(args, flag)
         try:
             times[flag] = config_mod.parse_interval(value) if value else None
         except ConfigError as exc:
-            raise group_status.StatusError(f"--{flag.replace('_', '-')}: {exc}") from None
-    print(group_status.declare(cfg, state, cfg.watch(watch), key, args.status, args.importance, args.summary,
-                               args.question, os.environ.get("VAHTOVIK_TURN"), args.reason, **times))
+            raise worker_status.StatusError(f"--{flag.replace('_', '-')}: {exc}") from None
+    try:
+        times["at"] = config_mod.parse_moment(args.at) if args.at else None
+    except ConfigError as exc:
+        raise worker_status.StatusError(f"--at: {exc}") from None
+    print(worker_status.declare(cfg, state, row, args.status, args.importance, args.summary, args.question,
+                                os.environ.get("VAHTOVIK_TURN"), args.reason, **times))
     return 0
 
 
@@ -230,30 +214,45 @@ def _stdin_text(what: str) -> str:
     return sys.stdin.read()
 
 
-def cmd_group_create(args) -> int:
+def cmd_worker_spawn(args) -> int:
     cfg, state = _load()
-    return _print(operations.create_group(cfg, state, args.ref, args.title))
+    return _print(operations.spawn(cfg, state, args.ref, args.skill, args.title, args.message, args.report_back))
 
 
-def cmd_group_merge(args) -> int:
+def cmd_worker_list(args) -> int:
+    cfg, state = _load()
+    return _print(operations.list_workers(cfg, state, args.role, args.status, args.tree, args.all))
+
+
+def cmd_worker_show(args) -> int:
+    cfg, state = _load()
+    return _print(operations.show(cfg, state, args.ref))
+
+
+def cmd_worker_merge(args) -> int:
     cfg, state = _load()
     return _print(operations.merge(cfg, state, Tmux(cfg), args.refs, args.into))
 
 
-def cmd_group_split(args) -> int:
+def cmd_worker_split(args) -> int:
     cfg, state = _load()
     return _print(operations.split(cfg, state, Tmux(cfg), args.ref, args.artifact, args.into, args.title))
 
 
-def cmd_group_set(args) -> int:
+def cmd_worker_schedule(args) -> int:
     cfg, state = _load()
-    return _print(operations.set_schedule(cfg, state, args.ref, args.recheck, args.next, args.reason))
+    return _print(operations.schedule(cfg, state, args.ref, args.after, args.at, args.off, args.reason))
+
+
+def cmd_worker_archive(args) -> int:
+    cfg, state = _load()
+    return _print(operations.archive(cfg, state, Tmux(cfg), args.ref, args.reason))
 
 
 def cmd_artifact_add(args) -> int:
     cfg, state = _load()
     text = args.json if args.json is not None else _stdin_text("the artifacts as JSON, or give --json")
-    return _print(operations.add_artifacts(cfg, state, args.watch, args.group, text))
+    return _print(operations.add_artifacts(cfg, state, args.worker, text))
 
 
 def cmd_tell(args) -> int:
@@ -265,16 +264,16 @@ def cmd_tell(args) -> int:
 def cmd_memory_add(args) -> int:
     cfg, _state = _load()
     text = args.text if args.text is not None else _stdin_text("the text, or give --text")
-    return _print(memory.add(cfg, args.watch, text))
+    return _print(memory.add(cfg, args.role, text))
 
 
 def cmd_memory_remove(args) -> int:
     cfg, _state = _load()
-    return _print(memory.remove(cfg, args.watch, args.entry, args.reason))
+    return _print(memory.remove(cfg, args.role, args.entry, args.reason))
 
 
 def cmd_hook(args) -> int:
-    """Claude Code runs this for the hooks of group sessions (group_status.hooks), and for the guard of limited
+    """Claude Code runs this for the hooks of worker sessions (worker_status.hooks), and for the guard of limited
     input channels (channel_guard.hooks)."""
     if args.event == "guard":
         try:
@@ -285,12 +284,12 @@ def cmd_hook(args) -> int:
             print(f"vahtovik's guard failed: {type(exc).__name__}: {exc}", file=sys.stderr)
             return 2
     _cfg, state = _load()
-    watch, key = _session_group()
+    row = _session_worker(state)
     data = json.loads(sys.stdin.read() or "{}")
     if args.event == "prompt":
-        group_status.on_prompt(state, watch, key, data.get("session_id"))
+        worker_status.on_prompt(state, row["id"], data.get("session_id"))
     else:
-        answer = group_status.on_stop(state, watch, key, data, os.environ.get("VAHTOVIK_TURN"))
+        answer = worker_status.on_stop(state, row["id"], data, os.environ.get("VAHTOVIK_TURN"))
         if answer:
             print(json.dumps(answer))
     return 0
@@ -299,8 +298,10 @@ def cmd_hook(args) -> int:
 def cmd_status(args) -> int:
     cfg, state = _load()
     costs.update(state, Claude(cfg))
-    names = [args.watch] if args.watch else sorted(cfg.watches)
-    (_status_details if args.verbose else _status_table)(cfg, state, names)
+    if args.role:
+        cfg.role(args.role)
+    roles = [args.role] if args.role else sorted(cfg.roles)
+    (_status_details if args.verbose else _status_table)(cfg, state, roles)
     return 0
 
 
@@ -315,32 +316,55 @@ def _money(costs: dict, test=lambda key: True) -> str:
     return f"${sum(c for key, c in costs.items() if test(key)):.2f}"
 
 
-def _status_table(cfg: Config, state: State, names: list[str]) -> None:
-    """One row per group and a total row per watch, with what the groups cost in the last 24 hours and 30 days.
-    Artifacts are the processed ones. Then what the sessions of each kind cost in all watches."""
-    group_costs = [state.group_costs(_since(period)) for period in PERIODS.values()]
-    rows, all_processed = [], 0
-    for name in names:
-        watch = cfg.watch(name)
-        processed = {r["group_key"]: r["n"] for r in state.rows(
-            "SELECT group_key, COUNT(*) AS n FROM artifacts WHERE watch = ? AND status = 'processed' "
-            "GROUP BY group_key", name)}
-        watch_rows = []
-        for g in state.groups(name):
-            questions = json.loads(g["questions"] or "[]") if g["status"] == "waiting" else []
-            status = g["status"] + (f", {plural(len(questions), 'question')}" if questions else "")
-            status += f" ({_left(g['scheduled_at'])})" if g["status"] == "scheduled" and g["scheduled_at"] else ""
-            watch_rows.append(["", "", g["key"], status, str(processed.get(g["key"], 0)),
-                               *(_money(c, lambda k: k == (name, g["key"])) for c in group_costs)])
-        all_processed += sum(processed.values())
-        watch_rows.append(["", "", "total" if watch_rows else "-", "", str(sum(processed.values())),
-                           *(_money(c, lambda k: k[0] == name) for c in group_costs)])
-        watch_rows[0][:2] = f"{name} ({'enabled' if watch.enabled else 'disabled'})", _period(state, watch)
-        rows += watch_rows
-    failed = state.undelivered()
-    footer = ["all", "", "", plural(failed, "undelivered report"), str(all_processed),
-              *(_money(c, lambda k: k[0] in names) for c in group_costs)]
-    for line in _table(["watch", "period", "groups", "status", "artifacts", *PERIODS], rows, footer,
+def _role_of_workers(state: State) -> dict[str, str]:
+    """The role of every worker, archived ones too: their costs count for their role."""
+    return {r["id"]: r["role"] for r in state.workers(archived=True)}
+
+
+def _processed(state: State) -> dict[str, int]:
+    return {r["worker"]: r["n"] for r in state.rows(
+        "SELECT worker, COUNT(*) AS n FROM artifacts WHERE status = 'processed' GROUP BY worker")}
+
+
+def _short_status(row) -> str:
+    status = row["status"]
+    if status == "waiting":
+        status += f", {plural(len(json.loads(row['questions'] or '[]')), 'question')}"
+    if status == "scheduled" and row["scheduled_at"]:
+        status += f" ({_left(row['scheduled_at'])})"
+    return status
+
+
+def _status_table(cfg: Config, state: State, roles: list[str]) -> None:
+    """A table of the pollers, then one row per worker and a total row per role, with what the workers cost in the
+    last 24 hours and 30 days. Artifacts are the processed ones. Then the input channels, the usage limits, and
+    what the sessions of each kind cost."""
+    pollers = [p for p in cfg.pollers.values() if set(p.roles) & set(roles)] if roles != sorted(cfg.roles) \
+        else list(cfg.pollers.values())
+    rows = [[p.name, "enabled" if p.enabled else "disabled", _period(state, p), ", ".join(p.roles)] for p in pollers]
+    if rows:
+        for line in _table(["poller", "state", "schedule", "roles"], rows, None):
+            print(line)
+        print()
+    worker_costs = [state.worker_costs(_since(period)) for period in PERIODS.values()]
+    role_of = _role_of_workers(state)
+    processed = _processed(state)
+    rows, total = [], 0
+    for name in roles:
+        role_rows = []
+        for row in state.workers([name]):
+            parent = row["parent"] or ""
+            role_rows.append(["", workers.name(row), _short_status(row), parent, str(processed.get(row["id"], 0)),
+                              *(_money(c, lambda k, i=row["id"]: k == i) for c in worker_costs)])
+        count = sum(n for worker_id, n in processed.items() if role_of.get(worker_id) == name)
+        total += count
+        role_rows.append(["", "total" if role_rows else "-", "", "", str(count),
+                          *(_money(c, lambda k, r=name: role_of.get(k) == r) for c in worker_costs)])
+        role_rows[0][0] = name
+        rows += role_rows
+    footer = ["all", "", plural(state.undelivered(), "undelivered message"), "", str(total),
+              *(_money(c, lambda k: role_of.get(k) in roles) for c in worker_costs)]
+    for line in _table(["role", "workers", "status", "parent", "artifacts", *PERIODS], rows, footer,
                        right=(4, 5, 6)):
         print(line)
     print()
@@ -393,26 +417,26 @@ def _limits(settings) -> str:
     rules = first[:60] + ("..." if len(settings.rules) > len(first[:60]) else "")
     return "; ".join([
         f"limited to {', '.join(settings.commands) or 'no commands'}" if settings.limited else "full power",
-        f"watches {', '.join(settings.watches) or 'none'}" if settings.watches is not None else "all watches",
+        f"roles {', '.join(settings.roles) or 'none'}" if settings.roles is not None else "all roles",
         f"senders {', '.join(settings.senders) or 'none'}" if settings.senders is not None else "any sender",
         f"rules: {rules}" if rules else "no rules of its own"])
 
 
 def _cost_summary(state: State, periods: dict[str, timedelta | None]) -> list[str]:
-    """A table of what group, monitor and watchdog sessions in all watches cost in each period;
-    None is all time."""
+    """A table of what worker, monitoring, input and watchdog sessions cost in each period; None is all time."""
     since = [_since(period) if period else None for period in periods.values()]
-    kinds = {"groups": [state.group_costs(s) for s in since]}
+    kinds = {"workers": [state.worker_costs(s) for s in since]}
     stages = [state.stage_costs(s) for s in since]
     kinds |= {stage: [{stage: c.get(stage, 0)} for c in stages] for stage in ("monitor", "input", "watchdog")}
     rows = [[kind, *map(_money, costs)] for kind, costs in kinds.items()]
-    footer = ["all", *(_money(groups | stage) for groups, stage in zip(kinds["groups"], stages))]
+    footer = ["all", *(_money(own | stage) for own, stage in zip(kinds["workers"], stages))]
     return _table(["sessions", *periods], rows, footer, right=tuple(range(1, len(periods) + 1)))
 
 
-def _table(header: list[str], rows: list[list[str]], footer: list[str], right: tuple[int, ...] = ()) -> list[str]:
+def _table(header: list[str], rows: list[list[str]], footer: list[str] | None,
+           right: tuple[int, ...] = ()) -> list[str]:
     """An ASCII table; the columns in `right` hold numbers and are aligned to the right."""
-    widths = [max(len(row[i]) for row in (header, *rows, footer)) for i in range(len(header))]
+    widths = [max(len(row[i]) for row in (header, *rows, *([footer] if footer else []))) for i in range(len(header))]
     rule = "-+-".join("-" * width for width in widths)
 
     def line(row: list[str]) -> str:
@@ -420,18 +444,18 @@ def _table(header: list[str], rows: list[list[str]], footer: list[str], right: t
                  for i, (cell, width) in enumerate(zip(row, widths))]
         return " | ".join(cells).rstrip()
 
-    return [line(header), rule, *map(line, rows), rule, line(footer)]
+    return [line(header), rule, *map(line, rows), *([rule, line(footer)] if footer else [])]
 
 
-def _period(state: State, watch) -> str:
-    """The schedules of the watch's sources and, if it is enabled, the time left until a run monitors the next
+def _period(state: State, poller) -> str:
+    """The schedules of the poller's sources and, if it is enabled, the time left until a run monitors the next
     one: "6h (in 4h12m)", "1m; 6h (now)" or "at 08:00, 20:00 (in 3h05m)"."""
-    items = sorted(watch.sources or [watch], key=lambda s: (bool(s.at), s.interval, s.at))
+    items = sorted(poller.sources or [poller], key=lambda s: (bool(s.at), s.interval, s.at))
     period = "; ".join(dict.fromkeys(map(_schedule, items)))
-    if not watch.enabled:
+    if not poller.enabled:
         return period
     now = datetime.now(timezone.utc)
-    at = _watch_next(state, watch, now)
+    at = _poller_next(state, poller, now)
     left = at - now if at else None
     return f"{period} (in {duration(left.total_seconds())})" if left and left > timedelta(0) else f"{period} (now)"
 
@@ -443,12 +467,12 @@ def _left(at: str) -> str:
 
 
 def _schedule(item) -> str:
-    """When a source, or a watch's sources, are monitored, as watch.yaml sets it: "6h", or "at 08:00, 20:00"."""
+    """When a source, or a poller's sources, are monitored, as poller.yaml sets it: "6h", or "at 08:00, 20:00"."""
     return "at " + ", ".join(t.strftime("%H:%M") for t in item.at) if item.at else _every(item.interval)
 
 
 def _every(interval: timedelta) -> str:
-    """An interval as watch.yaml writes it: 30m, 6h, 1d."""
+    """An interval as poller.yaml writes it: 30m, 6h, 1d."""
     seconds = int(interval.total_seconds())
     for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
         if seconds and seconds % size == 0:
@@ -456,56 +480,94 @@ def _every(interval: timedelta) -> str:
     return f"{seconds}s"
 
 
-def _artifact_counts(state: State, watch: str, key: str) -> str:
+def _counts(state: State, table: str, worker_id: str) -> str:
     counts = {r["status"]: r["n"] for r in state.rows(
-        "SELECT status, COUNT(*) AS n FROM artifacts WHERE watch = ? AND group_key = ? GROUP BY status", watch, key)}
-    return ", ".join(f"{n} {s}" for s, n in sorted(counts.items()))
+        f"SELECT status, COUNT(*) AS n FROM {table} WHERE worker = ? GROUP BY status", worker_id)}
+    return ", ".join(f"{n} {s}" for s, n in sorted(counts.items())) or "none"
 
 
 DETAIL_PERIODS = {**PERIODS, "all time": None}
 
 
-def _spent(group_costs: list[dict], test) -> str:
-    """What the matching groups cost in each period: "$0.40 in 24 hours, $1.10 in 30 days, $3.25 in all time"."""
-    return ", ".join(f"{_money(c, test)} in {label}" for c, label in zip(group_costs, DETAIL_PERIODS))
+def _spent(worker_costs: list[dict], test) -> str:
+    """What the matching workers cost in each period: "$0.40 in 24 hours, $1.10 in 30 days, $3.25 in all time"."""
+    return ", ".join(f"{_money(c, test)} in {label}" for c, label in zip(worker_costs, DETAIL_PERIODS))
 
 
-def _status_details(cfg: Config, state: State, names: list[str]) -> None:
-    group_costs = [state.group_costs(_since(p) if p else None) for p in DETAIL_PERIODS.values()]
-    for name in names:
-        watch = cfg.watch(name)
-        last = state.watch_last_run(name)
-        print(f"{name}: {'enabled' if watch.enabled else 'disabled'}, "
-              + (f"account {watch.account}, " if watch.account else "")
-              + f"last monitored {human(datetime.fromisoformat(last)) if last else 'never'}, "
-              f"group sessions {_spent(group_costs, lambda k: k[0] == name)}")
-        for src in watch.sources:
-            row = state.row("SELECT * FROM source_state WHERE watch = ? AND source_id = ?", name, src.id)
+def _status_details(cfg: Config, state: State, roles: list[str]) -> None:
+    worker_costs = [state.worker_costs(_since(p) if p else None) for p in DETAIL_PERIODS.values()]
+    role_of = _role_of_workers(state)
+    for poller in cfg.pollers.values():
+        if not set(poller.roles) & set(roles):
+            continue
+        last = state.poller_last_run(poller.name)
+        print(f"poller {poller.name}: {'enabled' if poller.enabled else 'disabled'}, roles {', '.join(poller.roles)}, "
+              + (f"account {poller.account}, " if poller.account else "")
+              + f"last monitored {human(datetime.fromisoformat(last)) if last else 'never'}")
+        for src in poller.sources:
+            row = state.source_state(poller.name, src.id)
             error = f", last error: {row['last_error']}" if row and row["last_error"] and (
                 not row["last_ok_at"] or row["last_error_at"] > row["last_ok_at"]) else ""
-            at = _next_monitoring(state, watch, src)
+            at = _next_monitoring(state, poller, src)
             when = _schedule(src) if src.at else f"every {_schedule(src)}"
             print(f"  source {src.id} ({src.skill}, {src.scan} scan): {when}, next "
                   f"{human(at) if at and at > datetime.now(timezone.utc) else 'now'}{error}")
-        for g in state.groups(name):
-            summary = _artifact_counts(state, name, g["key"])
-            status = g["status"] + (f": {g['status_reason']}" if g["status_reason"] else "")
-            status += f", check after {human(datetime.fromisoformat(g['check_after']))}" if g["check_after"] else ""
-            status += (f", next scheduled turn {human(datetime.fromisoformat(g['scheduled_at']))}"
-                       if g["scheduled_at"] else "")
-            status += f", standing check every {g['recheck_every']}" if g["recheck_every"] else ""
-            questions = json.loads(g["questions"] or "[]") if g["status"] == "waiting" else []
+    for name in roles:
+        role = cfg.roles[name]
+        print(f"role {name}: skills {', '.join(role.skills) or 'shared only'}"
+              + (f", account {role.account}" if role.account else "")
+              + f", workers {_spent(worker_costs, lambda k, r=name: role_of.get(k) == r)}")
+        for row in state.workers([name]):
+            status = row["status"] + (f": {row['status_reason']}" if row["status_reason"] else "")
+            status += f", check after {human(datetime.fromisoformat(row['check_after']))}" if row["check_after"] else ""
+            status += (f", next scheduled turn {human(datetime.fromisoformat(row['scheduled_at']))}"
+                       if row["scheduled_at"] else "")
+            questions = json.loads(row["questions"] or "[]") if row["status"] == "waiting" else []
             status += f", {plural(len(questions), 'open question')}" if questions else ""
-            print(f"  group {g['key']}: {g['title']} | {status} | {summary} | "
-                  f"session {g['session_id'] or 'none yet'} | "
-                  f"{_spent(group_costs, lambda k: k == (name, g['key']))}")
-    failed = state.undelivered()
-    print(f"undelivered reports: {failed}")
+            parent = state.worker(row["parent"]) if row["parent"] else None
+            print(f"  worker {workers.name(row)}: {row['title']} | {status} | "
+                  f"spawned by {workers.describe_spawner(state, row['spawned_by'])}"
+                  + (f", parent {workers.name(parent)}" if parent else "")
+                  + f" | artifacts {_counts(state, 'artifacts', row['id'])} | "
+                  f"messages {_counts(state, 'inbox', row['id'])} | session {row['session_id'] or 'none yet'} | "
+                  f"{_spent(worker_costs, lambda k, i=row['id']: k == i)}")
+    print(f"undelivered messages: {state.undelivered()}")
     print()
     for line in _inputs(cfg, state, verbose=True) + _usage(cfg, state):
         print(line)
     for line in _cost_summary(state, DETAIL_PERIODS):
         print(line)
+
+
+def _executable(path: Path) -> bool:
+    return os.access(path, os.X_OK)
+
+
+def _check_skills(cfg: Config, where: str, names: list[str], more: list[str] = (),
+                  env: dict[str, str] | None = None, needed: tuple[str, ...] = ("required_env",),
+                  shared: bool = True) -> list[str]:
+    """The problems of the skills that a role, a source or a channel uses: missing skills, credential files and
+    variables. Roles and sources have the shared skills too, and channels only their own."""
+    if shared:
+        found, problems = knowledge.collect(cfg, names)
+    else:
+        found, problems = [], []
+        for name in names:
+            try:
+                found.append(knowledge.load(cfg, name))
+            except knowledge.SkillError as exc:
+                problems.append(str(exc))
+    problems = [f"{where}: {p}" for p in problems]
+    names_needed = [*(n for s in found for n in s.credentials), *more]
+    problems += [f"{where}: credentials file {config_mod.credentials_file(cfg, n)} is missing"
+                 for n in knowledge.missing_credentials(cfg, names_needed)]
+    have = {**knowledge.session_env(cfg, found, more), **(env or {})}
+    missing = sorted({v for s in found for key in needed for v in s.list_meta(key)
+                      if not have.get(v) and not os.environ.get(v)})
+    if missing:
+        problems.append(f"{where}: environment variable {', '.join(missing)} not set; put it in a credentials file "
+                        f"of {cfg.credentials_dir}")
+    return problems
 
 
 def cmd_check(args) -> int:
@@ -515,48 +577,45 @@ def cmd_check(args) -> int:
     except (ConfigError, OSError) as exc:
         print(f"config: {exc}")
         return 1
-    for read in (skills.shared_skill, skills.agent_skills):
+    problems += knowledge.problems(cfg)
+    for read in (knowledge.agent_skills, knowledge.watchdog_skill):
         try:
-            read(cfg.skills_dir)
-        except skills.SkillError as exc:
+            read(cfg)
+        except knowledge.SkillError as exc:
             problems.append(str(exc))
     for name, channel in cfg.channels.items():
         try:
-            skill = skills.load(cfg.skills_dir, "channels", channel.skill)
-        except skills.SkillError as exc:
+            skill = knowledge.load(cfg, channel.skill)
+        except knowledge.SkillError as exc:
             problems.append(f"channel {name}: {exc}")
             continue
-        if not os.access(skill.dir / "send", os.X_OK):
+        if not _executable(skill.dir / "send"):
             problems.append(f"channel {name}: {skill.dir / 'send'} is missing or not executable")
-        needed = skill.list_meta("required_env") + (skill.list_meta("input_env") if channel.input else [])
-        missing = [v for v in needed if v not in channel.env and not os.environ.get(v)]
-        if missing:
-            problems.append(f"channel {name}: environment variable {', '.join(missing)} not set")
-        if channel.input and not os.access(skill.dir / "receive", os.X_OK):
+        if channel.input and not _executable(skill.dir / "receive"):
             problems.append(f"channel {name}: it has input, but {skill.dir / 'receive'} is missing or not executable")
-    for watch in cfg.watches.values():
-        for path in (watch.monitor_md, watch.report_md):
-            if not path.is_file():
-                problems.append(f"watch {watch.name}: {path} is missing")
-        if not watch.process_files():
-            problems.append(f"watch {watch.name}: no process/*.md files")
-        problems += [f"watch {watch.name}: {problem}" for problem in skills.watch_skill_problems(watch)]
-        for src in watch.sources:
+        needed = ("required_env", "input_env") if channel.input else ("required_env",)
+        problems += _check_skills(cfg, f"channel {name}", [channel.skill], channel.credentials, channel.env, needed,
+                                  shared=False)
+    for role in cfg.roles.values():
+        problems += _check_skills(cfg, f"role {role.name}", role.skills, role.credentials)
+        if not role.description:
+            problems.append(f"role {role.name}: {role.role_md} has no description in its front matter")
+    for poller in cfg.pollers.values():
+        if not poller.poller_md.is_file():
+            problems.append(f"poller {poller.name}: {poller.poller_md} is missing")
+        for src in poller.sources:
+            where = f"poller {poller.name}, source {src.id}"
             try:
-                skill = skills.load(cfg.skills_dir, "sources", src.skill)
-            except skills.SkillError as exc:
-                problems.append(f"watch {watch.name}, source {src.id}: {exc}")
+                skill = knowledge.load(cfg, src.skill)
+            except knowledge.SkillError as exc:
+                problems.append(f"{where}: {exc}")
                 continue
-            if src.scan == "script" and not os.access(skill.dir / "scan", os.X_OK):
-                problems.append(f"watch {watch.name}, source {src.id}: scan is script, but {skill.dir / 'scan'} is "
-                                "missing or not executable")
+            if src.scan == "script" and not _executable(skill.dir / "scan"):
+                problems.append(f"{where}: scan is script, but {skill.dir / 'scan'} is missing or not executable")
             missing = [p for p in skill.list_meta("required_params") if p not in src.params]
             if missing:
-                problems.append(f"watch {watch.name}, source {src.id}: missing params {', '.join(missing)}")
-            missing = watch.missing_secrets(src, skill.list_meta("required_env"))
-            if missing:
-                problems.append(f"watch {watch.name}, source {src.id}: secret {', '.join(missing)} not set; "
-                                f"add it to {watch.env_file}")
+                problems.append(f"{where}: missing params {', '.join(missing)}")
+            problems += _check_skills(cfg, where, [src.skill], src.credentials)
     binary = shutil.which(cfg.claude.binary)
     if not binary:
         problems.append(f"claude: {cfg.claude.binary} not found on PATH")
@@ -564,13 +623,16 @@ def cmd_check(args) -> int:
         version = subprocess.run([binary, "--version"], capture_output=True, text=True).stdout.strip()
         print(f"claude: {version} ({cfg.claude.auth} login)")
     if cfg.claude.auth == "api-key" and not os.environ.get("ANTHROPIC_API_KEY"):
-        problems.append("claude: auth is api-key but ANTHROPIC_API_KEY is not set")
+        problems.append("claude: auth is api-key but ANTHROPIC_API_KEY is not set; put it in "
+                        f"{config_mod.credentials_file(cfg, config_mod.OWN_CREDENTIALS)}")
     claude = Claude(cfg)
     for account in [None, *cfg.claude.accounts]:
         problems += _check_login(cfg, claude, account, logins=bool(binary) and cfg.claude.auth == "subscription")
     if not Tmux.installed():
-        problems.append("tmux: not found; group sessions run in tmux windows")
-    print(f"watches: {', '.join(cfg.watches) or 'none'} · channels: {', '.join(cfg.channels) or 'none'}")
+        problems.append("tmux: not found; workers run in tmux windows")
+    print(f"roles: {', '.join(cfg.roles) or 'none'} · pollers: {', '.join(cfg.pollers) or 'none'} · "
+          f"channels: {', '.join(cfg.channels) or 'none'} · skills: {', '.join(knowledge.available(cfg)) or 'none'}")
+    problems = list(dict.fromkeys(problems))
     for problem in problems:
         print(f"problem: {problem}")
     print("ok" if not problems else f"{len(problems)} problem(s)")
@@ -594,7 +656,7 @@ def _check_login(cfg: Config, claude: Claude, account: str | None, logins: bool)
             print(f"{name}: logged in" + (f" as {status['email']}" if status.get("email") else "")
                   + (f" ({plan})" if plan else "") + (f", login ends {ends}" if ends else ""))
     if claude.trusts(cfg.data_dir, account) is False:
-        return [f"{name}: Claude Code does not trust {cfg.data_dir} or a folder above it, so group sessions would "
+        return [f"{name}: Claude Code does not trust {cfg.data_dir} or a folder above it, so worker sessions would "
                 f"stop at its \"trust this folder\" screen; {run} and accept"]
     return []
 
@@ -617,7 +679,7 @@ def cmd_test_channel(args) -> int:
 def cmd_log(args) -> int:
     cfg = config_mod.load(config_mod.find_root())
     try:
-        # A limited channel's agent sees only the lines about its watches, and its own channel's.
+        # A limited channel's agent sees only the lines about its roles' workers, and its own channel's.
         about = None if cfg.scope is None else [*cfg.scope, *filter(None, [os.environ.get("VAHTOVIK_CHANNEL")])]
         for line in journal.read(journal.path(cfg), args.lines, args.text, follow=args.follow, about=about):
             print(line, flush=args.follow)
@@ -669,93 +731,107 @@ def cmd_uninstall_timer(args) -> int:
     return 0
 
 
+WORKER_REF = "a worker: <id>, <id>-<key> or <role>/<key>"
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="vahtovik", description="AI monitoring on Claude Code sessions")
+    parser = argparse.ArgumentParser(prog="vahtovik", description="AI monitoring and workers on Claude Code sessions")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("run", help="run one monitoring cycle")
-    p.add_argument("--watch", help="only this watch")
-    p.add_argument("--stage", choices=["input", "monitor", "group", "deliver"], help="only this stage")
+    p = sub.add_parser("run", help="run one cycle")
+    p.add_argument("--poller", help="only this poller, and the turns of its roles' workers")
+    p.add_argument("--stage", choices=["input", "monitor", "workers", "deliver"], help="only this stage")
     p.add_argument("--force", action="store_true",
                    help="ignore the schedules of sources and the intervals of input channels")
-    p.add_argument("--dry-run", action="store_true", help="channels print instead of sending")
+    p.add_argument("--dry-run", action="store_true", help="vahtovik's channels print instead of sending")
     p.set_defaults(func=cmd_run)
 
-    p = sub.add_parser("open", help="open a group's session interactively")
-    p.add_argument("ref", help="<watch>/<group-key>")
-    p.add_argument("--new-session", action="store_true", help="start a fresh session for the group")
+    p = sub.add_parser("open", help="open a worker's session interactively")
+    p.add_argument("ref", help=WORKER_REF)
+    p.add_argument("--new-session", action="store_true", help="start a fresh session for the worker")
     p.set_defaults(func=cmd_open)
 
-    p = sub.add_parser("report", help="send a report (message body on stdin)")
-    p.add_argument("--channel", required=True)
-    p.add_argument("--subject", default="")
-    p.add_argument("--watch", help="default: $VAHTOVIK_WATCH")
-    p.add_argument("--group", help="default: $VAHTOVIK_GROUP")
-    p.set_defaults(func=cmd_report)
-
-    p = sub.add_parser("turn", help="end your turn with your status (for agents in group sessions)")
+    p = sub.add_parser("turn", help="end your turn with your status (for agents in worker sessions)")
     p.add_argument("status", choices=["finished", "scheduled", "waiting", "background"],
-                   help="finished: you need nothing from a person; scheduled: the same, and the group gets another "
-                        "turn after --after, even without new artifacts; waiting: you need an answer or action; "
+                   help="finished: your work is really done; scheduled: you need another turn later, after --after "
+                        "or at --at, or the one you have scheduled; waiting: you need an answer or action; "
                         "background: you wait for background work you started, which wakes you when it ends")
-    p.add_argument("--importance", choices=group_status.IMPORTANCE, help="required at the end of an automated turn")
+    p.add_argument("--importance", choices=worker_status.IMPORTANCE, help="required at the end of an automated turn")
     p.add_argument("--summary", help="the current state in one or two sentences; required at the end of an automated turn")
     p.add_argument("--question", action="append", default=[], help="an open question; repeat for each one")
     p.add_argument("--reason", help="background: what you wait for; scheduled: what the next turn should check")
-    p.add_argument("--after", help="scheduled: when the group gets its next turn, for example 6h or 1d")
+    p.add_argument("--after", help="scheduled: how long until your next turn, for example 6h or 1d")
+    p.add_argument("--at", help="scheduled: when your next turn comes: HH:MM (its next occurrence) or "
+                                "YYYY-MM-DD HH:MM, in local time")
     p.add_argument("--check-after", help="background: when the watchdog should check on you if you are still "
                                          "waiting, for example 30m")
     p.set_defaults(func=cmd_turn)
 
-    p = sub.add_parser("group", help="create, merge and split groups, and schedule their turns")
-    group_sub = p.add_subparsers(dest="group_command", required=True)
-    g = group_sub.add_parser("create", help="create an empty group")
-    g.add_argument("ref", help="<watch>/<group-key>")
-    g.add_argument("--title", help="the group's title (default: its key)")
-    g.set_defaults(func=cmd_group_create)
-    g = group_sub.add_parser("merge", help="merge groups into another group of the same watch")
-    g.add_argument("refs", nargs="+", help="the groups to merge, <watch>/<group-key>")
-    g.add_argument("--into", required=True, help="the group they go into, <watch>/<group-key>")
-    g.set_defaults(func=cmd_group_merge)
-    g = group_sub.add_parser("split", help="move some artifacts of a group to another group, new or existing")
-    g.add_argument("ref", help="the group they are in, <watch>/<group-key>")
-    g.add_argument("--artifact", action="append", default=[], required=True,
+    p = sub.add_parser("worker", help="spawn, see, merge, split, schedule and archive workers")
+    worker_sub = p.add_subparsers(dest="worker_command", required=True)
+    w = worker_sub.add_parser("spawn", help="spawn a worker; inside a worker, it becomes the new one's parent")
+    w.add_argument("ref", help="the new worker: <role>/<key>")
+    w.add_argument("--title", help="its title (default: its key)")
+    w.add_argument("--skill", action="append", default=[], help="an extra skill of knowledge/skills; repeat for each")
+    w.add_argument("--message", help="its task: it starts with this message at the next run")
+    w.add_argument("--report-back", action="store_true",
+                   help="tell the parent when the new worker ends a turn as finished or waiting, or fails")
+    w.set_defaults(func=cmd_worker_spawn)
+    w = worker_sub.add_parser("list", help="the workers: their status, what they do, and their parent")
+    w.add_argument("--role", help="only workers of this role")
+    w.add_argument("--status", help="only workers with this status")
+    w.add_argument("--tree", action="store_true", help="children under their parents")
+    w.add_argument("--all", action="store_true", help="archived workers too")
+    w.set_defaults(func=cmd_worker_list)
+    w = worker_sub.add_parser("show", help="all about one worker")
+    w.add_argument("ref", help=WORKER_REF)
+    w.set_defaults(func=cmd_worker_show)
+    w = worker_sub.add_parser("merge", help="merge workers into another worker, which keeps its role")
+    w.add_argument("refs", nargs="+", help="the workers to merge")
+    w.add_argument("--into", required=True, help="the worker they go into")
+    w.set_defaults(func=cmd_worker_merge)
+    w = worker_sub.add_parser("split", help="move some artifacts of a worker to another worker, new or existing")
+    w.add_argument("ref", help="the worker they are in")
+    w.add_argument("--artifact", action="append", default=[], required=True,
                    help="the id of an artifact to move; repeat for each one")
-    g.add_argument("--into", required=True, help="the group they go to, <watch>/<group-key>")
-    g.add_argument("--title", help="the title of the group they go to, if it is new")
-    g.set_defaults(func=cmd_group_split)
-    g = group_sub.add_parser("set", help="when a group gets turns without new artifacts")
-    g.add_argument("ref", help="<watch>/<group-key>")
-    g.add_argument("--recheck", help="a standing period, such as 1d: each finished turn is followed by a scheduled "
-                                     "turn this long after; off removes it")
-    g.add_argument("--next", help="when the next scheduled turn comes, such as 6h; off cancels it")
-    g.add_argument("--reason", help="what the scheduled turn should check")
-    g.set_defaults(func=cmd_group_set)
+    w.add_argument("--into", required=True, help="the worker they go to; a new one as <role>/<key>")
+    w.add_argument("--title", help="the title of the worker they go to, if it is new")
+    w.set_defaults(func=cmd_worker_split)
+    w = worker_sub.add_parser("schedule", help="schedule a worker's next turn, or cancel it")
+    w.add_argument("ref", help=WORKER_REF)
+    w.add_argument("--after", help="how long until the turn, such as 6h")
+    w.add_argument("--at", help="when the turn comes: HH:MM (its next occurrence) or YYYY-MM-DD HH:MM, local time")
+    w.add_argument("--off", action="store_true", help="cancel the next scheduled turn")
+    w.add_argument("--reason", help="what the scheduled turn should check")
+    w.set_defaults(func=cmd_worker_schedule)
+    w = worker_sub.add_parser("archive", help="archive a worker: no more turns, and lists leave it out")
+    w.add_argument("ref", help=WORKER_REF)
+    w.add_argument("--reason", required=True, help="why the worker is archived")
+    w.set_defaults(func=cmd_worker_archive)
 
-    p = sub.add_parser("artifact", help="add artifacts to groups")
+    p = sub.add_parser("artifact", help="add artifacts to workers")
     artifact_sub = p.add_subparsers(dest="artifact_command", required=True)
-    a = artifact_sub.add_parser("add", help="add artifacts, as JSON (one object or a list), to groups")
-    a.add_argument("watch")
-    a.add_argument("--group", action="append", default=[], required=True,
-                   help="a group key of the watch to add them to; repeat for each group")
+    a = artifact_sub.add_parser("add", help="add artifacts, as JSON (one object or a list), to workers")
+    a.add_argument("--worker", action="append", default=[],
+                   help="a worker to add them to; repeat for each one (default inside a worker: itself)")
     a.add_argument("--json", help="the artifacts (default: stdin)")
     a.set_defaults(func=cmd_artifact_add)
 
-    p = sub.add_parser("tell", help="pass a message from the person to group sessions")
-    p.add_argument("refs", nargs="+", help="the groups, <watch>/<group-key>")
+    p = sub.add_parser("tell", help="pass a message to workers")
+    p.add_argument("refs", nargs="+", help="the workers")
     p.add_argument("--message", help="the message (default: stdin)")
     p.set_defaults(func=cmd_tell)
 
-    p = sub.add_parser("memory", help="add notes to a watch's memory, MEMORY.md, or remove them")
+    p = sub.add_parser("memory", help="add notes to a role's memory, MEMORY.md, or remove them")
     memory_sub = p.add_subparsers(dest="memory_command", required=True)
-    m = memory_sub.add_parser("add", help="add a note that holds for the whole watch")
-    m.add_argument("--watch", help="default: $VAHTOVIK_WATCH")
+    m = memory_sub.add_parser("add", help="add a note that holds for all workers of the role")
+    m.add_argument("--role", help="default: $VAHTOVIK_ROLE")
     m.add_argument("--text", help="the note (default: stdin)")
     m.set_defaults(func=cmd_memory_add)
     m = memory_sub.add_parser("remove", help="remove an entry that turned out wrong or stale")
     m.add_argument("entry", type=int, help="the entry's number, from its heading in MEMORY.md")
     m.add_argument("--reason", required=True, help="why the entry goes")
-    m.add_argument("--watch", help="default: $VAHTOVIK_WATCH")
+    m.add_argument("--role", help="default: $VAHTOVIK_ROLE")
     m.set_defaults(func=cmd_memory_remove)
 
     p = sub.add_parser("window", help=argparse.SUPPRESS)
@@ -767,15 +843,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("channel", nargs="?", help="guard: the limited input channel")
     p.set_defaults(func=cmd_hook)
 
-    p = sub.add_parser("status", help="show watches, groups and deliveries")
-    p.add_argument("--watch")
+    p = sub.add_parser("status", help="show pollers, workers, channels and costs")
+    p.add_argument("--role", help="only this role, its workers and its pollers")
     p.add_argument("-v", "--verbose", action="store_true",
-                   help="all details as text: sources, sessions, status reasons")
+                   help="all details as text: sources, workers, status reasons")
     p.set_defaults(func=cmd_status)
 
     p = sub.add_parser("log", help="show the journal of what vahtovik did")
     p.add_argument("text", nargs="?", default="",
-                   help="only lines that contain this text, for example a watch, a group, a run or a date")
+                   help="only lines that contain this text, for example a worker, a poller, a run or a date")
     p.add_argument("-n", "--lines", type=int, default=40, help="how many last lines to show; 0 shows all (default 40)")
     p.add_argument("-f", "--follow", action="store_true", help="keep showing new lines as they are written")
     p.set_defaults(func=cmd_log)
@@ -799,10 +875,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("uninstall-timer", help="remove the systemd user timer")
     p.set_defaults(func=cmd_uninstall_timer)
 
-    p = sub.add_parser("check", help="validate config, skills and environment")
+    p = sub.add_parser("check", help="validate config, knowledge, roles, pollers, channels and environment")
     p.set_defaults(func=cmd_check)
 
-    p = sub.add_parser("test-channel", help="send a test message through a channel")
+    p = sub.add_parser("test-channel", help="send a test message through one of vahtovik's channels")
     p.add_argument("name")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_test_channel)
@@ -813,7 +889,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)
-    except (ConfigError, delivery.DeliveryError, group_status.StatusError, skills.SkillError,
+    except (ConfigError, delivery.DeliveryError, worker_status.StatusError, knowledge.SkillError,
             timer.TimerError, TmuxError) as exc:
         print(f"vahtovik: {exc}", file=sys.stderr)
         return 2
