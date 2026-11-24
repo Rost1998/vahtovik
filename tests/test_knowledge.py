@@ -26,11 +26,11 @@ def test_skills_are_found_and_listed(project):
     folder = _skill(project, "triage")
     cfg, _, _ = project.load()
     found, problems = knowledge.collect(cfg, ["triage", "nope"])
-    assert [s.name for s in found] == ["vahtovik", "triage"] and problems == [
+    assert [s.name for s in found] == ["workers", "triage"] and problems == [
         f"skill nope not found: {cfg.knowledge_dir}/skills/nope/SKILL.md is missing"]
     assert knowledge.listing(found[1:]) == f"- `triage` (`{folder / 'SKILL.md'}`): Sort new items by urgency."
     assert knowledge.listing([]) == "- none"
-    assert "triage" in knowledge.available(cfg) and "vahtovik" not in knowledge.available(cfg)
+    assert "triage" in knowledge.available(cfg) and "workers" not in knowledge.available(cfg)
 
 
 def test_check_accepts_the_project(project, capsys):
@@ -40,14 +40,14 @@ def test_check_accepts_the_project(project, capsys):
 def test_check_reports_skill_problems(project, capsys):
     _skill(project, "vague", description=None)
     _skill(project, "named", extra="").joinpath("SKILL.md").write_text("---\nname: Other\ndescription: d\n---\nB.\n")
-    _skill(project, "vahtovik")  # a specialized skill with a shared skill's name
+    _skill(project, "workers")  # a specialized skill with a shared skill's name
     (project.root / "knowledge/skills/empty").mkdir()
     _skill(project, "broken-yaml").joinpath("SKILL.md").write_text("---\nname: [x\n---\nBody.\n")
     problems = _problems(capsys)
     skills = project.root / "knowledge/skills"
     assert f"problem: skills skill vague: {skills}/vague/SKILL.md has no description in its front matter" in problems
     assert "problem: skills skill named: its front matter names it 'Other'; use the folder name" in problems
-    assert "problem: skills skill vahtovik: a shared skill has the same name" in problems
+    assert "problem: skills skill workers: a shared skill has the same name" in problems
     assert f"problem: skills skill empty not found: {skills}/empty/SKILL.md is missing" in problems
     assert any("broken-yaml" in p and "is not valid YAML" in p for p in problems)
 
@@ -95,7 +95,7 @@ def test_links_hold_exactly_the_skills(project, tmp_path):
     (links / "stale").symlink_to(tmp_path)
     (links / "copied").mkdir()
     knowledge.link(folder, knowledge.collect(cfg, ["file"])[0])
-    assert sorted(p.name for p in links.iterdir()) == ["file", "vahtovik"]
+    assert sorted(p.name for p in links.iterdir()) == ["file", "workers"]
     assert os.readlink(links / "file") == str((cfg.knowledge_dir / "skills/file").resolve())
 
 
@@ -120,7 +120,7 @@ def test_sessions_get_their_skills_and_the_credentials_of_their_skills(project, 
     assert "TRIAGE_TOKEN" not in src_a["env"]
     assert src_b["env"]["TRIAGE_TOKEN"] == "from-skill" and src_b["env"]["SHARED_TOKEN"] == "org-b"
     assert _add_dirs(src_b) == [str(cfg.poller_dir("p1") / "sessions/src-b")]
-    assert "- `triage` (`" in src_b["prompt"] and "- `vahtovik` (`" in src_b["prompt"]
+    assert "- `triage` (`" in src_b["prompt"] and "- `workers` (`" in src_b["prompt"]
 
     give(project, artifact("a1", "g"))
     project.queue(turn_answer([work_log()]))

@@ -18,7 +18,7 @@ Ask about anything unclear.
 
 ## 2. Shared or specialized
 
-- `knowledge/shared/<skill>/`: every worker and every monitoring session gets it. Keep this small: each shared skill is listed in every session. `knowledge/shared/vahtovik/` holds the rules of every worker: change it only when the person asks to change how all workers work.
+- `knowledge/shared/<skill>/`: every worker and every monitoring session gets it. Keep this small: each shared skill is listed in every session. `knowledge/shared/workers/` holds the rules of every worker: change it only when the person asks to change how all workers work.
 - `knowledge/skills/<skill>/`: only the sessions that name it get it:
   - a role's `skills:` in its `ROLE.md`, for all its workers;
   - `vahtovik worker spawn --skill <skill>`, for one worker;

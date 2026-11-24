@@ -247,7 +247,7 @@ def rules_note(cfg: Config, state: State, row, spec: SessionSpec) -> str | None:
     """For a turn's prompt: a note that the worker rules changed since the worker's session was created.
 
     Claude Code keeps a session's system prompt as it was at its creation, and ignores a new one on resume. So a
-    resumed session never sees a later change of knowledge/shared/vahtovik in its system prompt: the turn that
+    resumed session never sees a later change of knowledge/shared/workers in its system prompt: the turn that
     follows the change tells the agent to read the file, once."""
     current = rules_hash(cfg)
     if spec.mode != "resume" or row["rules_hash"] == current:

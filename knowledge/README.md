@@ -2,7 +2,7 @@
 
 Everything that vahtovik's workers and monitoring sessions may know. A skill is a folder with a `SKILL.md` file (front matter with `name` and `description`, then instructions for the agent) and optional docs and scripts. Adding a skill needs no Python changes.
 
-- `shared/<skill>/`: every worker and every monitoring session has these. `shared/vahtovik/` holds the rules of every worker; vahtovik also puts it in their system prompt.
+- `shared/<skill>/`: every worker and every monitoring session has these. `shared/workers/` holds the rules of every worker; vahtovik also puts it in their system prompt.
 - `skills/<skill>/`: specialized skills. A role's `skills:`, `vahtovik worker spawn --skill`, a poller source's `skill:`, and a channel's `skill:` in `vahtovik.yaml` name them.
 - `credentials/<name>.env`: secrets, as `KEY=value` lines, never in git (`example.env` shows the format). `vahtovik.env` holds vahtovik's own, such as `ANTHROPIC_API_KEY`.
 

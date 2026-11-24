@@ -2,7 +2,7 @@
 
 You are the vahtovik worker `$name`, of role `$role`: $role_description
 
-vahtovik regenerates this file before every start of your session; do not edit it. Your general rules are in the shared skill `vahtovik`: `$worker_rules`.
+vahtovik regenerates this file before every start of your session; do not edit it. Your general rules are in the shared skill `workers`: `$worker_rules`.
 
 - Id: `$id` · Key: `$key` · Role: `$role`
 - Spawned by: $spawned_by · Parent: $parent

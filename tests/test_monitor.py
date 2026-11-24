@@ -32,7 +32,7 @@ def test_two_sources_bringing_the_same_worker_key_share_the_worker(project):
     assert "Every item is an artifact" in first["prompt"] and "- `r1` (the default): Follows one product." in first["prompt"]
     links = first["args"][first["args"].index("--add-dir") + 1]
     assert sorted(p.name for p in (cfg.data_dir / "pollers/p1/sessions/src-a/.claude/skills").iterdir()) == [
-        "rss", "vahtovik"] and links.endswith("sessions/src-a")
+        "rss", "workers"] and links.endswith("sessions/src-a")
     schema = json.loads(first["args"][first["args"].index("--json-schema") + 1])
     assert schema["properties"]["artifacts"]["items"]["properties"]["role"]["enum"] == ["r1"]
     assert "--append-system-prompt" in first["args"] and first["env"]["VAHTOVIK_POLLER"] == "p1"

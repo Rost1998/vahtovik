@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 
 SHARED = "shared"
 SPECIALIZED = "skills"
-WORKER_RULES = "vahtovik"  # knowledge/shared/vahtovik: the rules of every worker, also in its system prompt
+WORKER_RULES = "workers"  # knowledge/shared/workers: the rules of every worker, also in its system prompt
 AGENT_SKILL = "vahtovik"
 AGENT_TASKS = ("knowledge", "roles", "pollers", "workers", "artifacts", "tell", "channel")
 WATCHDOG_SKILL = "watchdog"
@@ -95,7 +95,7 @@ def shared(cfg: Config) -> list[Skill]:
 
 
 def worker_rules(cfg: Config) -> Skill:
-    """The rules of every worker and monitoring session: knowledge/shared/vahtovik."""
+    """The rules of every worker and monitoring session: knowledge/shared/workers."""
     return _read(SHARED, WORKER_RULES, cfg.knowledge_dir / SHARED / WORKER_RULES)
 
 

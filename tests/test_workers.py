@@ -52,7 +52,7 @@ def test_the_folder_has_the_skill_links_and_the_session_the_credentials(project)
     cfg, state, claude = project.load()
     row = worker(cfg, state, skills=["web-page"])
     links = workers.folder(cfg, row) / ".claude" / "skills"
-    assert sorted(p.name for p in links.iterdir()) == ["file", "rss", "telegram", "vahtovik", "web-page"]
+    assert sorted(p.name for p in links.iterdir()) == ["file", "rss", "telegram", "web-page", "workers"]
     assert (links / "rss").resolve() == (cfg.knowledge_dir / "skills" / "rss").resolve()
     spec, _ = workers.spec_for(cfg, claude, state, row)
     assert spec.env["TELEGRAM_BOT_TOKEN"] == "bot-token-one" and spec.env["TELEGRAM_CHAT_ID"] == "-200"
@@ -65,7 +65,7 @@ def test_the_folder_has_the_skill_links_and_the_session_the_credentials(project)
     project.role("r1", ROLE)  # the role loses telegram: the next start drops its link
     cfg, state, claude = project.load()
     workers.prepare(cfg, state, state.worker(row["id"]))
-    assert sorted(p.name for p in links.iterdir()) == ["file", "rss", "vahtovik", "web-page"]
+    assert sorted(p.name for p in links.iterdir()) == ["file", "rss", "web-page", "workers"]
 
 
 def test_a_worker_spawns_a_child_that_reports_back(project):
@@ -155,7 +155,7 @@ def test_a_resumed_worker_is_told_once_that_the_worker_rules_changed(project):
     _turns(project, "run2")
     assert "the rules of every vahtovik worker changed" not in project.calls()[1]["prompt"]
 
-    rules = cfg.knowledge_dir / "shared/vahtovik/SKILL.md"
+    rules = cfg.knowledge_dir / "shared/workers/SKILL.md"
     rules.write_text(rules.read_text() + "\nA new rule.\n")
     for number, told in ((3, True), (4, False)):  # the turn after the change says so, the next one does not
         give(project, artifact(f"a{number}", "g"))

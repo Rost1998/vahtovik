@@ -12,7 +12,7 @@ Run vahtovik as `uv run vahtovik ...` in the project folder.
 ## The parts
 
 - **Knowledge**, `knowledge/`: what the workers know.
-  - `shared/<skill>/`: skills that every worker and every monitoring session has. `shared/vahtovik/` holds the rules of every worker.
+  - `shared/<skill>/`: skills that every worker and every monitoring session has. `shared/workers/` holds the rules of every worker.
   - `skills/<skill>/`: specialized skills, such as `rss`, `web-page`, `file` or `telegram`: a `SKILL.md` and optional docs and scripts. Roles, spawns, poller sources and channels name them.
   - `credentials/<name>.env`: secrets, never in git. A skill names the files it needs (`credentials: [telegram]`); a role, a poller source or a channel can name more. `vahtovik.env` holds vahtovik's own.
 - **Role**, `roles/<role>/ROLE.md`: what a worker is and how it works. Its front matter gives `description`, `skills`, and optionally `credentials`, `model`, `effort` and a Claude `account`; its body holds the working rules: how to process, what to report, where and with which skill. `MEMORY.md` next to it holds the notes that the role's workers saved with `vahtovik memory`; the person commits it to git.

@@ -1,5 +1,5 @@
 ---
-name: vahtovik
+name: workers
 description: The rules of every vahtovik worker and monitoring session. Read it when you are unsure how to work inside vahtovik, how to end a turn, or how to see, spawn or tell other workers.
 ---
 
