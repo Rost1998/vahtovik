@@ -22,4 +22,4 @@ The script prints JSON: `{"feed": ..., "new": [{"id", "title", "link", "publishe
 - Entry summaries are often short. Fetch the entry's link when the monitoring rules need more detail to decide.
 - If `error` is not null, put it in `notes` and return no artifacts.
 
-With `scan: script` in `watch.yaml`, vahtovik runs `scan` itself and gives you the new entries (the `new` list above) as items; then do not run the script.
+With `scan: script` in `poller.yaml`, vahtovik runs `scan` itself and gives the monitoring session the new entries (the `new` list above) as items; then do not run the script.

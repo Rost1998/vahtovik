@@ -1,41 +1,44 @@
-# vahtovik global configuration. Secrets go to .env, not here.
+# vahtovik global configuration. Secrets go to knowledge/credentials/, not here.
 
 claude:
   auth: subscription          # subscription (your Claude login) or api-key (ANTHROPIC_API_KEY, runs with --bare)
   config_dir: null            # optional separate CLAUDE_CONFIG_DIR for vahtovik sessions
-  # accounts:                 # optional: other Claude logins; a watch picks one with claude: {account: work}
+  # accounts:                 # optional: other Claude logins; a role or a poller picks one with `account: work`
   #   work: {config_dir: ~/.claude-work}   # log in once: CLAUDE_CONFIG_DIR=~/.claude-work claude (README)
   model: opus                 # an alias: Claude Code uses the newest Opus
   effort: high                # low, medium, high, xhigh or max
-  stages:                     # settings per stage; a watch can set its own model and effort, and override these
-    monitor: {max_budget_usd: 1.00}   # per monitor session: one per source per run
-    # group: {effort: xhigh}  # group sessions are interactive: max_budget_usd does not apply to them
-    watchdog: {model: sonnet, effort: medium, max_budget_usd: 1.00}   # belongs to no watch
+  stages:                     # settings per stage; a role sets the model and effort of its workers, a poller those of its monitoring
+    monitor: {max_budget_usd: 1.00}   # per monitoring session: one per source per run
+    # worker: {effort: xhigh} # worker sessions are interactive: max_budget_usd does not apply to them
+    watchdog: {model: sonnet, effort: medium, max_budget_usd: 1.00}
     # input: {model: opus, effort: xhigh}   # the default: answers your messages from channels with `input`
-  parallel_turns: 5           # the most group turns that work at once; the rest start at a later run
+  parallel_turns: 5           # the most worker turns that work at once; the rest start at a later run
 
-tmux:                         # group sessions run in windows of this tmux session; `vahtovik open` shows you one
+tmux:                         # workers run in windows of this tmux session; `vahtovik open` shows you one
   session: vahtovik-agents
   socket: vahtovik            # a tmux server of its own (tmux -L vahtovik); null: your default tmux server
 
-watchdog:                     # looks after the group session windows at the start of a run (see README)
+watchdog:                     # looks after the worker windows at the start of a run (see README)
   every: 5m                   # how often; 0: at every run
-  notify_every: 6h            # repeat a notice about a group that waits for you or needs attention; 0: never
-  long_turn_after: 3h         # warn once about a group turn running this long; 0: never
+  notify_every: 6h            # repeat a notice about a worker that waits for you or needs attention; 0: never
+  long_turn_after: 3h         # warn once about a worker turn running this long; 0: never
 
 usage:                        # warns you when the Claude plan's usage limits fill up (see README, Usage limits)
   every: 10m                  # how often vahtovik asks Claude Code for the usage; 0: never
   warn_at: [80, 90, 95, 99]   # one warning at each percent of a limit, until the limit resets
-  # channels: [ops-telegram]  # the default: every input channel that is not limited
 
-channels:
+notices: [local-log]          # where the watchdog's notices and the usage warnings go;
+                              # without this line: every input channel that is not limited
+
+channels:                     # vahtovik's own channels: how vahtovik talks to you. Workers report with their skills.
   local-log:
-    skill: file
+    skill: file               # a skill of knowledge/skills with a `send` script
     env: {FILE_CHANNEL_PATH: data/outbox.md}
   # ops-telegram:
   #   skill: telegram
-  #   env: {TELEGRAM_CHAT_ID: "-1001234567890"}   # TELEGRAM_BOT_TOKEN comes from .env
+  #   credentials: [ops-bot]  # knowledge/credentials/ops-bot.env: TELEGRAM_BOT_TOKEN, and TELEGRAM_CHAT_ID or env below
+  #   env: {TELEGRAM_CHAT_ID: "-1001234567890"}
   #   input: {}                 # optional: read your messages from the chat every minute, and answer them
   #   # input: {new_session_after: 1h, history: 5}   # the defaults: a new session after a quiet hour (README)
   #   # for a chat that others post in, limit the channel (README, Limited channels):
-  #   # input: {senders: ["@alice"], commands: [status, log], watches: [example], rules: Answer briefly.}
+  #   # input: {senders: ["@alice"], commands: [status, log], roles: [uv-tracker], rules: Answer briefly.}

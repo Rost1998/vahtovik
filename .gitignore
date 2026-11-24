@@ -1,4 +1,6 @@
 /data/
+/knowledge/credentials/*.env
+!/knowledge/credentials/example.env
 .env
 .venv/
 __pycache__/

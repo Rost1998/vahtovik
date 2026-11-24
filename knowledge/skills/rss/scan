@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Scan contract (skills/README.md): print the feed's new entries as `items`, for `scan: script` sources."""
+"""Scan contract (knowledge/README.md): print the feed's new entries as `items`, for `scan: script` sources."""
 
 import json
 import os

@@ -15,6 +15,8 @@ from importlib import resources
 from pathlib import Path
 from string import Template
 
+import yaml
+
 
 def utc_iso(dt: datetime | None = None) -> str:
     """Timestamp for the database: UTC, so string order is time order."""
@@ -45,8 +47,21 @@ def slugify(text: str, max_len: int = 64) -> str:
     return slug[:max_len].strip("-")
 
 
-def group_key(raw: str | None) -> str:
+def worker_key(raw: str | None) -> str:
+    """A worker key: lowercase words joined by hyphens."""
     return slugify(raw or "") or "misc"
+
+
+def parse_front_matter(text: str) -> tuple[dict, str]:
+    """The YAML front matter of a markdown file, such as a SKILL.md or a ROLE.md, and the text after it.
+    Raises yaml.YAMLError for front matter that is not valid YAML."""
+    if not text.startswith("---"):
+        return {}, text
+    parts = text.split("\n---", 1)
+    if len(parts) != 2:
+        return {}, text
+    meta = yaml.safe_load(parts[0].removeprefix("---")) or {}
+    return (meta if isinstance(meta, dict) else {}), parts[1].lstrip("-").lstrip("\n")
 
 
 def artifact_filename(artifact_id: str) -> str:

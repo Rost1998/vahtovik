@@ -1,4 +1,4 @@
-"""Load and validate vahtovik.yaml and watches/<name>/watch.yaml."""
+"""Load and validate vahtovik.yaml, the roles (roles/<role>/ROLE.md) and the pollers (pollers/<poller>/poller.yaml)."""
 
 from __future__ import annotations
 
@@ -10,15 +10,20 @@ from pathlib import Path
 
 import yaml
 
+from .util import parse_front_matter
+
 CONFIG_FILE = "vahtovik.yaml"
-WATCH_FILE = "watch.yaml"
-STAGES = ("monitor", "group", "watchdog", "input")
+ROLE_FILE = "ROLE.md"
+POLLER_FILE = "poller.yaml"
+OWN_CREDENTIALS = "vahtovik"  # knowledge/credentials/vahtovik.env: the secrets of vahtovik's own process
+STAGES = ("monitor", "worker", "watchdog", "input")
 STAGE_DEFAULTS = {"input": {"model": "opus", "effort": "xhigh"}}  # over the claude model and effort, under its stages
-SCAN_MODES = ("ai", "script")  # who collects a source's items: an AI session, or the source type's scan script
+SCAN_MODES = ("ai", "script")  # who collects a source's items: an AI session, or the source skill's scan script
 EFFORTS = ("low", "medium", "high", "xhigh", "max")  # what `claude --effort` takes
 AUTH_MODES = ("subscription", "api-key")
-INPUT_COMMANDS = ("status", "log", "tell", "artifact", "group")  # the vahtovik commands a limited channel may get
-SCOPE_ENV = "VAHTOVIK_WATCHES"  # set: vahtovik commands see only these watches (the sessions of limited channels)
+INPUT_COMMANDS = ("status", "log", "tell", "artifact", "worker")  # the vahtovik commands a limited channel may get
+SCOPE_ENV = "VAHTOVIK_ROLES"  # set: vahtovik commands see only workers of these roles (the sessions of limited channels)
+NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")  # the names of roles and pollers, and worker keys
 
 
 class ConfigError(Exception):
@@ -37,16 +42,16 @@ class ClaudeSettings:
     auth: str = "subscription"
     binary: str = "claude"
     config_dir: Path | None = None  # the default login's Claude Code profile; None: Claude Code's own default
-    accounts: dict[str, Path] = field(default_factory=dict)  # other logins that watches can use: name -> profile
+    accounts: dict[str, Path] = field(default_factory=dict)  # other logins that roles and pollers can use
     model: str = "opus"  # an alias: Claude Code uses the newest Opus
     effort: str = "high"
     stages: dict[str, dict] = field(default_factory=dict)
-    parallel_turns: int = 5  # the most group turns that work at once; the rest start at a later run
+    parallel_turns: int = 5  # the most worker turns that work at once; the rest start at a later run
 
 
 @dataclass
 class TmuxSettings:
-    session: str = "vahtovik-agents"  # the tmux session that holds a window per running group session
+    session: str = "vahtovik-agents"  # the tmux session that holds a window per running worker session
     socket: str | None = "vahtovik"  # `tmux -L <socket>`, a server of its own; None uses the default tmux server
 
 
@@ -61,14 +66,13 @@ class WatchdogSettings:
 class UsageSettings:
     every: timedelta = timedelta(minutes=10)  # how often vahtovik asks Claude Code for the plan's usage; 0: never
     warn_at: list[int] = field(default_factory=lambda: [80, 90, 95, 99])  # one warning at each percent of a limit
-    channels: list[str] | None = None  # where the warnings go; None: every input channel that is not limited
 
 
 @dataclass
 class InputSettings:
     interval: timedelta = timedelta(minutes=1)  # how often vahtovik reads the channel
     commands: list[str] | None = None  # set: a limited channel, whose agent may run only these vahtovik commands
-    watches: list[str] | None = None  # set: its agent sees only these watches
+    roles: list[str] | None = None  # set: its agent sees only workers of these roles
     senders: list[str] | None = None  # set: only messages whose `from` is one of these reach the agent
     rules: str = ""  # the person's own rules for the channel's agent
     # after a pause this long, the next message starts a new session, unless the last reply waits for an answer;
@@ -84,9 +88,11 @@ class InputSettings:
 
 @dataclass
 class Channel:
+    """One of vahtovik's own channels: how vahtovik talks to the person. Workers never use them."""
     name: str
-    skill: str
-    env: dict[str, str] = field(default_factory=dict)
+    skill: str  # a skill of knowledge/skills with a `send` script, and a `receive` script for `input`
+    env: dict[str, str] = field(default_factory=dict)  # settings for the scripts, such as a chat id
+    credentials: list[str] = field(default_factory=list)  # files of knowledge/credentials for the scripts
     input: InputSettings | None = None  # set: vahtovik reads the person's messages from the channel and answers them
 
 
@@ -95,8 +101,8 @@ class Source:
     id: str
     skill: str
     params: dict = field(default_factory=dict)
-    env: dict[str, str] = field(default_factory=dict)  # variable the skill reads -> name of the secret to use
-    interval: timedelta = timedelta(hours=1)  # how often to monitor it; watch.yaml's default is the watch's interval
+    credentials: list[str] = field(default_factory=list)  # more files of knowledge/credentials, over the skill's
+    interval: timedelta = timedelta(hours=1)  # how often to monitor it; the poller's interval by default
     scan: str = "ai"  # see SCAN_MODES
     at: list[time] = field(default_factory=list)  # set: monitor it at these times of the day instead, in local time
 
@@ -112,74 +118,48 @@ class Source:
 
 
 @dataclass
-class Watch:
+class Role:
+    """What a worker is and how it works: roles/<role>/ROLE.md, with its memory next to it."""
     name: str
     dir: Path
-    enabled: bool
-    interval: timedelta  # the default interval of its sources
-    sources: list[Source]
-    channels: list[str]
-    claude: dict[str, dict]  # stage settings that override vahtovik.yaml, by stage
-    model: str | None = None  # the model and effort of all the watch's sessions, unless a stage sets its own
+    description: str
+    skills: list[str]  # skills of knowledge/skills that its workers get, besides the shared ones
+    credentials: list[str]  # more files of knowledge/credentials, over its skills' own
+    body: str  # its working rules: how to process, what to report, where and with which skill
+    model: str | None = None
     effort: str | None = None
-    at: list[time] = field(default_factory=list)  # set: the default times of the day of its sources, over interval
-    account: str | None = None  # set: its group and monitoring sessions use this account of claude.accounts
+    account: str | None = None  # set: its workers use this account of claude.accounts
 
     @property
-    def watch_yaml(self) -> Path:
-        return self.dir / WATCH_FILE
-
-    @property
-    def monitor_md(self) -> Path:
-        return self.dir / "monitor.md"
-
-    @property
-    def report_md(self) -> Path:
-        return self.dir / "report.md"
+    def role_md(self) -> Path:
+        return self.dir / ROLE_FILE
 
     @property
     def memory_md(self) -> Path:
         return self.dir / "MEMORY.md"
 
-    @property
-    def env_file(self) -> Path:
-        return self.dir / ".env"
+
+@dataclass
+class Poller:
+    """What is monitored, and which workers get what it finds: pollers/<poller>/poller.yaml and poller.md."""
+    name: str
+    dir: Path
+    enabled: bool
+    interval: timedelta  # the default interval of its sources
+    roles: list[str]  # the roles its new workers may have; the first is the default
+    sources: list[Source]
+    at: list[time] = field(default_factory=list)  # set: the default times of the day of its sources, over interval
+    model: str | None = None  # the model and effort of its monitoring sessions
+    effort: str | None = None
+    account: str | None = None  # set: its monitoring sessions use this account of claude.accounts
 
     @property
-    def own_skills_dir(self) -> Path:
-        """The watch's own skills: skills/<skill>/SKILL.md, with optional scripts."""
-        return self.dir / "skills"
+    def poller_yaml(self) -> Path:
+        return self.dir / POLLER_FILE
 
     @property
-    def skill_links_dir(self) -> Path:
-        """Symlinks to the watch's own skills, where Claude Code looks for them: .claude/skills/<skill>."""
-        return self.dir / ".claude" / "skills"
-
-    def claude_dirs(self) -> list[Path]:
-        """The folders that the watch's sessions get with --add-dir, so Claude Code loads the watch's skills."""
-        return [self.dir] if self.skill_links_dir.is_dir() else []
-
-    def process_files(self) -> list[Path]:
-        process_dir = self.dir / "process"
-        return sorted(process_dir.glob("*.md")) if process_dir.is_dir() else []
-
-    def secrets(self) -> dict[str, str]:
-        """This watch's own secrets. Only this watch's sessions get them."""
-        return read_env_file(self.env_file)
-
-    def source_env(self, source: Source) -> dict[str, str]:
-        """The watch's secrets, plus the variables the source's `env` fills from other secrets."""
-        env = self.secrets()
-        for var, name in source.env.items():
-            value = env.get(name) or os.environ.get(name)
-            if value:
-                env[var] = value
-        return env
-
-    def missing_secrets(self, source: Source, required: list[str]) -> list[str]:
-        secrets = self.secrets()
-        names = [source.env.get(var, var) for var in [*required, *source.env]]
-        return sorted({n for n in names if not secrets.get(n) and not os.environ.get(n)})
+    def poller_md(self) -> Path:
+        return self.dir / "poller.md"
 
 
 @dataclass
@@ -187,25 +167,28 @@ class Config:
     root: Path
     claude: ClaudeSettings
     channels: dict[str, Channel]
-    watches: dict[str, Watch]
+    roles: dict[str, Role]
+    pollers: dict[str, Poller]
     data_dir: Path
-    skills_dir: Path
-    watches_dir: Path
+    knowledge_dir: Path
+    skills_dir: Path  # vahtovik's own skills: the vahtovik agent's and the watchdog's
+    roles_dir: Path
+    pollers_dir: Path
     tmux: TmuxSettings = field(default_factory=TmuxSettings)
     watchdog: WatchdogSettings = field(default_factory=WatchdogSettings)
     usage: UsageSettings = field(default_factory=UsageSettings)
-    scope: list[str] | None = None  # set: the command runs for a limited channel that sees only these watches
+    notices: list[str] | None = None  # where notices and usage warnings go; None: every full input channel
+    scope: list[str] | None = None  # set: the command runs for a limited channel that sees only these roles
 
-    def stage(self, watch: Watch | None, stage: str) -> StageSettings:
+    def stage(self, stage: str, owner: Role | Poller | None = None) -> StageSettings:
         """A stage's settings. Later ones win: vahtovik.yaml's model and effort, the stage's own defaults
-        (STAGE_DEFAULTS), vahtovik.yaml's settings for the stage, the watch's model and effort, the watch's settings
-        for the stage."""
+        (STAGE_DEFAULTS), vahtovik.yaml's settings for the stage, and the model and effort of the role (for its
+        workers) or the poller (for its monitoring sessions)."""
         merged: dict = {"model": self.claude.model, "effort": self.claude.effort}
         merged.update(STAGE_DEFAULTS.get(stage, {}))
         merged.update(self.claude.stages.get(stage, {}))
-        if watch is not None:
-            merged.update({k: v for k, v in (("model", watch.model), ("effort", watch.effort)) if v})
-            merged.update(watch.claude.get(stage, {}))
+        if owner is not None:
+            merged.update({k: v for k, v in (("model", owner.model), ("effort", owner.effort)) if v})
         budget = merged.get("max_budget_usd")
         return StageSettings(
             model=str(merged["model"]),
@@ -213,20 +196,43 @@ class Config:
             max_budget_usd=float(budget) if budget is not None else None,
         )
 
-    def watch(self, name: str) -> Watch:
-        if name not in self.watches:
-            raise ConfigError(f"unknown watch {name!r}; known: {', '.join(sorted(self.watches)) or 'none'}")
-        return self.watches[name]
+    def role(self, name: str) -> Role:
+        if name not in self.roles:
+            raise ConfigError(f"unknown role {name!r}; known: {', '.join(sorted(self.roles)) or 'none'}")
+        return self.roles[name]
+
+    def poller(self, name: str) -> Poller:
+        if name not in self.pollers:
+            raise ConfigError(f"unknown poller {name!r}; known: {', '.join(sorted(self.pollers)) or 'none'}")
+        return self.pollers[name]
+
+    def notice_channels(self) -> list[str]:
+        """Where vahtovik's notices and usage warnings go: `notices`, or every input channel that is not limited."""
+        if self.notices is not None:
+            return self.notices
+        return [c.name for c in self.channels.values() if c.input and not c.input.limited]
 
     @property
     def db_path(self) -> Path:
         return self.data_dir / "vahtovik.db"
 
-    def group_dir(self, watch: str, key: str) -> Path:
-        return self.data_dir / "watches" / watch / "groups" / key
+    @property
+    def credentials_dir(self) -> Path:
+        return self.knowledge_dir / "credentials"
 
-    def source_dir(self, watch: str, source_id: str) -> Path:
-        return self.data_dir / "watches" / watch / "sources" / source_id
+    @property
+    def workers_dir(self) -> Path:
+        return self.data_dir / "workers"
+
+    @property
+    def archive_dir(self) -> Path:
+        return self.data_dir / "archive"
+
+    def poller_dir(self, poller: str) -> Path:
+        return self.data_dir / "pollers" / poller
+
+    def source_dir(self, poller: str, source_id: str) -> Path:
+        return self.poller_dir(poller) / "sources" / source_id
 
     def channel_dir(self, channel: str) -> Path:
         return self.data_dir / "channels" / channel
@@ -263,9 +269,14 @@ def read_env_file(path: Path) -> dict[str, str]:
     return values
 
 
-def load_env_file(root: Path) -> None:
-    """Load the shared .env without overriding the real environment."""
-    for key, value in read_env_file(root / ".env").items():
+def credentials_file(cfg: Config, name: str) -> Path:
+    return cfg.credentials_dir / f"{name}.env"
+
+
+def load_env_file(cfg: Config) -> None:
+    """Load vahtovik's own credentials, knowledge/credentials/vahtovik.env, without overriding the real
+    environment."""
+    for key, value in read_env_file(credentials_file(cfg, OWN_CREDENTIALS)).items():
         os.environ.setdefault(key, value)
 
 
@@ -294,8 +305,30 @@ def parse_times(value: object) -> list[time]:
     return sorted(times)
 
 
+def parse_moment(value: str, now: datetime | None = None) -> datetime:
+    """`--at`: a time of the day, HH:MM, meaning its next occurrence in local time, or a date and time,
+    YYYY-MM-DD HH:MM, in local time. Returns an aware datetime."""
+    now = (now or datetime.now()).astimezone()
+    text = " ".join(str(value).split())
+    match = re.fullmatch(r"(\d{4}-\d{2}-\d{2})[ T](\d{1,2}):(\d{2})", text)
+    if match:
+        try:
+            moment = datetime.fromisoformat(f"{match[1]} {int(match[2]):02d}:{match[3]}").astimezone()
+        except ValueError:
+            raise ConfigError(f"bad date and time {value!r}: use YYYY-MM-DD HH:MM, for example 2026-11-25 08:00") from None
+        if moment <= now:
+            raise ConfigError(f"{value!r} has passed already")
+        return moment
+    try:
+        at = parse_times(text)[0]
+    except ConfigError:
+        raise ConfigError(f"bad time {value!r}: use HH:MM, or YYYY-MM-DD HH:MM") from None
+    moment = datetime.combine(now.date(), at).astimezone()
+    return moment if moment > now else datetime.combine(now.date() + timedelta(days=1), at).astimezone()
+
+
 def _schedule(raw: dict, where: str) -> tuple[timedelta | None, list[time]]:
-    """The interval or the times of the day that a watch or a source sets itself; (None, []) for neither."""
+    """The interval or the times of the day that a poller or a source sets itself; (None, []) for neither."""
     if raw.get("interval") is not None and raw.get("at") is not None:
         raise ConfigError(f"{where}: set interval or at, not both")
     try:
@@ -389,14 +422,14 @@ def _load_watchdog(raw: object) -> WatchdogSettings:
         raise ConfigError("watchdog must be a mapping")
     raw = raw or {}
     settings = WatchdogSettings()
-    for name in ("every", "notify_every", "long_turn_after"):  # names it does not know, like the old
-        if name in raw:                                          # `check_every`, are ignored
+    for name in ("every", "notify_every", "long_turn_after"):
+        if name in raw:
             value = raw[name]
             setattr(settings, name, timedelta(0) if value in (0, "0") else parse_interval(value))
     return settings
 
 
-def _load_usage(raw: object, channels: dict[str, Channel]) -> UsageSettings:
+def _load_usage(raw: object) -> UsageSettings:
     if not isinstance(raw or {}, dict):
         raise ConfigError("usage must be a mapping")
     raw = raw or {}
@@ -412,29 +445,7 @@ def _load_usage(raw: object, channels: dict[str, Channel]) -> UsageSettings:
         if any(isinstance(v, bool) or not isinstance(v, int) or not 1 <= v <= 100 for v in value):
             raise ConfigError("usage.warn_at must be a list of whole percents from 1 to 100, such as [80, 90]")
         settings.warn_at = sorted(set(value))
-    settings.channels = _names(raw, "channels", "usage")
-    unknown = [c for c in settings.channels or [] if c not in channels]
-    if unknown:
-        raise ConfigError(f"usage.channels: unknown channel {', '.join(unknown)}")
     return settings
-
-
-def _load_channels(raw: object) -> dict[str, Channel]:
-    if not isinstance(raw or {}, dict):
-        raise ConfigError("channels must be a mapping of channel name to settings")
-    channels = {}
-    for name, item in (raw or {}).items():
-        if not isinstance(item, dict) or not item.get("skill"):
-            raise ConfigError(f"channel {name!r} needs a skill")
-        env = item.get("env") or {}
-        if not isinstance(env, dict):
-            raise ConfigError(f"channel {name!r}: env must be a mapping")
-        reading = item.get("input")
-        if reading is not None and not isinstance(reading, dict):
-            raise ConfigError(f"channel {name!r}: input must be a mapping, such as {{}} or {{interval: 5m}}")
-        settings = None if reading is None else _load_input(reading, f"channel {name!r}: input")
-        channels[name] = Channel(name, str(item["skill"]), {str(k): str(v) for k, v in env.items()}, settings)
-    return channels
 
 
 def _names(raw: dict, key: str, where: str) -> list[str] | None:
@@ -446,6 +457,29 @@ def _names(raw: dict, key: str, where: str) -> list[str] | None:
     return [str(v) for v in value]
 
 
+def _string_map(raw: object, where: str) -> dict[str, str]:
+    if not isinstance(raw or {}, dict):
+        raise ConfigError(f"{where} must be a mapping")
+    return {str(k): str(v) for k, v in (raw or {}).items()}
+
+
+def _load_channels(raw: object) -> dict[str, Channel]:
+    if not isinstance(raw or {}, dict):
+        raise ConfigError("channels must be a mapping of channel name to settings")
+    channels = {}
+    for name, item in (raw or {}).items():
+        where = f"channel {name!r}"
+        if not isinstance(item, dict) or not item.get("skill"):
+            raise ConfigError(f"{where} needs a skill")
+        reading = item.get("input")
+        if reading is not None and not isinstance(reading, dict):
+            raise ConfigError(f"{where}: input must be a mapping, such as {{}} or {{interval: 5m}}")
+        settings = None if reading is None else _load_input(reading, f"{where}: input")
+        channels[str(name)] = Channel(str(name), str(item["skill"]), _string_map(item.get("env"), f"{where}: env"),
+                                      _names(item, "credentials", where) or [], settings)
+    return channels
+
+
 def _load_input(raw: dict, where: str) -> InputSettings:
     settings = InputSettings()
     if raw.get("interval"):
@@ -455,9 +489,9 @@ def _load_input(raw: dict, where: str) -> InputSettings:
     if unknown:
         raise ConfigError(f"{where}.commands: unknown command {', '.join(unknown)}; "
                           f"commands: {', '.join(INPUT_COMMANDS)}")
-    settings.watches = _names(raw, "watches", where)
-    if settings.watches is not None and settings.commands is None:
-        settings.commands = list(INPUT_COMMANDS)  # watches alone limit the channel too
+    settings.roles = _names(raw, "roles", where)
+    if settings.roles is not None and settings.commands is None:
+        settings.commands = list(INPUT_COMMANDS)  # roles alone limit the channel too
     settings.senders = _names(raw, "senders", where)
     rules = raw.get("rules") or ""
     if not isinstance(rules, str):
@@ -476,92 +510,137 @@ def _load_input(raw: dict, where: str) -> InputSettings:
     return settings
 
 
-def _load_watch(path: Path, channels: dict[str, Channel], accounts: dict[str, Path]) -> Watch:
-    raw = _read_yaml(path / WATCH_FILE)
-    where = str(path / WATCH_FILE)
+def _account(value: object, where: str, accounts: dict[str, Path]) -> str | None:
+    if not value:
+        return None
+    if str(value) not in accounts:
+        raise ConfigError(f"{where}: unknown account {value!r}; known: {', '.join(sorted(accounts)) or 'none'}; "
+                          f"define it in {CONFIG_FILE} claude.accounts")
+    return str(value)
+
+
+def _check_name(name: str, what: str, path: Path) -> None:
+    if not NAME.fullmatch(name):
+        raise ConfigError(f"{path}: the {what} name {name!r} must be lowercase letters and digits, "
+                          "with single hyphens between words")
+
+
+def _load_role(path: Path, accounts: dict[str, Path]) -> Role:
+    where = str(path / ROLE_FILE)
+    _check_name(path.name, "role", path)
+    try:
+        meta, body = parse_front_matter((path / ROLE_FILE).read_text())
+    except yaml.YAMLError as exc:
+        raise ConfigError(f"{where}: the front matter is not valid YAML: {exc}") from None
+    unknown = set(meta) - {"name", "description", "skills", "credentials", "model", "effort", "account"}
+    if unknown:
+        raise ConfigError(f"{where}: unknown front matter {', '.join(sorted(unknown))}")
+    if "name" in meta and str(meta["name"]) != path.name:
+        raise ConfigError(f"{where}: its front matter names it {meta['name']!r}; use the folder name")
+    return Role(
+        name=path.name,
+        dir=path,
+        description=str(meta.get("description") or ""),
+        skills=_names(meta, "skills", where) or [],
+        credentials=_names(meta, "credentials", where) or [],
+        body=body.strip(),
+        model=str(meta["model"]) if meta.get("model") else None,
+        effort=_effort(meta.get("effort"), where),
+        account=_account(meta.get("account"), where, accounts),
+    )
+
+
+def _load_poller(path: Path, roles: dict[str, Role], accounts: dict[str, Path]) -> Poller:
+    raw = _read_yaml(path / POLLER_FILE)
+    where = str(path / POLLER_FILE)
+    _check_name(path.name, "poller", path)
     interval, at = _schedule(raw, where)
     interval = interval or timedelta(hours=1)
     sources = []
     for item in raw.get("sources") or []:
         if not isinstance(item, dict) or not item.get("id") or not item.get("skill"):
             raise ConfigError(f"{where}: every source needs an id and a skill")
+        own = f"{where}: source {item['id']!r}"
         params = item.get("params") or {}
         if not isinstance(params, dict):
-            raise ConfigError(f"{where}: params of source {item['id']!r} must be a mapping")
-        env = item.get("env") or {}
-        if not isinstance(env, dict):
-            raise ConfigError(f"{where}: env of source {item['id']!r} must be a mapping of variable to secret name")
+            raise ConfigError(f"{own}: params must be a mapping")
         scan = str(item.get("scan") or "ai")
         if scan not in SCAN_MODES:
-            raise ConfigError(f"{where}: scan of source {item['id']!r} must be one of {', '.join(SCAN_MODES)}")
-        own_interval, own_at = _schedule(item, f"{where}: source {item['id']!r}")
-        if own_interval is None and not own_at:  # a source without its own schedule has its watch's
+            raise ConfigError(f"{own}: scan must be one of {', '.join(SCAN_MODES)}")
+        own_interval, own_at = _schedule(item, own)
+        if own_interval is None and not own_at:  # a source without its own schedule has its poller's
             own_interval, own_at = interval, at
-        sources.append(Source(str(item["id"]), str(item["skill"]), params, {str(k): str(v) for k, v in env.items()},
+        sources.append(Source(str(item["id"]), str(item["skill"]), params, _names(item, "credentials", own) or [],
                               own_interval or interval, scan, own_at))
     ids = [s.id for s in sources]
     if len(ids) != len(set(ids)):
         raise ConfigError(f"{where}: source ids must be unique")
-    watch_channels = [str(c) for c in raw.get("channels") or []]
-    unknown = [c for c in watch_channels if c not in channels]
+    poller_roles = _names(raw, "roles", where) or []
+    if not poller_roles:
+        raise ConfigError(f"{where}: give roles, the roles of the workers it spawns, for example [uv-tracker]")
+    unknown = [r for r in poller_roles if r not in roles]
     if unknown:
-        raise ConfigError(f"{where}: unknown channel {', '.join(unknown)}; define it in {CONFIG_FILE}")
+        raise ConfigError(f"{where}: unknown role {', '.join(unknown)}; make it in roles/<role>/{ROLE_FILE}")
     claude = raw.get("claude") or {}
-    if not isinstance(claude, dict):
-        raise ConfigError(f"{where} claude: must be a mapping")
-    stages = {k: v for k, v in claude.items() if k not in ("model", "effort", "account")}
-    account = str(claude["account"]) if claude.get("account") else None
-    if account and account not in accounts:
-        raise ConfigError(f"{where} claude: unknown account {account!r}; "
-                          f"known: {', '.join(sorted(accounts)) or 'none'}; define it in {CONFIG_FILE} claude.accounts")
-    return Watch(
+    if not isinstance(claude, dict) or set(claude) - {"model", "effort", "account"}:
+        raise ConfigError(f"{where} claude: give only model, effort and account")
+    return Poller(
         name=path.name,
         dir=path,
         enabled=bool(raw.get("enabled", True)),
         interval=interval,
+        roles=poller_roles,
         sources=sources,
-        channels=watch_channels,
-        claude=_stage_overrides(stages, f"{where} claude"),
+        at=at,
         model=str(claude["model"]) if claude.get("model") else None,
         effort=_effort(claude.get("effort"), f"{where} claude"),
-        at=at,
-        account=account,
+        account=_account(claude.get("account"), f"{where} claude", accounts),
     )
+
+
+def _folders(parent: Path, marker: str) -> list[Path]:
+    return sorted(p for p in parent.iterdir() if (p / marker).is_file()) if parent.is_dir() else []
 
 
 def load(root: Path | None = None) -> Config:
     root = root or find_root()
     raw = _read_yaml(root / CONFIG_FILE)
     paths = raw.get("paths") or {}
-    data_dir = (root / paths.get("data", "data")).resolve()
-    skills_dir = (root / paths.get("skills", "skills")).resolve()
-    watches_dir = (root / paths.get("watches", "watches")).resolve()
+    folder = {name: (root / paths.get(name, name)).resolve() for name in ("data", "knowledge", "skills", "roles",
+                                                                         "pollers")}
     channels = _load_channels(raw.get("channels"))
     claude = _load_claude(raw.get("claude") or {}, root)
-    watches = {}
-    if watches_dir.is_dir():
-        for path in sorted(p for p in watches_dir.iterdir() if (p / WATCH_FILE).is_file()):
-            watches[path.name] = _load_watch(path, channels, claude.accounts)
+    roles = {p.name: _load_role(p, claude.accounts) for p in _folders(folder["roles"], ROLE_FILE)}
+    pollers = {p.name: _load_poller(p, roles, claude.accounts) for p in _folders(folder["pollers"], POLLER_FILE)}
     for channel in channels.values():
-        unknown = [w for w in (channel.input.watches or []) if w not in watches] if channel.input else []
+        unknown = [r for r in (channel.input.roles or []) if r not in roles] if channel.input else []
         if unknown:
-            raise ConfigError(f"channel {channel.name!r}: input.watches: unknown watch {', '.join(unknown)}")
-    # A command that a limited channel's agent runs sees only the channel's watches. The scope is for this command
-    # alone: what the command starts, such as the tmux server or a group session, must see all watches.
+            raise ConfigError(f"channel {channel.name!r}: input.roles: unknown role {', '.join(unknown)}")
+    notices = _names(raw, "notices", "vahtovik.yaml")
+    unknown = [c for c in notices or [] if c not in channels]
+    if unknown:
+        raise ConfigError(f"notices: unknown channel {', '.join(unknown)}")
+    # A command that a limited channel's agent runs sees only the channel's roles. The scope is for this command
+    # alone: what the command starts, such as the tmux server or a worker session, must see everything.
     scope = os.environ.pop(SCOPE_ENV, None)
-    scope = None if scope is None else [w for w in scope.split(",") if w]
+    scope = None if scope is None else [r for r in scope.split(",") if r]
     if scope is not None:
-        watches = {name: watch for name, watch in watches.items() if name in scope}
+        roles = {name: role for name, role in roles.items() if name in scope}
+        pollers = {name: p for name, p in pollers.items() if set(p.roles) & set(scope)}
     return Config(
         root=root,
         claude=claude,
         channels=channels,
-        watches=watches,
-        data_dir=data_dir,
-        skills_dir=skills_dir,
-        watches_dir=watches_dir,
+        roles=roles,
+        pollers=pollers,
+        data_dir=folder["data"],
+        knowledge_dir=folder["knowledge"],
+        skills_dir=folder["skills"],
+        roles_dir=folder["roles"],
+        pollers_dir=folder["pollers"],
         tmux=_load_tmux(raw.get("tmux")),
         watchdog=_load_watchdog(raw.get("watchdog")),
-        usage=_load_usage(raw.get("usage"), channels),
+        usage=_load_usage(raw.get("usage")),
+        notices=notices,
         scope=scope,
     )

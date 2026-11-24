@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Channel input contract (skills/README.md): print the new text messages of the chat TELEGRAM_CHAT_ID,
+"""Channel input contract (knowledge/README.md): print the new text messages of the chat TELEGRAM_CHAT_ID,
 read with the bot's getUpdates. Standard library only."""
 
 import json

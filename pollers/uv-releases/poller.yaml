@@ -1,0 +1,13 @@
+# Example poller: new releases of uv (the Python package manager).
+enabled: false                  # timer runs skip it; `vahtovik run --poller uv-releases` still runs it
+interval: 6h                    # how often to monitor its sources, unless a source sets its own interval
+# at: ["08:00", "20:00"]        # or instead of interval: at these times of the day, in the computer's local time
+roles: [uv-tracker]             # the roles of the workers it spawns; the first is the default
+sources:
+  - id: uv-releases
+    skill: rss                  # a skill of knowledge/skills
+    params: {url: "https://github.com/astral-sh/uv/releases.atom", max: 10}
+    # interval: 1h                # optional: this source's own interval, or its own `at: "09:30"`
+    # scan: script                # optional: rss's scan script reads the feed; a session starts only for new entries
+    # credentials: [github-org-b] # optional: more files of knowledge/credentials for this source, over its skill's
+# claude: {model: sonnet, effort: low, account: work}   # optional: the model, effort and Claude account of its monitoring sessions

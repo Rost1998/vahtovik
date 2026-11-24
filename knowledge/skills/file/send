@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Channel contract: body on stdin, subject in VAHTOVIK_SUBJECT, exit 0 when delivered.
+# Send contract (knowledge/README.md): body on stdin, subject in VAHTOVIK_SUBJECT, exit 0 when delivered.
 set -euo pipefail
 
-path="${FILE_CHANNEL_PATH:?FILE_CHANNEL_PATH is not set}"
+path="${FILE_CHANNEL_PATH:-${VAHTOVIK_HOME:-.}/data/outbox.md}"
 body="$(cat)"
 if [[ -n "${VAHTOVIK_REPLY_TO:-}" ]]; then
     from="reply to message ${VAHTOVIK_REPLY_TO}"
-elif [[ -n "${VAHTOVIK_WATCH:-}" ]]; then
-    from="${VAHTOVIK_WATCH}/${VAHTOVIK_GROUP:-?}"
+elif [[ -n "${VAHTOVIK_WORKER_NAME:-}" ]]; then
+    from="worker ${VAHTOVIK_WORKER_NAME}"
 else
-    from="vahtovik"  # vahtovik's own message, such as a usage warning
+    from="vahtovik"  # vahtovik's own message, such as a notice or a usage warning
 fi
 block="## $(date '+%Y-%m-%d %H:%M') · ${VAHTOVIK_SUBJECT:-report}
 _${from}_

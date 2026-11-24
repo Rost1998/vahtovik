@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Channel input contract (skills/README.md): print the new messages in the file FILE_CHANNEL_INBOX.
+"""Channel input contract (knowledge/README.md): print the new messages in the file FILE_CHANNEL_INBOX.
 The person writes a message, then a line `---`; a message counts once that line follows it."""
 
 import hashlib

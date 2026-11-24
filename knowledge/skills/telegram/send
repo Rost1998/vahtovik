@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Channel contract: body on stdin, subject in VAHTOVIK_SUBJECT, exit 0 when delivered.
+# Send contract (knowledge/README.md): body on stdin, subject in VAHTOVIK_SUBJECT, exit 0 when delivered.
 set -euo pipefail
 shopt -u patsub_replacement 2>/dev/null || true  # bash 5.2+: keep "&" in ${var//x/y} replacements literal
 
