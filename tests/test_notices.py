@@ -2,9 +2,9 @@ import os
 import subprocess
 from datetime import datetime, timedelta, timezone
 
-from conftest import artifact, give, run_turns, turn_answer, work_log
+from conftest import _script, artifact, give, run_turns, turn_answer, work_log
 
-from vahtovik import watchdog
+from vahtovik import delivery, watchdog
 from vahtovik.tmux import Tmux, Window
 from vahtovik.util import utc_iso
 
@@ -96,6 +96,25 @@ def test_without_notice_channels_the_journal_says_so(project, caplog):
     watchdog.tick(cfg, state, tmux)
     assert _notices(state) == []
     assert any("Skipped notice \"WATCHDOG: Needs attention: G\": no channel" in m for m in caplog.messages)
+
+
+def test_a_notice_names_its_worker_to_the_send_script(project, monkeypatch):
+    """A skill that keeps a place per worker, such as a thread of its reports, can send the worker's notices there:
+    vahtovik names the worker of a notice in VAHTOVIK_ABOUT, and no worker for its other messages."""
+    seen = project.root / "seen.txt"
+    skill = project.root / "knowledge/skills/threads"
+    _script(skill / "send", "#!/bin/sh\ncat >/dev/null\n"
+                            f'echo "$VAHTOVIK_SUBJECT|$VAHTOVIK_ABOUT|$VAHTOVIK_WORKER_NAME" >> {seen}\n')
+    (skill / "SKILL.md").write_text("---\nname: threads\ndescription: a thread per worker\n---\nAny text.\n")
+    project.config(lambda data: data["channels"].update(threads={"skill": "threads"}))
+    cfg, state, tmux, row = _setup(project, notices=("threads",))
+    _turn(project, turn_answer([work_log()], status="waiting", questions=("Why?",)))
+    monkeypatch.setenv("VAHTOVIK_ABOUT", "from-the-environment")  # never passed on
+    watchdog.tick(cfg, state, tmux)
+    delivery.notice(cfg, state, "threads", "Claude usage", "The 5-hour limit is at 91%.")
+    delivery.reply(cfg, state, "threads", "", "An answer.", reply_to="m1")
+    assert seen.read_text().splitlines() == [
+        f"WATCHDOG: Waiting for your answer: G|{row['id']}-g|", "Claude usage||", "||"]
 
 
 def test_telegram_escapes_plain_notices(project):

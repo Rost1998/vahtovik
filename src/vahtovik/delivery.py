@@ -48,7 +48,7 @@ def run_send_script(cfg: Config, channel: str, subject: str, body: str, dry_run:
         skill = knowledge.load(cfg, settings.skill)
     except knowledge.SkillError as exc:
         return SendResult(False, str(exc))
-    env = {**os.environ, **channel_env(cfg, settings, skill), **(extra_env or {}),
+    env = {**os.environ, **channel_env(cfg, settings, skill), "VAHTOVIK_ABOUT": "", **(extra_env or {}),
            "VAHTOVIK_CHANNEL": channel, "VAHTOVIK_SUBJECT": subject, "VAHTOVIK_WORKER_NAME": ""}
     if dry_run:
         env["VAHTOVIK_DRY_RUN"] = "1"
@@ -85,6 +85,9 @@ def scope(state: State, row) -> str:
 def attempt(cfg: Config, state: State, delivery_id: int, dry_run: bool):
     row = state.delivery(delivery_id)
     extra = {"VAHTOVIK_REPLY_TO": row["reply_to"]} if row["reply_to"] else {}
+    worker = state.worker(row["about"]) if row["about"] else None
+    if worker is not None:  # a notice about a worker: a skill that keeps a place per worker can send it there
+        extra["VAHTOVIK_ABOUT"] = f"{worker['id']}-{worker['key']}"
     result = run_send_script(cfg, row["channel"], row["subject"], row["body"], dry_run, extra,
                              plain=row["origin"] in PLAIN)
     state.update_delivery(delivery_id, result.ok, None if result.ok else result.detail,

@@ -67,6 +67,7 @@ skills/<name>/receive        optional executable, for vahtovik's channels with `
 - `VAHTOVIK_PLAIN=1` means the body is plain text, such as a notice from vahtovik or a channel agent's first short line: if the skill uses markup, escape the body;
 - `VAHTOVIK_REPLY_TO` is set when the message answers a message that `receive` read: its id. A skill that can reply to a message does so; others may ignore it;
 - `VAHTOVIK_WORKER_NAME` is set when a worker runs it (the worker's name), and empty for vahtovik's own messages;
+- `VAHTOVIK_ABOUT` is set when the message is vahtovik's notice about a worker, such as the watchdog's "Waiting for your answer": the worker's name. It is empty for every other message. A skill that keeps a place per worker, such as a thread of its reports, may send the notice there; others may ignore it;
 - vahtovik runs it in the project folder with a 60-second timeout; a worker runs it wherever it is.
 
 `receive` contract:
