@@ -404,8 +404,8 @@ def tell(cfg: Config, state: State, tmux: Tmux, refs: list[str], message: str,
         if window and inbox.deliver_typed(cfg, state, tmux, row, window):
             lines.append(f"{workers.name(row)}: typed the message into its open window")
         elif window and window.clients:
-            lines.append(f"{workers.name(row)}: queued: a person is looking at its window; it gets the message in "
-                         "its next turn")
+            lines.append(f"{workers.name(row)}: queued: a person is looking at its window; vahtovik types the "
+                         "message in once they leave")
         elif window:
             lines.append(f"{workers.name(row)}: queued: its agent is busy; it gets the message when it is idle")
         else:

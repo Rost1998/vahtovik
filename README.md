@@ -1,109 +1,212 @@
 # vahtovik
 
-AI monitoring on Claude Code sessions. vahtovik:
+An orchestrator of long-running AI workers on Claude Code sessions. vahtovik has three layers:
 
-1. **monitors** sources for new artifacts, by rules in markdown files, and groups related artifacts;
-2. **processes** each group in its own persistent Claude Code session, keeping a `context.md` record of all work;
-3. **reports** results to channels: the agent writes the message, vahtovik sends it;
-4. **answers you** through channels with `input`: you write to vahtovik there, and the vahtovik agent replies.
+1. **knowledge**: the skills that workers know, shared by all or given to some, and the credentials those skills need;
+2. **workers**: persistent Claude Code sessions, each with a runtime folder of its own and links to the skills it needs. A worker has a role, which says how it works. Workers work for a long time without a person: they process artifacts, report with their skills, schedule their own next turns, see each other, and spawn and tell other workers;
+3. **monitoring**: pollers that check sources on a timer, with scripts or AI sessions, split what they find into artifacts, and give each artifact to a worker, which vahtovik spawns if it does not exist yet.
 
-Source types and channels are skills: a folder with `SKILL.md` and optional scripts. Adding one needs no Python changes. A watch can also have skills of its own.
+Above them, vahtovik itself has channels, such as your Telegram chat: you talk to the vahtovik agent there, and vahtovik sends you its notices. A watchdog looks after the worker sessions.
+
+Skills are folders with `SKILL.md` and optional scripts. Adding one needs no Python changes.
 
 ## Quick start
 
-Requirements: [uv](https://docs.astral.sh/uv/), [Claude Code](https://code.claude.com/) (`claude`), logged in, and tmux. Run `claude` once in the project folder and accept "trust this folder": group sessions run inside it and would otherwise stop at that screen.
+Requirements: [uv](https://docs.astral.sh/uv/), [Claude Code](https://code.claude.com/) (`claude`), logged in, and tmux. Run `claude` once in the project folder and accept "trust this folder": worker sessions run inside it and would otherwise stop at that screen.
 
 ```bash
 uv sync
-uv run vahtovik check                                # config, skills, environment
-uv run vahtovik run --watch example --force --dry-run
-uv run vahtovik status                               # groups, their status and cost; -v for all details
-uv run vahtovik log                                  # what vahtovik did
-uv run vahtovik open example/uv-0-13                 # talk to a group's agent
+uv run vahtovik check                                   # config, knowledge, roles, pollers, channels, environment
+uv run vahtovik run --poller uv-releases --force --dry-run
+uv run vahtovik status                                  # pollers, workers, their status and cost; -v for all details
+uv run vahtovik worker list                             # what each worker does
+uv run vahtovik log                                     # what vahtovik did
+uv run vahtovik open uv-tracker/uv-0-13                 # talk to a worker
+```
+
+## Layout
+
+```
+knowledge/
+  shared/<skill>/          every worker and monitoring session has these; shared/vahtovik/ holds the worker rules
+  skills/<skill>/          specialized skills: rss, web-page, web-search, file, telegram, ...
+  credentials/<name>.env   secrets, never in git
+roles/<role>/              ROLE.md: what a worker of the role is and how it works; MEMORY.md: its workers' notes
+pollers/<poller>/          poller.yaml: what to monitor and when; poller.md: what an artifact is, and who gets it
+skills/vahtovik/           the vahtovik agent and its sub-skills
+skills/watchdog/           the watchdog's strict skill
+vahtovik.yaml              Claude, tmux, watchdog, usage, notices, channels
+data/                      runtime state: vahtovik.db, journal.log, workers/, archive/, pollers/, channels/, runs/
 ```
 
 ## How a run works
 
-`vahtovik run` does one cycle. It answers your messages from channels with `input`, monitors the sources of enabled watches that are due, by their `interval` or their times of the day (`at`), and starts the turns of the groups with new artifacts:
+`vahtovik run` does one cycle:
 
 1. **Input**: it reads each channel with `input` whose interval has passed, and the vahtovik agent answers the new messages (see Channel-input).
-2. **Monitor**: one throwaway session per due source. A source is due once its `interval` has passed since it was last monitored, or, with `at`, once the first of its times of the day after that has come. A source without its own `interval` or `at` has its watch's. A source with `scan: script` is read first by its type's `scan` script, without AI; a session starts only when the script finds new items, and gets them in its prompt. It follows the source skill and `monitor.md`, and returns new artifacts with a `group_key`. vahtovik drops artifacts it has seen, creates new groups, and saves the artifacts.
-3. **Group turn**: for each group with new artifacts, vahtovik resumes the group's session in a tmux window and goes on: it does not wait for the turn to end. The agent processes the artifacts by `process/*.md`, updates `context.md`, reports by `report.md` with `vahtovik report`, and ends the turn with its status (see below). At most `claude.parallel_turns` (5) turns work at once; turns that wait for their background work or for a person do not count. The rest start at a later run: every run starts the turns that can start, even when no source is due.
-4. **Deliver**: failed deliveries are retried, up to 5 attempts.
+2. **Monitor**: one throwaway session per due source of each enabled poller. A source is due once its `interval` has passed since it was last monitored, or, with `at`, once the first of its times of the day after that has come. A source without its own `interval` or `at` has its poller's. A source with `scan: script` is read first by its skill's `scan` script, without AI; a session starts only when the script finds new items, and gets them in its prompt. The session follows the source skill and `poller.md`, and returns new artifacts, each with the `role` and `key` of the worker that gets it. vahtovik drops artifacts the poller brought before, spawns the workers that do not exist yet, and saves the artifacts.
+3. **Workers**: for each worker with new artifacts, messages in its inbox, or a scheduled turn that is due, vahtovik resumes the worker's session in a tmux window and goes on: it does not wait for the turn to end. The agent works by its role's rules, updates `context.md`, reports with its skills, and ends the turn with its status (see below). At most `claude.parallel_turns` (5) turns work at once; turns that wait for their background work or for a person do not count. The rest start at a later run: every run starts the turns that can start, even when no source is due. A worker whose window is open gets its messages typed in instead, when its agent is idle.
+4. **Deliver**: vahtovik's own failed messages are retried, up to 5 attempts.
 
-Before these steps, a run lets the watchdog look after the group sessions (see Watchdog), and checks how full the Claude plan's usage limits are (see Usage limits).
+Before these steps, a run lets the watchdog look after the worker sessions (see Watchdog), and checks how full the Claude plan's usage limits are (see Usage limits).
 
-## Group sessions
+## The knowledge layer
 
-Each group has one Claude Code session, created on its first turn and resumed on every later turn. Its working folder is `data/watches/<watch>/groups/<key>/`:
+`knowledge/README.md` gives the details and the contracts of the scripts.
 
-- `CLAUDE.md`: regenerated by vahtovik; tells the agent its group, the rules, the sources and the channels;
-- `context.md`: Summary and Work log (written by the agent), Open questions, Artifacts and Reports (written by vahtovik);
+- **Shared skills**, `knowledge/shared/<skill>/`: every worker and every monitoring session has them. `knowledge/shared/vahtovik/SKILL.md` holds the rules of every worker; vahtovik also puts it in their system prompt.
+- **Specialized skills**, `knowledge/skills/<skill>/`: only the sessions that name them have them:
+  - a role names skills for all its workers;
+  - `vahtovik worker spawn --skill` gives one worker more;
+  - a poller source names the skill that reads it;
+  - a channel of vahtovik names the skill whose `send` and `receive` scripts it uses.
+
+  One skill can serve several of these: the `telegram` skill is how workers report to a chat, and also how vahtovik talks to you in yours.
+- **Credentials**, `knowledge/credentials/<name>.env`: `KEY=value` lines, ignored by git. A skill names the files it needs (`credentials: [telegram]`); a role, a poller source or a channel can name more, and later files win. A session gets the variables of its files in its environment. `knowledge/credentials/vahtovik.env` holds vahtovik's own secrets, such as `ANTHROPIC_API_KEY`; vahtovik loads it at startup, and values already set in the environment win.
+
+Each session's skills are links in its folder, `.claude/skills/<skill>`, where Claude Code finds them and loads them as its own: it shows the agent their descriptions, and the whole skill when the agent uses it. vahtovik makes the links again before every start of a session, so a new or changed skill counts from the next turn. It also lists each skill's name, description and path in the worker's `CLAUDE.md` and prompts, so the skills work in the api-key login too, where Claude Code's bare mode limits loading skills.
+
+## Roles
+
+A role says what a worker is and how it works: `roles/<role>/ROLE.md`.
+
+```markdown
+---
+description: Follows one minor version line of uv. Assesses each new release and reports it.
+skills: [web-page, file]       # specialized skills; the shared ones come by themselves
+credentials: [telegram-ops]    # optional: more credential files
+model: opus                    # optional: the model and effort of its workers
+effort: high
+account: work                  # optional: a Claude account of claude.accounts
+---
+
+# Processing ...
+# Reporting ...
+# How to end a turn ...
+```
+
+The body is the role's working rules: how to process artifacts and messages, what to report, when, where and with which skill, and when the work is done. vahtovik pastes it into every turn's prompt, so keep it short: a rule says in a few lines what to do and when, and refers to a skill by name for the long instructions and scripts. Changed rules count from each worker's next turn. See `roles/uv-tracker/`.
+
+### Role memory
+
+Each role can have a `MEMORY.md` next to its `ROLE.md`: notes that hold for all its workers, which workers found out themselves or learned from you. For example: how a source behaves, which kinds of artifacts turn out to be false alarms, or what you said you prefer. Workers save notes with `vahtovik memory add` and remove wrong or stale ones with `vahtovik memory remove`; the vahtovik agent does too when you ask. Every turn of the role's workers, and every monitoring session of a poller with the role, gets the file in its prompt. The notes are not rules: when they disagree with the role's rules, the rules win.
+
+```markdown
+## 3 · 2026-11-11 14:03 · worker a3f9c2-uv-0-13
+
+The changelog feed repeats an entry when a release is edited: its id stays the same.
+```
+
+Each entry's heading has its number, its time and who saved it. The command refuses a text that holds a secret from a credentials file, and a worker may change only its own role's memory. The journal keeps a line for every entry saved or removed. vahtovik never commits the file: review the new notes with `git diff`, edit or delete them by hand if you like, and commit them.
+
+## Workers
+
+Each worker has one Claude Code session, created on its first turn and resumed on every later turn. A worker has:
+
+- an **id**: 6 random hexadecimal characters, such as `a3f9c2`, unique in the installation and never used again;
+- a **key**: lowercase words joined by hyphens, such as `uv-0-13`, unique within its role.
+
+Its name is `<id>-<key>`. Every command takes a worker as `a3f9c2`, `a3f9c2-uv-0-13` or `uv-tracker/uv-0-13`. Its folder is `data/workers/<role>/<id>-<key>/`:
+
+- `.claude/skills/`: links to its skills: the shared ones, its role's, and the extra ones of its spawn;
+- `CLAUDE.md`: regenerated by vahtovik before every start; tells the agent who it is, its role, its parent, its skills, the roles of other workers, its scheduled turn, and the commands;
+- `context.md`: Summary and Work log (written by the agent), Open questions and Artifacts (written by vahtovik);
 - `artifacts/*.json`: one file per artifact.
 
-Group sessions run as interactive Claude Code, each in its own window of the tmux session `vahtovik-agents`. The session is on a tmux server of its own, `tmux -L vahtovik`, apart from your own tmux sessions; both names are set in `vahtovik.yaml`, and `socket: null` uses your default tmux server instead. The first window shows the journal. To look around yourself: `tmux -L vahtovik attach -t vahtovik-agents`.
+Its record in the database says who spawned it (`poller:<name>`, `worker:<id>`, `person` or `channel:<name>`), its parent (the worker that spawned it), and whether it reports back to that parent.
 
-- `vahtovik open <watch>/<key>` shows you the group's window: a running turn, or the session started fresh if none is running. You see every earlier turn and can ask the agent anything: explain, research more, scan sources again, add artifacts, or send extra reports. It attaches your terminal to the window. Inside your own tmux this is tmux inside tmux, and Ctrl-b goes to your outer tmux: press Ctrl-b Ctrl-b d to leave the inner one. (With `socket: null`, inside tmux it switches your window instead.)
+Worker sessions run as interactive Claude Code, each in its own window of the tmux session `vahtovik-agents`, named `<role>/<key>`. The session is on a tmux server of its own, `tmux -L vahtovik`, apart from your own tmux sessions; both names are set in `vahtovik.yaml`, and `socket: null` uses your default tmux server instead. The first window shows the journal. To look around yourself: `tmux -L vahtovik attach -t vahtovik-agents`.
+
+- `vahtovik open <worker>` shows you the worker's window: a running turn, or the session started fresh if none is running. You see every earlier turn and can ask the agent anything: explain, research more, scan sources again, add artifacts, spawn workers, or send extra reports. It attaches your terminal to the window. Inside your own tmux this is tmux inside tmux, and Ctrl-b goes to your outer tmux: press Ctrl-b Ctrl-b d to leave the inner one. (With `socket: null`, inside tmux it switches your window instead.)
 - Leave whenever you like: detach, or switch back to your own window. The agent keeps working.
-- While the window is open, it holds the group's lock, and runs skip that group.
+- While the window is open, it holds the worker's lock, and runs skip that worker.
 - The watchdog (below) closes a window when nobody is looking at it and its agent is done: `failed`, or `finished`, `scheduled` or `waiting` once its AI check confirms that the work is really done.
 - `--new-session` starts a fresh session that rebuilds its picture from `context.md`.
 
 If vahtovik's tmux server is not running, vahtovik starts it with `systemd-run --user`, so the server outlives the run that started it.
 
-Every group has a status, shown by `vahtovik status`. The agent ends every automated turn, and every reply to a person, with one command:
+### Status and scheduling
 
-- `vahtovik turn finished`: it needs nothing from a person;
-- `vahtovik turn scheduled --after 6h [--reason "..."]`: it needs nothing from a person, but the group should get another turn later, even without new artifacts, for example to see whether something announced has happened. The group is `scheduled` until that turn starts;
-- `vahtovik turn waiting --question "..."`: it needs a person's answer or action to go on. The questions go to the Open questions section of `context.md`, and the agent puts them in its report too. Answer them in `vahtovik open`.
-- `vahtovik turn background --reason "..." [--check-after 30m]`: it started background work (a background command, a background agent or a scheduled prompt) and goes on when that work ends. Claude Code wakes the agent then, and it ends the turn as usual. Meanwhile the window stays open and keeps the group's lock, and the turn stays open.
+Every worker has a status, shown by `vahtovik status` and `vahtovik worker list`. The agent ends every automated turn, and every reply to a person or a message, with one command, and gives the status that is true:
+
+- `vahtovik turn finished`: its work is really done. This cancels its scheduled turn, if it has one, and the worker gets no more turns by itself: only new artifacts, a message, or you opening it start it again;
+- `vahtovik turn scheduled --after 6h [--reason "..."]`, or `--at 08:00` (its next occurrence, local time) or `--at "2026-12-01 09:00"`: it needs nothing from a person now, but another turn later, even without new artifacts, for example to see whether something announced has happened. The worker is `scheduled` until that turn starts. A plain `vahtovik turn scheduled`, without `--after` and `--at`, keeps the turn it has scheduled already, as after a reply to you while its check still waits; without one, the command refuses;
+- `vahtovik turn waiting --question "..."`: it needs a person's answer or action to go on. The questions go to the Open questions section of `context.md`, and the watchdog sends you a notice. Answer them in `vahtovik open`, or with `vahtovik tell`. A scheduled turn stays for after the answer;
+- `vahtovik turn background --reason "..." [--check-after 30m]`: it started background work (a background command, a background agent or a scheduled prompt) and goes on when that work ends. Claude Code wakes the agent then, and it ends the turn as usual. Meanwhile the window stays open and keeps the worker's lock, and the turn stays open.
 
 When the agent stops, Claude Code tells vahtovik what background work it still runs for the agent. If the agent said `finished`, `scheduled` or `waiting` while such work runs, vahtovik makes it `background`, and the turn stays open. If it said `background` while nothing runs that would wake it, vahtovik sends it back to work.
 
-A Claude Code hook does not let the agent stop before it runs the command. An automated turn counts as done only then; otherwise it is retried, up to 3 attempts. A group stays `waiting` until you answer in `vahtovik open`, or until a later turn finds the answer in new artifacts. The statuses are `idle`, `running`, `finished`, `scheduled`, `waiting`, `background`, `maintenance` (set by the watchdog, below) and `failed`.
+A Claude Code hook does not let the agent stop before it runs the command. An automated turn counts as done only then; otherwise it is retried, up to 3 attempts. The statuses are `idle`, `running`, `finished`, `scheduled`, `waiting`, `background`, `maintenance` (set by the watchdog, below) and `failed`.
 
-A group can also have a standing check: `vahtovik group set <watch>/<key> --recheck 1d` makes every `finished` turn `scheduled`, with the next turn a day later. `--next 6h` schedules the next turn, and `--next off` cancels it; `--recheck off` removes the standing check. A run starts a scheduled turn once its time comes, or earlier when new artifacts come, and the agent gets the reason in its prompt. A reply to a person that ends `finished` keeps a scheduled turn that has not started yet. A failed scheduled turn is tried again at the next runs, up to 3 attempts.
+A run starts a scheduled turn once its time comes, or earlier when new artifacts or messages come, and the agent gets the reason in its prompt. A failed scheduled turn is tried again at the next runs, up to 3 attempts. You or the vahtovik agent can schedule a worker too: `vahtovik worker schedule <worker> --after 6h|--at 08:00|--off`.
 
-Groups can also be changed by hand, or by the vahtovik agent (below): `vahtovik group create`, `group merge`, `group split`, `artifact add` and `tell` (see Commands). They refuse a group whose window is open, that is busy, or whose turn is unfinished. One artifact may be in several groups; each group processes it on its own. A merged group's key leads to the group it went into, so monitoring never brings it back.
+### The inbox
 
-### Watch memory
+`vahtovik tell <worker>` and `vahtovik worker spawn --message` put a message into the worker's inbox. If the worker's window is open, its agent is idle and nobody is looking at it, vahtovik types the message in at once. Otherwise the next run starts a turn with it, together with new artifacts and a scheduled turn that is due; that turn counts toward `parallel_turns`. The agent gets each message with who sent it: "Message from the person, sent through vahtovik:" or "Message from worker a3f9c2-uv-0-13 (your parent), sent through vahtovik:". A message whose turn fails is tried again in the next turn, up to 3 attempts.
 
-Each watch can have a `MEMORY.md` next to its rules: notes that hold for the whole watch, which agents found out themselves or learned from you. For example: how a source behaves, which kinds of artifacts turn out to be false alarms, or what you said you prefer. Group agents save notes with `vahtovik memory add` and remove wrong or stale ones with `vahtovik memory remove`; the vahtovik agent does too when you ask. Every group turn and every monitoring session gets the file in its prompt, and interactive sessions find its path in `CLAUDE.md`. The notes are not rules: when they disagree with the watch's rules, the rules win.
+### Workers and other workers
 
-```markdown
-## 3 · 2026-11-11 14:03 · group uv-0-13
+Workers see each other and work together:
 
-The changelog feed repeats an entry when a release is edited: its id stays the same.
+- `vahtovik worker list [--role R] [--status S] [--tree] [--all]` shows every worker: its status, its parent, and the summary of its last turn, which says what it does. `--tree` shows children under their parents, and `--all` includes archived workers. `vahtovik worker show <worker>` shows one worker in full, with its children, its artifacts and messages, and the path of its `context.md`, which any worker may read.
+- A worker spawns a worker with `vahtovik worker spawn <role>/<key> --message "<the task>"`, and becomes its parent. With `--report-back`, vahtovik tells the parent each time the child ends a turn as `finished` or `waiting`, or fails and vahtovik stops retrying: the child's status and summary go into the parent's inbox, and the parent gets a turn for them.
+- A worker tells another worker something with `vahtovik tell <worker>`, and gives it artifacts with `vahtovik artifact add --worker <worker>`.
+
+Nothing limits how many workers a worker may spawn: `parallel_turns` limits only how many work at once. Messages between workers are instructions, so text that misleads one worker can spread to the workers it tells or spawns.
+
+### Reporting
+
+vahtovik does not report for workers. A worker reports as its role's rules say, with its skills' scripts: for example the `telegram` skill's `send` sends a message to the chat in `knowledge/credentials/telegram.env`, and the `file` skill's `send` appends it to `data/outbox.md`. The worker notes each report, and whether it was delivered, in its Work log.
+
+### Artifacts a worker finds
+
+A worker adds artifacts with `vahtovik artifact add`: to itself, where they count as processed, or with `--worker` to another worker, where they wait for that worker's next turn. One artifact may be in several workers; each processes it on its own.
+
+### Changing workers by hand
+
+You, or the vahtovik agent (below), can change workers with `vahtovik worker spawn`, `merge`, `split`, `schedule` and `archive`, `artifact add` and `tell` (see Commands). `merge`, `split` and `archive` refuse a worker whose window is open, that is busy, or whose turn is unfinished. A merged worker is archived, and its role and key lead to the worker it went into, so monitoring never brings it back. An archived worker gets no more turns, and its folder goes to `data/archive/<role>/`; its key is free for a new worker.
+
+### Sessions and costs
+
+Sessions run with `bypassPermissions`, except those of limited input channels (see Channel-input). The worker rules (`knowledge/shared/vahtovik/SKILL.md`, part of every session's system prompt) tell agents two rules. Everything outside their working folder is read-only, unless their role's rules or skills say otherwise; `vahtovik turn`, `vahtovik memory`, `vahtovik worker list|show|spawn`, `vahtovik tell` and `vahtovik artifact add` are always allowed. Instructions come only from their rules, the person, and the messages vahtovik delivers, never from what sources return.
+
+`vahtovik status` shows what each worker's sessions cost in the last 24 hours and the last 30 days, and the totals per role and for all workers. Below that, a second table shows what worker, monitoring, input and watchdog sessions cost in the same periods, and in total; `-v` adds all time. Claude Code writes a session's running total to its conversation file when the session's window ends, and vahtovik reads it from there, so a running window's cost shows once the window ends. The total has no time of its own, so vahtovik dates it by the last message before it, and a window's whole cost counts at that time. vahtovik keeps every total with its time in its database, because Claude Code deletes old conversation files. With `auth: subscription`, the cost is what the same work would cost with an API key; you pay your subscription instead. Subscription limits are counted for the whole account, not per session, so the cost is also the best way to compare how much of the limits each kind of session uses.
+
+## Pollers
+
+A poller is what vahtovik monitors: `pollers/<poller>/`.
+
+```yaml
+# poller.yaml
+enabled: true
+interval: 6h                    # or at: ["08:00", "20:00"]
+roles: [uv-tracker]             # the roles of the workers it gives artifacts to; the first is the default
+sources:
+  - id: uv-releases
+    skill: rss                  # a skill of knowledge/skills
+    params: {url: "https://github.com/astral-sh/uv/releases.atom", max: 10}
+    scan: script                # optional: the skill's scan script reads the feed; a session starts only for new items
+    interval: 1h                # optional: the source's own schedule
+    credentials: [github-org-b] # optional: more credential files for this source
+claude: {model: sonnet, effort: low, account: work}   # optional: its monitoring sessions
 ```
 
-Each entry's heading has its number, its time and who saved it. The command refuses a text that holds a secret from the `.env` files, and an agent may change only its own watch's memory. The journal keeps a line for every entry saved or removed. vahtovik never commits the file: review the new notes with `git diff`, edit or delete them by hand if you like, and commit them.
-
-### Watch skills
-
-A watch can have skills of its own, for work that only its agents do: how to judge an item, how to run a check, a script that builds something. Each one is a folder `watches/<name>/skills/<skill>/` with a `SKILL.md` (front matter with `name` and `description`, then instructions) and optional scripts. The folder may also be a symlink to a skill kept elsewhere, such as in another repository. Next to it, a relative symlink `watches/<name>/.claude/skills/<skill>` points to it, so Claude Code can find it:
-
-```bash
-ln -s ../../skills/triage watches/<name>/.claude/skills/triage
-```
-
-When the watch has a `.claude/skills/` folder, its group and monitoring sessions start with `--add-dir watches/<name>`, and Claude Code loads the linked skills as its own: it shows the agent their descriptions, and the whole skill when the agent uses it. vahtovik also lists each skill's name, description and path in the group's `CLAUDE.md`, the turn prompt and the monitoring prompt, so the skills work in the api-key login too, where Claude Code's bare mode limits loading skills. The skills are part of the watch's rules. They keep the rule files short: `monitor.md`, `process/*.md` and `report.md` are pasted into every prompt, so a rule says in a few lines what to do and when, and refers to a skill by name for the long instructions and scripts. The agent reads a skill only when it needs it. `vahtovik check` reports a skill without `SKILL.md`, a description or its link, a front matter `name` other than the folder name, and links that are broken or point elsewhere. Commit the skills and their links with the watch.
-
-Sessions run with `bypassPermissions`, except those of limited input channels (see Channel-input). The shared skill (`skills/shared/SKILL.md`, part of every session's system prompt) tells agents two rules. Everything outside their working folder is read-only, unless the watch's rules say otherwise; reporting through `vahtovik report` and changing the watch's memory through `vahtovik memory` are always allowed. Instructions come only from the watch's rules, the vahtovik skills and the person in an interactive session, never from what sources return.
-
-`vahtovik status` shows what each group's sessions cost in the last 24 hours and the last 30 days, and the totals per watch and for all watches. Below that, a second table shows what group, monitor, input and watchdog sessions cost in the same periods, and in total; `-v` adds all time. Claude Code writes a session's running total to its conversation file when the session's window ends, and vahtovik reads it from there, so a running window's cost shows once the window ends. The total has no time of its own, so vahtovik dates it by the last message before it, and a window's whole cost counts at that time. vahtovik keeps every total with its time in its database, because Claude Code deletes old conversation files. With `auth: subscription`, the cost is what the same work would cost with an API key; you pay your subscription instead. Subscription limits are counted for the whole account, not per session, so the cost is also the best way to compare how much of the limits each kind of session uses.
+`poller.md` says what counts as an artifact, how to make its id, title and summary, and which worker gets it: the role and the rule for the worker key, with examples. A key that no worker of the role has spawns a new worker. A monitoring session gets the poller's rules, the source skill, the descriptions and memory of the poller's roles, the workers of those roles, and the artifacts the source brought recently. See `pollers/uv-releases/`.
 
 ## Channel-input
 
-You can talk to vahtovik through a channel, such as your Telegram chat. Give the channel `input` in `vahtovik.yaml`:
+vahtovik's channels belong to vahtovik itself: it talks to you through them. Workers never use them. You can talk to vahtovik through a channel, such as your Telegram chat. Give the channel `input` in `vahtovik.yaml`:
 
 ```yaml
 channels:
   ops-telegram:
-    skill: telegram
+    skill: telegram             # a skill of knowledge/skills with send and receive scripts
+    credentials: [ops-bot]      # knowledge/credentials/ops-bot.env: this channel's bot
+    env: {TELEGRAM_CHAT_ID: "-1001234567890"}
     input: {}                   # read it every minute; or {interval: 5m}
 ```
 
-At the start of every run, after the watchdog, vahtovik reads each such channel whose interval has passed, with its type's `receive` script (contract in [skills/README.md](skills/README.md)); no AI runs for that. When there are new messages, vahtovik resumes the channel's session: the vahtovik agent (see The vahtovik agent), in the project folder, with Opus and `xhigh` effort by default (`claude.stages.input`). One session serves the channel while you write, so it remembers the conversation. After a quiet pause, the next message starts a new session, because resuming is cheaper only while Claude Code's cache still holds the conversation; then a long old session costs more than a new one. The new session gets your last few messages, with its replies, in its prompt, and reads more with `vahtovik messages` when it needs them. The session stays, however long the pause, while the agent's last reply waits for your answer, such as a plan that waits for "yes", and while it tries a message again. A new session also starts if the old one's conversation file is gone. To start over yourself, ask in the channel to clear the conversation: the agent answers, and your next message starts a new session, without the earlier messages in its prompt.
+At the start of every run, after the watchdog, vahtovik reads each such channel whose interval has passed, with its skill's `receive` script (contract in [knowledge/README.md](knowledge/README.md)); no AI runs for that. When there are new messages, vahtovik resumes the channel's session: the vahtovik agent (see The vahtovik agent), in the project folder, with Opus and `xhigh` effort by default (`claude.stages.input`). One session serves the channel while you write, so it remembers the conversation. After a quiet pause, the next message starts a new session, because resuming is cheaper only while Claude Code's cache still holds the conversation; then a long old session costs more than a new one. The new session gets your last few messages, with its replies, in its prompt, and reads more with `vahtovik messages` when it needs them. The session stays, however long the pause, while the agent's last reply waits for your answer, such as a plan that waits for "yes", and while it tries a message again. A new session also starts if the old one's conversation file is gone. To start over yourself, ask in the channel to clear the conversation: the agent answers, and your next message starts a new session, without the earlier messages in its prompt.
 
 ```yaml
     input:
@@ -115,11 +218,11 @@ At the start of every run, after the watchdog, vahtovik reads each such channel 
 - When it needs to work before it answers, it first sends one short line with `vahtovik acknowledge`, at once: that your messages arrived, and what it does now, such as "Let me check." or "Doing it now.". It sends that in the same step as its first tool call, so it adds less than 1% to the answer's cost. vahtovik adds the session's context size at the end, in thousands of tokens, such as "Let me check. (22k)". A new session starts at about 20 thousand, so a larger number means the old session goes on, and each of its steps costs more. One line goes out for each batch of messages, and vahtovik does not retry it if it fails. `vahtovik messages` leaves these lines out. To turn them off, say so in the channel's `rules` (see Limited channels).
 - It returns one reply for each message, and vahtovik sends the replies through the same channel, as answers to your messages. A message without a reply counts as a failed attempt; after 3, vahtovik replies itself that it could not handle the message.
 - Replies that only keep the conversation going (plans to confirm, questions, "done") are one to three short lines. Only the information you asked for gets more room.
-- It works inside the run, and the run waits for it. What it changes counts in the same run: artifacts it adds get their group turns. It passes long work to group agents with `vahtovik tell`.
+- It works inside the run, and the run waits for it. What it changes counts in the same run: workers it spawns or tells, and artifacts it adds, get their turns. It passes long work to workers.
 - vahtovik keeps your messages and its replies. `vahtovik messages <channel>` shows them, and the agent reads them the same way when you refer to something its session does not know.
 - Anyone who can post in the channel's chat can give vahtovik orders, unless you limit the channel (below).
 
-The `file` and `telegram` channel types can read; see their skills. `vahtovik status` shows each input channel: when a new session starts, when it was read last, and its messages; `-v` also shows its limits. Each input channel has a session of its own. Two Telegram input channels need two bots, because only one reader may take a bot's updates; but all Telegram channels use the one `TELEGRAM_BOT_TOKEN` from `.env`, so for now an installation reads one Telegram chat.
+The `file` and `telegram` skills can read; see their skills. `vahtovik status` shows each input channel: when a new session starts, when it was read last, and its messages; `-v` also shows its limits. Each input channel has a session of its own. Two Telegram input channels need two bots, because only one reader may take a bot's updates: give each its own credentials.
 
 ### Limited channels
 
@@ -129,44 +232,48 @@ A channel that other people can post in can get limits in its `input`:
 channels:
   team-telegram:
     skill: telegram
-    env: {TELEGRAM_CHAT_ID: "-1001234567890"}
+    credentials: [team-bot]
     input:
       senders: ["@alice", "id:123456"]   # default: anyone in the chat
       commands: [status, log, tell]      # default: everything, as in the terminal
-      watches: [kernel]                  # default: all watches
+      roles: [kernel-cve]                # default: all roles
       rules: |                           # optional: your own rules for the channel's agent
         Answer only about kernel CVEs.
 ```
 
-- `senders`: vahtovik stores only the messages from these senders, as the channel type's `receive` names them (Telegram: `@username`, or `id:<user id>`). It ignores the other messages, without a reply, and writes a journal line for each.
+- `senders`: vahtovik stores only the messages from these senders, as the skill's `receive` names them (Telegram: `@username`, or `id:<user id>`). It ignores the other messages, without a reply, and writes a journal line for each.
 - `rules`: they go into the agent's prompt with every message. They work in a full channel too.
-- `commands` (some of `status`, `log`, `tell`, `artifact`, `group`) and `watches` make the channel **limited**; `watches` alone allows all five commands. A limited channel's agent may read only the skills, `README.md`, `CLAUDE.md`, the schemas, and its watches' folders in `watches/` and `data/watches/`, never a `.env` file. It may run only its commands, each alone, as `vahtovik <command> ...`, `vahtovik messages` for its own channel and `vahtovik acknowledge`, and it can change no file, fetch no web page and use no other tool. With `watches`, the commands it runs see only those watches, and `vahtovik log` shows only their lines and the channel's own.
+- `commands` (some of `status`, `log`, `tell`, `artifact`, `worker`) and `roles` make the channel **limited**; `roles` alone allows all five commands. A limited channel's agent may read only vahtovik's skills, the knowledge layer without its credentials, `README.md`, `CLAUDE.md`, the schemas, and its roles' folders, pollers and workers, never a credentials or `.env` file. It may run only its commands, each alone, as `vahtovik <command> ...`, `vahtovik messages` for its own channel and `vahtovik acknowledge`, and it can change no file, fetch no web page and use no other tool. With `roles`, the commands it runs see only the workers of those roles, and `vahtovik log` shows only their lines and the channel's own.
 
-The agent knows its limits from its prompt, and Claude Code enforces them: a limited channel's session runs with `--permission-mode dontAsk`, only the Read, Grep, Glob and Bash tools, no MCP servers, and vahtovik's guard (`src/vahtovik/channel_guard.py`) as its PreToolUse hook. The guard allows or denies every tool call, and writes a journal line for each call it denies. All other sessions keep `bypassPermissions`: full channels, group, monitor and watchdog sessions, and the `claude` you run yourself.
+The agent knows its limits from its prompt, and Claude Code enforces them: a limited channel's session runs with `--permission-mode dontAsk`, only the Read, Grep, Glob and Bash tools, no MCP servers, and vahtovik's guard (`src/vahtovik/channel_guard.py`) as its PreToolUse hook. The guard allows or denies every tool call, and writes a journal line for each call it denies. All other sessions keep `bypassPermissions`: full channels, worker, monitoring and watchdog sessions, and the `claude` you run yourself.
 
-`tell` and `artifact` start group agents, and these work by their watch's full rules. Allow these commands only to people you would let ask a group agent for anything that the watch's rules allow.
+`tell`, `artifact` and `worker` start workers, and these work by their role's full rules. Allow these commands only to people you would let ask a worker for anything that its role's rules allow.
+
+### Notices
+
+`notices: [channels]` in `vahtovik.yaml` says where vahtovik sends its notices: the watchdog's (below) and the usage warnings. Without it, they go to every input channel that is not limited, your own chats. Failed notices are retried, up to 5 attempts.
 
 ## Watchdog
 
-The watchdog looks after the group sessions at the start of a run, once `watchdog.every` (5 minutes) has passed since it last did. Then:
+The watchdog looks after the worker sessions at the start of a run, once `watchdog.every` (5 minutes) has passed since it last did. Then:
 
-- it closes the windows of failed groups that nobody looks at;
+- it closes the windows of failed workers that nobody looks at;
 - it fails the turns whose window closed before the agent reported its status, so they are retried;
-- it sends a notice to the watch's channels about each group that waits for your answer, needs attention, or failed after its last retry. A `waiting` turn whose agent sent its own report gets no first notice: the report asked the questions. Notices repeat every `watchdog.notify_every` (6 hours; 0 never repeats) until the status changes, and stop while you look at the group's window. Every notice's subject starts with `WATCHDOG:`, so you can tell notices from the agents' reports;
-- it warns once about a group turn that runs longer than `watchdog.long_turn_after` (3 hours), since sessions have no time limit;
-- when vahtovik stops retrying a report (after 5 failed attempts), it tells the watch's other channels, with the report itself.
+- it sends a notice about each worker that waits for your answer, needs attention, or failed after its last retry. Notices repeat every `watchdog.notify_every` (6 hours; 0 never repeats) until the status changes, and stop while you look at the worker's window. Every notice's subject starts with `WATCHDOG:`;
+- it warns once about a worker turn that runs longer than `watchdog.long_turn_after` (3 hours), since sessions have no time limit;
+- when vahtovik stops retrying a reply to you (after 5 failed attempts), it tells the other notice channels, with the reply itself.
 
-It also asks an AI session (the `watchdog` stage: Sonnet with medium effort by default) to check the group sessions: every `running` or `background` one, and every other one that changed since the last check: with an open window, or `finished`, `scheduled` or `waiting` with a window that ended before a check. It skips the call when there is nothing to check, and the cost shows in `vahtovik status`. The AI gets the facts of each session (status, turn, window, lock, the screen and the end of the conversation), follows the strict skill `skills/watchdog/SKILL.md`, and picks one action per session from a fixed list. vahtovik checks each pick before it acts:
+It also asks an AI session (the `watchdog` stage: Sonnet with medium effort by default) to check the worker sessions: every `running` or `background` one, and every other one that changed since the last check: with an open window, or `finished`, `scheduled` or `waiting` with a window that ended before a check. It skips the call when there is nothing to check, and the cost shows in `vahtovik status`. The AI gets the facts of each session (status, turn, window, lock, the screen and the end of the conversation), follows the strict skill `skills/watchdog/SKILL.md`, and picks one action per session from a fixed list. vahtovik checks each pick before it acts:
 
 - `none`: all is right. A done window (`finished`, `scheduled` or `waiting`) closes only after this answer;
 - `press`: press the keys of a known screen, such as Claude Code's "trust this folder" question. The screens and their keys are listed in the skill, and vahtovik presses the keys, never the AI;
 - `nudge`: the agent is idle in its window but its work is not done, for example its background work hung. vahtovik types the skill's fixed message that tells the agent to check its work and report its status. Only to an idle agent;
-- `resume`: the window is gone but the work is unfinished. vahtovik opens the session again with the skill's fixed message to finish where it stopped. Only when the group has no window and no lock;
-- `retry`: the window is gone and the latest turn's work is lost: vahtovik counts the turn as failed, and the next run repeats it. Only when the group has no window and no lock;
+- `resume`: the window is gone but the work is unfinished. vahtovik opens the session again with the skill's fixed message to finish where it stopped. Only when the worker has no window and no lock;
+- `retry`: the window is gone and the latest turn's work is lost: vahtovik counts the turn as failed, and the next run repeats it. Only when the worker has no window and no lock;
 - `maintenance`: the session needs a person, for example to log in again. It keeps its window and its lock until you fix it: open it, fix the problem, and type "continue";
 - `failed`: the session cannot go on; the turn is retried.
 
-The AI never writes text for a session, and vahtovik never touches a window that a person is looking at. Every action except `none` also sends a notice whose subject starts with `WATCHDOG:`, so you can follow what the watchdog does while it is new. For `maintenance` this is the usual "Needs attention" notice, sent at once.
+The AI never writes text for a session, and vahtovik never touches a window that a person is looking at. Every action except `none` also sends a notice, so you can follow what the watchdog does while it is new. For `maintenance` this is the usual "Needs attention" notice, sent at once.
 
 ## Usage limits
 
@@ -181,13 +288,13 @@ Claude usage
 The 5-hour limit is at 91% (past 90%). It resets today at 18:20, in 3 hours 11 minutes.
 ```
 
-The warnings go to every input channel that is not limited, your own chats; `usage.channels` names other channels instead. Failed warnings are retried like reports. `vahtovik status` shows the limits at the last check, and the error if the check fails now; the journal has a line for each warning, and one line when the check starts to fail.
+The warnings go to the `notices` channels. `vahtovik status` shows the limits at the last check, and the error if the check fails now; the journal has a line for each warning, and one line when the check starts to fail.
 
 Each account of `claude.accounts` (see Claude accounts) has limits of its own. vahtovik checks the default login and each account on its own, and an account's warnings say which account they are about, as in the subject "Claude usage, account work".
 
 ## Claude accounts
 
-By default, all vahtovik sessions use one Claude login: Claude Code's own profile, or the one in `claude.config_dir`. A watch can use another Claude account instead, so that watches spread over the usage limits of several plans. Each account is a Claude Code profile folder of its own (`CLAUDE_CONFIG_DIR`), with its own login, which Claude Code keeps and refreshes. vahtovik never reads the login.
+By default, all vahtovik sessions use one Claude login: Claude Code's own profile, or the one in `claude.config_dir`. A role or a poller can use another Claude account instead, so that work spreads over the usage limits of several plans. Each account is a Claude Code profile folder of its own (`CLAUDE_CONFIG_DIR`), with its own login, which Claude Code keeps and refreshes. vahtovik never reads the login.
 
 ```yaml
 # vahtovik.yaml
@@ -195,111 +302,118 @@ claude:
   accounts:
     work: {config_dir: ~/.claude-work}
 
-# watches/<name>/watch.yaml
+# roles/<role>/ROLE.md front matter, for its workers
+account: work
+
+# pollers/<poller>/poller.yaml, for its monitoring sessions
 claude: {account: work}
 ```
 
 Set up an account once: run `CLAUDE_CONFIG_DIR=~/.claude-work claude` in the project folder, log in with the account, and accept "trust this folder". `vahtovik check` shows who each login is logged in as, and reports a profile that is not logged in or does not trust the project folder.
 
-- The watch's group sessions and monitoring sessions use its account. Its `vahtovik open` and `vahtovik tell` do too.
-- Channel-input and watchdog sessions belong to no watch, so they use the default login.
-- Claude Code keeps a session's conversation in the profile it ran with. A watch that moves to another account therefore starts new group sessions: each agent rebuilds its picture from `context.md`, as after a lost session. The costs of the old sessions still count.
+- A role's workers use its account, in their turns, in `vahtovik open` and when the watchdog resumes them.
+- Channel-input and watchdog sessions use the default login.
+- Claude Code keeps a session's conversation in the profile it ran with. A role that moves to another account therefore starts new sessions for its workers: each agent rebuilds its picture from `context.md`, as after a lost session. The costs of the old sessions still count.
 - Accounts work only with `auth: subscription`.
 - Claude Code's personal settings, such as `settings.json`, belong to each profile. vahtovik keeps each profile's `CLAUDE.md` out of its sessions, as it does with `~/.claude/CLAUDE.md`.
 
 ## Journal
 
-vahtovik writes one short line per key event to `data/journal.log`: runs, messages from input channels and their answers, monitoring, new groups, group turns, reports, interactive sessions and failures.
+vahtovik writes one short line per key event to `data/journal.log`: runs, messages from input channels and their answers, monitoring, new workers, turns, statuses, messages to workers, interactive sessions and failures.
 
 ```
-2026-10-17 14:03:12 run 20261017-140312 Started run: example
-2026-10-17 14:03:12 run 20261017-140312 example/uv-releases: Started monitoring (rss)
-2026-10-17 14:03:40 run 20261017-140312 example/uv-0-13: Created group "uv 0.13"
-2026-10-17 14:03:40 run 20261017-140312 example/uv-releases: Finished monitoring in 28s: 3 found, 2 new, $0.04
-2026-10-17 14:03:41 run 20261017-140312 example/uv-0-13: Started group turn: 2 artifacts, new session 1b2c3d4e, tmux window @3
-2026-10-17 14:03:41 run 20261017-140312 Finished run in 29s: 2 new artifacts, 1 group turn started, $0.04
-2026-10-17 14:04:55 run 20261017-140312 example/uv-0-13: Sent report 1 to local-log "uv 0.13 released"
-2026-10-17 14:05:10 run 20261017-140312 example/uv-0-13: Status finished, importance high: uv 0.13 ...
-2026-10-17 15:20:01 interactive         example/uv-0-13: Started interactive session, resumed session 1b2c3d4e
+2026-10-17 14:03:12 run 20261017-140312 Started run: uv-releases
+2026-10-17 14:03:12 run 20261017-140312 uv-releases/uv-releases: Started monitoring (rss)
+2026-10-17 14:03:40 run 20261017-140312 uv-tracker/a3f9c2-uv-0-13: Created worker "uv 0.13.x", spawned by poller uv-releases
+2026-10-17 14:03:40 run 20261017-140312 uv-releases/uv-releases: Finished monitoring in 28s: 3 found, 2 new, $0.04
+2026-10-17 14:03:41 run 20261017-140312 uv-tracker/a3f9c2-uv-0-13: Started turn: 2 artifacts, new session 1b2c3d4e, tmux window @3
+2026-10-17 14:03:41 run 20261017-140312 Finished run in 29s: 2 new artifacts, 1 worker turn started, $0.04
+2026-10-17 14:05:10 run 20261017-140312 uv-tracker/a3f9c2-uv-0-13: Status finished, importance high: uv 0.13 ...
+2026-10-17 15:20:01 interactive         uv-tracker/a3f9c2-uv-0-13: Started interactive session, resumed session 1b2c3d4e
 ```
 
-The second column says who wrote the line: a timer run, an `interactive` session, or a `manual` command. A run does not wait for its group turns, so the lines of a turn's agent come after the run's last line, with the run's id. Problems start with "Failed" or "Skipped". A run with nothing due writes one line, such as `Nothing due: example in 4h12m` (the time until the watch's next source is due), so you can see the timer works.
+The second column says who wrote the line: a timer run, an `interactive` session, or a `manual` command. A run does not wait for its turns, so the lines of a turn's agent come after the run's last line, with the run's id. Problems start with "Failed" or "Skipped". A run with nothing due writes one line, such as `Nothing due: uv-releases in 4h12m` (the time until the poller's next source is due), so you can see the timer works.
 
 - `vahtovik log -f`: watch what happens now.
-- `vahtovik log example/uv-0-13`: one group's history. Any text works as a filter: a watch, a run, a date.
+- `vahtovik log a3f9c2`: one worker's history. Any text works as a filter: a role, a poller, a run, a date.
 - `vahtovik log -n 0 | less`: the whole journal.
 
-`vahtovik run` in a terminal also prints the lines as it goes. Group agents know where the journal is, so you can ask them about it too.
+`vahtovik run` in a terminal also prints the lines as it goes. Workers know where the journal is, so you can ask them about it too.
 
 ## Configuration
 
-- `vahtovik.yaml`: Claude login mode (`subscription` or `api-key`), the Claude accounts that watches can use (`claude.accounts`, see Claude accounts), the default model and effort (`opus`, the newest Opus, and `high`), model, effort and dollar cap per stage, how many group turns work at once (`claude.parallel_turns`), the watchdog's pace and notices, the warnings about the Claude plan's usage limits (`usage`), and channels. A watch can set its own model and effort in `watch.yaml` (`claude: {model: ..., effort: ...}`), and override the settings of a stage (`claude: {group: {effort: xhigh}}`). Later ones win: `vahtovik.yaml`'s model and effort, its stage settings, the watch's model and effort, the watch's stage settings. The watchdog belongs to no watch, so only `vahtovik.yaml` sets it.
-- `.env`: shared secrets, such as channel tokens and `ANTHROPIC_API_KEY`; see `.env.example`.
-- `watches/<name>/`: `watch.yaml` (interval or times of the day, sources, channels, and optionally its Claude account), `monitor.md`, `process/*.md` (used in name order), `report.md`, `MEMORY.md`, the notes that agents save (see Watch memory), and optionally `skills/` with links in `.claude/skills/` (see Watch skills). See `watches/example/`. A source may set its own `interval` or `at`; the watch's is the default for its sources. See Scheduling.
-- `watches/<name>/.env`: the watch's own secrets, such as source tokens. Only this watch's sessions get them, so two watches can each have their own `GITHUB_TOKEN`. If one watch has two sources of the same type with different tokens, give a source `env: {GITHUB_TOKEN: GITHUB_TOKEN_ORG_B}`: its scripts then get `GITHUB_TOKEN` set to the value of `GITHUB_TOKEN_ORG_B`.
-- `skills/`: see [skills/README.md](skills/README.md) for the source and channel contracts, and the layout of a watch's own skills.
+- `vahtovik.yaml`: Claude login mode (`subscription` or `api-key`), the Claude accounts that roles and pollers can use (`claude.accounts`, see Claude accounts), the default model and effort (`opus`, the newest Opus, and `high`), model, effort and dollar cap per stage (`monitor`, `worker`, `watchdog`, `input`), how many worker turns work at once (`claude.parallel_turns`), the watchdog's pace and notices, the warnings about the Claude plan's usage limits (`usage`), where notices go (`notices`), and vahtovik's channels. A role sets the model and effort of its workers, and a poller those of its monitoring sessions; they win over `vahtovik.yaml`'s. The watchdog and input channels belong to neither, so only `vahtovik.yaml` sets them.
+- `knowledge/`, `roles/`, `pollers/`: see above. `paths: {data, knowledge, skills, roles, pollers}` in `vahtovik.yaml` can move these folders.
+- `knowledge/credentials/*.env`: all secrets; see The knowledge layer.
 
+vahtovik keeps your personal `~/.claude/CLAUDE.md` and parent-folder `CLAUDE.md` files out of its sessions. Set `claude.config_dir` to give vahtovik a separate Claude Code profile, and `claude.accounts` to give a role or a poller an account of its own.
 
-vahtovik keeps your personal `~/.claude/CLAUDE.md` and parent-folder `CLAUDE.md` files out of its sessions. Set `claude.config_dir` to give vahtovik a separate Claude Code profile, and `claude.accounts` to give a watch an account of its own.
+vahtovik 2 starts fresh: it refuses a database of vahtovik 1. Move the old `data/` folder away, and write the old watches as roles and pollers; the vahtovik agent can help.
 
 ## The vahtovik agent
 
 Run `claude` in this folder, and you talk to the vahtovik agent: the agent that runs this installation for you. You can also talk to it through a channel (see Channel-input). Ask it in plain words, for example:
-- "create a watch for new CVEs in our dependencies";
-- "merge the uv 0.9 and uv 0.10 groups";
-- "add this link to the groups it belongs to";
-- "ask every group of the example watch whether it still needs an answer from me".
+- "watch our dependencies for new CVEs, and give each CVE a worker that triages it";
+- "merge the uv 0.9 and uv 0.10 workers";
+- "add this link to the workers it belongs to";
+- "ask every uv-tracker worker whether it still needs an answer from me".
 
-It knows vahtovik's parts and commands, and it reads the files of a watch before it works on it. It tells you its plan before it changes anything. It changes runtime state only with `vahtovik` commands, never by editing `data/`.
+It knows vahtovik's parts and commands, and it reads the files of a role, a poller or a worker before it works on it. It tells you its plan before it changes anything. It changes runtime state only with `vahtovik` commands, never by editing `data/`.
 
 The root `CLAUDE.md` makes it the vahtovik agent, and loads its skill, [skills/vahtovik/SKILL.md](skills/vahtovik/SKILL.md). That skill names a sub-skill for each kind of task:
-- `create-watch/`: set up and change watches, source types and channels;
-- `groups/`: create, merge, split and schedule groups;
-- `artifacts/`: add artifacts to groups;
-- `tell/`: pass messages to group agents;
+- `knowledge/`: add skills and credentials;
+- `roles/`: set up and change roles;
+- `pollers/`: set up and change pollers;
+- `workers/`: spawn, merge, split, schedule and archive workers;
+- `artifacts/`: add artifacts to workers;
+- `tell/`: pass messages to workers;
 - `channel/`: answer the person through a channel with `input`.
 
-The sessions that vahtovik starts never load the root `CLAUDE.md`: monitoring, group and watchdog sessions keep parent-folder `CLAUDE.md` files out (see Configuration). Your own sessions in this folder load it, including the ones where you work on vahtovik's code; ask the agent for code changes, and it makes them.
+The sessions that vahtovik starts never load the root `CLAUDE.md`: monitoring, worker and watchdog sessions keep parent-folder `CLAUDE.md` files out (see Configuration). Your own sessions in this folder load it, including the ones where you work on vahtovik's code; ask the agent for code changes, and it makes them.
 
 ## Commands
 
+A worker is `<id>`, `<id>-<key>` or `<role>/<key>`.
+
 | Command | What it does |
 |---|---|
-| `run [--watch W] [--stage input\|monitor\|group\|deliver] [--force] [--dry-run]` | one cycle; `--force` reads every input channel and monitors every source, whatever their schedules; `--watch` leaves the input channels out; `--dry-run` makes channels print instead of send |
-| `open W/KEY [--new-session]` | show a group's session window, starting the session if it is not running |
-| `report --channel C [--subject S]` | send a report, body on stdin (inside a session, the group comes from the environment) |
-| `turn finished\|scheduled\|waiting\|background [--importance I] [--summary S] [--question Q ...] [--reason R] [--after 6h] [--check-after 30m]` | for agents: end a turn with the group's status |
-| `group create W/KEY [--title T]` | create an empty group |
-| `group merge W/B [W/C ...] --into W/A` | merge groups into group A: their artifacts, reports, turns and costs move to A, their record goes into A's Work log, their folders go to `data/watches/W/archive/`, and their keys lead to A from then on |
-| `group split W/A --artifact ID [--artifact ID ...] --into W/C [--title T]` | move artifacts of group A to group C, new or existing; they wait for C's next turn |
-| `group set W/KEY [--recheck 1d\|off] [--next 6h\|off] [--reason R]` | when a group gets turns without new artifacts: a standing check, and the next scheduled turn |
-| `artifact add W --group KEY [--group KEY ...] [--json TEXT]` | add artifacts, as JSON on stdin or in `--json` (one object or a list, by `src/vahtovik/schemas/artifact.json`), to each group named; they wait for each group's next turn |
-| `tell W/KEY [W/KEY ...] [--message M]` | pass a message (default: stdin) to group sessions: typed into an open window, or the session starts with it |
-| `memory add [--watch W] [--text T]` | add a note (default: stdin) to the watch's `MEMORY.md`; inside a session, the watch comes from the environment |
-| `memory remove NUMBER --reason R [--watch W]` | remove an entry from the watch's `MEMORY.md` |
+| `run [--poller P] [--stage input\|monitor\|workers\|deliver] [--force] [--dry-run]` | one cycle; `--force` reads every input channel and monitors every source, whatever their schedules; `--poller` monitors only that poller, starts only the turns of its roles' workers, and leaves the input channels out; `--dry-run` makes vahtovik's channels print instead of send |
+| `open WORKER [--new-session]` | show a worker's session window, starting the session if it is not running |
+| `turn finished\|scheduled\|waiting\|background [--importance I] [--summary S] [--question Q ...] [--reason R] [--after 6h] [--at 08:00] [--check-after 30m]` | for agents: end a turn with the worker's status |
+| `worker spawn ROLE/KEY [--title T] [--skill S ...] [--message M] [--report-back]` | spawn a worker; inside a worker, that worker is its parent; with a message, it starts with it at the next run |
+| `worker list [--role R] [--status S] [--tree] [--all]` | the workers: status, parent, and the summary of their last turn |
+| `worker show WORKER` | all about one worker: status, schedule, parent, children, artifacts, messages, latest turn, folder |
+| `worker merge B [C ...] --into A` | merge workers into worker A, which keeps its role: their artifacts, turns, costs and waiting messages move to A, their record goes into A's Work log, they are archived, and their keys lead to A from then on |
+| `worker split A --artifact ID [--artifact ID ...] --into C [--title T]` | move artifacts of worker A to worker C, existing or new as `<role>/<key>`; they wait for C's next turn |
+| `worker schedule WORKER --after 6h\|--at 08:00\|--off [--reason R]` | schedule a worker's next turn, or cancel it |
+| `worker archive WORKER --reason R` | no more turns; its folder goes to `data/archive/<role>/`, and lists leave it out |
+| `artifact add [--worker W ...] [--json TEXT]` | add artifacts, as JSON on stdin or in `--json` (one object or a list, by `src/vahtovik/schemas/artifact.json`), to each worker named; inside a worker, to itself by default, as processed |
+| `tell WORKER [WORKER ...] [--message M]` | pass a message (default: stdin) to workers' inboxes: typed into an open idle window, or in their next turn |
+| `memory add [--role R] [--text T]` | add a note (default: stdin) to the role's `MEMORY.md`; inside a worker, the role comes from the environment |
+| `memory remove NUMBER --reason R [--role R]` | remove an entry from the role's `MEMORY.md` |
 | `messages [C] [-n N]` | an input channel's last N messages (default 20, 0 for all), with vahtovik's replies, oldest first; inside a channel session, the channel comes from the environment |
 | `acknowledge --text T [--to ID]` | for channel agents: send one short line at once that the person's messages arrived, with the session's context size added, such as "(22k)"; by default in reply to the last waiting message; once per batch, never retried |
 | `log [TEXT] [-n N] [-f]` | the last N journal lines (default 40, 0 for all) that contain TEXT; `-f` keeps showing new lines |
-| `status [--watch W] [-v]` | a table of watches and their groups: each watch's state (enabled or disabled), its sources' intervals or times of the day, and the time left until a run monitors its next source; each group's status, processed artifacts and cost in the last 24 hours and 30 days; the totals per watch and for all; and undelivered reports; then the input channels and their messages; then the cost of group, monitor, input and watchdog sessions in the same periods, and in total. `-v` gives all details as text instead: each watch's Claude account, sources with their schedules and next times, sessions, status reasons, and costs for all time too |
+| `status [--role R] [-v]` | a table of the pollers, with their schedules and the time left until a run monitors their next source; a table of the workers by role: status, parent, processed artifacts and cost in the last 24 hours and 30 days, the totals per role and for all, and undelivered messages; then the input channels and their messages; the usage limits; and the cost of worker, monitoring, input and watchdog sessions in the same periods, and in total. `-v` gives all details as text instead |
 | `install-timer [--every 1m]` | start vahtovik periodically with a systemd user timer |
 | `uninstall-timer` | remove that timer |
-| `check` | validate config, skills, environment variables, `claude`, who each Claude login is logged in as, their trust of the project folder, and tmux |
-| `test-channel C [--dry-run]` | send a test message, no AI |
+| `check` | validate the config, the knowledge layer, the skills and credentials of roles, sources and channels, `claude`, who each Claude login is logged in as, their trust of the project folder, and tmux |
+| `test-channel C [--dry-run]` | send a test message through one of vahtovik's channels, no AI |
 
 ## Scheduling
 
-vahtovik has no background process. A timer starts one cycle at a fixed period, every minute by default. Each source is monitored only when it is due by its schedule, and the watchdog runs only every `watchdog.every` (5 minutes), but every cycle starts the group turns that wait. Nothing runs more often than the timer fires, so keep the period at 1 minute, the default.
+vahtovik has no background process. A timer starts one cycle at a fixed period, every minute by default. Each source is monitored only when it is due by its schedule, and the watchdog runs only every `watchdog.every` (5 minutes), but every cycle starts the worker turns that wait. Nothing runs more often than the timer fires, so keep the period at 1 minute, the default.
 
-A watch, or a source, has one of two schedules in `watch.yaml`:
+A poller, or a source, has one of two schedules in `poller.yaml`:
 
 ```yaml
 interval: 6h                    # every 6 hours after the last monitoring: 30m, 6h, 1d
 at: ["08:00", "20:00"]          # or: at these times of the day, in the computer's local time; one time or a list
 ```
 
-Not both at once. A source without its own `interval` or `at` has its watch's; a watch with neither has `interval: 1h`. With `at`, a source is due at the first of its times after it was last monitored. So a time missed while the computer was off is made up once, at the first run after it is back. A source that was never monitored is due at once, with either schedule. Write the times in quotes: YAML reads an unquoted `20:00` as a number, which vahtovik turns back into the time, but quotes make it plain.
+Not both at once. A source without its own `interval` or `at` has its poller's; a poller with neither has `interval: 1h`. With `at`, a source is due at the first of its times after it was last monitored. So a time missed while the computer was off is made up once, at the first run after it is back. A source that was never monitored is due at once, with either schedule. Write the times in quotes: YAML reads an unquoted `20:00` as a number, which vahtovik turns back into the time, but quotes make it plain.
 
-Runs never overlap. Group turns go on in their windows after the run that started them, and have no time limit. A run that starts while another is still going does nothing and writes a line such as `Skipped run: run 20261020-140312 has been going for 47m00s`. Sources that are due stay due, so the first run after the long one picks them up. The systemd timer does not even start a run while one is going, so these fires leave no line.
+Runs never overlap. Turns go on in their windows after the run that started them, and have no time limit. A run that starts while another is still going does nothing and writes a line such as `Skipped run: run 20261020-140312 has been going for 47m00s`. Sources that are due stay due, so the first run after the long one picks them up. The systemd timer does not even start a run while one is going, so these fires leave no line.
 
 `vahtovik install-timer [--every 1m]` sets up a systemd user timer and starts it. The period must divide an hour or a day: 1m, 5m, 15m, 30m, 1h, 6h, 1d. Run it again to change the period. `vahtovik uninstall-timer` removes the timer.
 

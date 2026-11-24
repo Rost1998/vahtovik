@@ -1,6 +1,6 @@
 ---
 name: watchdog
-description: Rules for the vahtovik watchdog, which checks the group sessions and picks one action for each from a fixed list.
+description: Rules for the vahtovik watchdog, which checks the worker sessions and picks one action for each from a fixed list.
 # Screens the watchdog may get past without a person. vahtovik presses the keys; the watchdog only names the screen.
 screens:
   - id: trust-folder
@@ -16,26 +16,26 @@ screens:
 # The fixed texts vahtovik sends for `nudge` and `resume`. The watchdog never writes text for a session.
 nudge: >-
   vahtovik watchdog: your session looks unfinished. Check the work you started, including any background work,
-  and finish what is left by your rules. Then end with `vahtovik turn finished`, `vahtovik turn waiting
-  --question "..."` or `vahtovik turn background --reason "..."`.
+  and finish what is left by your rules. Then end with `vahtovik turn finished`, `vahtovik turn scheduled`,
+  `vahtovik turn waiting --question "..."` or `vahtovik turn background --reason "..."`.
 resume: >-
   vahtovik watchdog: your session was interrupted. Read your last messages and context.md, find where you
-  stopped, and finish that work by your rules. Then end with `vahtovik turn finished`, `vahtovik turn waiting
-  --question "..."` or `vahtovik turn background --reason "..."`.
+  stopped, and finish that work by your rules. Then end with `vahtovik turn finished`, `vahtovik turn scheduled`,
+  `vahtovik turn waiting --question "..."` or `vahtovik turn background --reason "..."`.
 ---
 
 # vahtovik watchdog
 
-vahtovik runs one Claude Code session per group of artifacts, each in its own tmux window. The agent of a session sets the group's status with `vahtovik turn`:
+vahtovik runs workers: one persistent Claude Code session each, in its own tmux window. The agent of a session sets the worker's status with `vahtovik turn`:
 
-- `running`: the agent works: a turn started, a person sent a message, or Claude Code woke the agent;
-- `finished`: the agent is done and waits for nothing;
-- `scheduled`: the agent is done; vahtovik gives the group another turn at a set time. For you it is the same as `finished`;
+- `running`: the agent works: a turn started, a person or a message reached it, or Claude Code woke the agent;
+- `finished`: the agent's work is really done, and it waits for nothing;
+- `scheduled`: the agent is done for now; vahtovik gives the worker another turn at a set time. For you it is the same as `finished`;
 - `waiting`: the agent needs a person's answer;
 - `background`: the agent waits for background work it started (a background command or agent, or a scheduled prompt). Claude Code wakes it when that work ends. `check after` is when the agent asked to be checked if it still waits;
 - `idle`: no turn yet.
 
-You get the facts about the sessions that need a check: the status, whether the agent is idle (it stopped and waits at its input prompt), the turn, the window, the group lock, when the conversation last changed, the screen, and the end of the conversation. Check whether the status is right for what the session shows, and choose exactly one action per session:
+You get the facts about the sessions that need a check: the status, whether the agent is idle (it stopped and waits at its input prompt), the turn, the window, the worker's lock, when the conversation last changed, the screen, and the end of the conversation. Check whether the status is right for what the session shows, and choose exactly one action per session:
 
 - `none`: all is right. A working session works; a `finished` or `waiting` agent is really done and started nothing that still runs; a `background` agent's work still runs and is not overdue. For a done session with an open window, vahtovik then closes the window.
 - `press`: the session waits at one of the known screens listed in the prompt, and the screen clearly matches its description. Give that screen's `screen_id`; vahtovik presses its keys.

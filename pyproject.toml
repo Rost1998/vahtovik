@@ -1,7 +1,7 @@
 [project]
 name = "vahtovik"
 version = "0.1.0"
-description = "AI monitoring tool: watch sources, process artifact groups in persistent Claude Code sessions, report to channels"
+description = "Orchestrator of long-running AI workers on Claude Code sessions: knowledge, workers that spawn workers, and pollers that feed them"
 readme = "README.md"
 license = "GPL-3.0-or-later"
 requires-python = ">=3.11"
