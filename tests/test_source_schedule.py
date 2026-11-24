@@ -13,10 +13,10 @@ def _monitored(project) -> list[str]:
     return [call["cwd"].rsplit("/", 1)[1] for call in project.calls()]
 
 
-def _set_interval(project, source: int, interval: str) -> None:
-    path = project.root / "watches/w1/watch.yaml"
+def _edit_source(project, source: int, **values) -> None:
+    path = project.root / "pollers/p1/poller.yaml"
     data = yaml.safe_load(path.read_text())
-    data["sources"][source]["interval"] = interval
+    data["sources"][source].update(values)
     path.write_text(yaml.safe_dump(data))
 
 
@@ -32,7 +32,7 @@ def _ago(project, source_id: str, minutes: int) -> None:
 
 
 def test_each_source_is_monitored_on_its_own_interval(project):
-    _set_interval(project, 1, "1m")
+    _edit_source(project, 1, interval="1m")
     project.queue(monitor_answer(), monitor_answer())
     _run()
     assert _monitored(project) == ["src-a", "src-b"]
@@ -48,11 +48,7 @@ def test_each_source_is_monitored_on_its_own_interval(project):
 
 
 def test_a_source_with_times_of_the_day_is_monitored_at_the_first_one_after_its_last_monitoring(project):
-    at = (datetime.now() - timedelta(minutes=5)).strftime("%H:%M")
-    path = project.root / "watches/w1/watch.yaml"
-    data = yaml.safe_load(path.read_text())
-    data["sources"][1]["at"] = [at]
-    path.write_text(yaml.safe_dump(data))
+    _edit_source(project, 1, at=[(datetime.now() - timedelta(minutes=5)).strftime("%H:%M")])
     project.queue(monitor_answer(), monitor_answer())
     _run()
     assert _monitored(project) == ["src-a", "src-b"]
@@ -64,21 +60,23 @@ def test_a_source_with_times_of_the_day_is_monitored_at_the_first_one_after_its_
     assert _monitored(project)[2:] == ["src-b"]
 
 
+def test_a_disabled_poller_is_monitored_only_when_named(project):
+    path = project.root / "pollers/p1/poller.yaml"
+    data = yaml.safe_load(path.read_text())
+    data["enabled"] = False
+    path.write_text(yaml.safe_dump(data))
+    _run()
+    assert project.calls() == []
+    project.queue(monitor_answer(), monitor_answer())
+    _run("--poller", "p1")
+    assert _monitored(project) == ["src-a", "src-b"]
+
+
 def test_a_stage_run_does_not_move_the_sources_times(project):
     project.queue(monitor_answer(), monitor_answer())
     cli.main(["run", "--stage", "monitor"])
     _cfg, state, _ = project.load()
-    assert state.source_last_run("w1", "src-a") is None
-
-
-def test_the_sources_take_their_watchs_time_from_an_older_database(project):
-    cfg, state, _ = project.load()
-    state.execute("INSERT INTO watch_state (watch, last_run_at) VALUES ('w1', '2026-10-01T10:00:00+00:00')")
-    state.source_ok("w1", "src-a")
-    state.execute("ALTER TABLE source_state DROP COLUMN last_run_at")
-    state.close()
-    _cfg, state, _ = project.load()
-    assert state.source_last_run("w1", "src-a") == "2026-10-01T10:00:00+00:00"
+    assert state.source_last_run("p1", "src-a") is None
 
 
 def test_the_watchdog_runs_once_its_period_has_passed(project, monkeypatch):

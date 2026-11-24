@@ -229,7 +229,7 @@ def answer(cfg: Config, state: State, claude: Claude, channel: Channel, run_id: 
     if channel.input.roles is not None:
         env[SCOPE_ENV] = ",".join(channel.input.roles)
     spec = SessionSpec(
-        stage="input", workdir=cfg.root, settings=cfg.stage(None, "input"), schema=load_schema("channel"),
+        stage="input", workdir=cfg.root, settings=cfg.stage("input"), schema=load_schema("channel"),
         prompt=render("channel_turn.md", channel=channel.name, run_id=run_id, now=human(),
                       channel_skill=cfg.skills_dir / CHANNEL_SKILL, format_rules=rules,
                       limits=_limits_text(cfg, channel), history=history, messages=_messages_text(rows)),

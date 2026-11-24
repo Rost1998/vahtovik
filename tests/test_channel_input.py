@@ -1,13 +1,12 @@
 import hashlib
 import json
 import logging
-import shutil
 import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
 import yaml
-from conftest import monitor_answer
+from conftest import ROLE, monitor_answer
 
 from vahtovik import cli
 from vahtovik.stages import channel_input
@@ -149,10 +148,9 @@ def test_a_failed_acknowledgment_is_not_retried_and_outside_a_channel_session_it
     message = chat("Hello.")
     cfg, state, _claude = project.load()
     channel_input.receive(cfg, state, cfg.channels["chat"])
-    cfg.channels["chat"].env.pop("FILE_CHANNEL_PATH")
+    cfg.channels["chat"].skill = "broken"  # its send script fails
     sent, line = channel_input.acknowledge(cfg, state, "chat", "One moment.")
-    assert not sent and line.startswith("failed: delivery 1 to chat: ")
-    assert line.endswith("FILE_CHANNEL_PATH is not set. vahtovik does not retry it: go on with your answer")
+    assert not sent and line == "failed: delivery 1 to chat: boom. vahtovik does not retry it: go on with your answer"
     assert any(m.startswith("chat: Failed acknowledgment 1 to chat (not retried): ") for m in caplog.messages)
     assert state.retryable_deliveries(5) == [] and state.undelivered() == 0
     assert cli.main(["acknowledge", "--text", "Hi."]) == 2
@@ -204,7 +202,7 @@ def test_a_run_answers_new_messages_before_it_monitors(project, chat):
     project.queue(replies(([message], "Nothing.")), monitor_answer(), monitor_answer())
     assert cli.main(["run"]) == 0
     lines = _journal(project)
-    assert lines[:3] == ["chat: Received 1 message", "Started run: messages in chat, w1",
+    assert lines[:3] == ["chat: Received 1 message", "Started run: messages in chat, p1",
                          "chat: Started answering 1 message, new session " + lines[2][-8:]]
     assert lines[-1].startswith("Finished run in ") and "1 message answered" in lines[-1]
     time.sleep(1.05)  # a run's id is its start time, to the second
@@ -247,13 +245,13 @@ def test_messages_from_other_senders_are_ignored_without_a_reply(project, chat, 
     assert _receive_and_answer(project)[2:] == (1, 1)
 
 
-def test_a_limited_channel_runs_with_the_guard_and_sees_only_its_watches(project, chat):
-    shutil.copytree(project.root / "watches/w1", project.root / "watches/w2")
-    _chat_input(project, commands=["status", "tell"], watches=["w1"], rules="Answer in Ukrainian.")
+def test_a_limited_channel_runs_with_the_guard_and_sees_only_its_roles(project, chat):
+    project.role("r2", ROLE)
+    _chat_input(project, commands=["status", "tell"], roles=["r1"], rules="Answer in Ukrainian.")
     message = chat("How are things?")
     project.queue({**replies(([message], "All quiet.")), "actions": [
-        {"bash": "vahtovik status"}, {"bash": "vahtovik status --watch w2"}, {"bash": "vahtovik run"},
-        {"bash": "VAHTOVIK_WATCHES=w2 vahtovik status"}]})
+        {"bash": "vahtovik status"}, {"bash": "vahtovik status --role r2"}, {"bash": "vahtovik run"},
+        {"bash": "VAHTOVIK_ROLES=r2 vahtovik status"}]})
     assert _receive_and_answer(project)[2:] == (1, 1)
     [call] = project.calls()
     args = call["args"]
@@ -261,29 +259,30 @@ def test_a_limited_channel_runs_with_the_guard_and_sees_only_its_watches(project
     assert args[args.index("--tools") + 1] == "Read,Grep,Glob,Bash" and "--strict-mcp-config" in args
     [hook] = json.loads(args[args.index("--settings") + 1])["hooks"]["PreToolUse"]
     assert hook["matcher"] == "*" and hook["hooks"][0]["command"].endswith("-m vahtovik hook guard chat")
-    assert call["env"]["VAHTOVIK_WATCHES"] == "w1"
+    assert call["env"]["VAHTOVIK_ROLES"] == "r1"
     prompt = call["prompt"]
     assert "This channel is limited" in prompt
     assert ("- Commands: `vahtovik status`, `vahtovik tell`, `vahtovik messages` (this channel only), "
             "`vahtovik acknowledge`.") in prompt
-    assert "- Watches: w1; the commands see no other watch." in prompt
-    assert "- Reading: `skills`, `README.md`, `CLAUDE.md`, " in prompt and "`watches/w1`, `data/watches/w1`; never" in prompt
+    assert "- Roles: r1; the commands see no workers of other roles." in prompt
+    assert "- Reading: `skills`, `knowledge`, `README.md`, `CLAUDE.md`, " in prompt
+    assert "`roles/r1`, `data/workers/r1`, `data/archive/r1`, `pollers/p1`; never credentials" in prompt
     assert prompt.count("Answer in Ukrainian.") == 1 and "own rules for this channel:\n\nAnswer in Ukrainian." in prompt
     status, other, run, sneaky = project.command_runs()
-    assert status["code"] == 0 and "w1" in status["out"] and "w2" not in status["out"]
-    assert other["code"] != 0 and "unknown watch 'w2'; known: w1" in other["out"]
+    assert status["code"] == 0 and "r1 " in status["out"] and "r2" not in status["out"]
+    assert other["code"] != 0 and "unknown role 'r2'; known: r1" in other["out"]
     assert "may not run `vahtovik run`" in run["denied"] and "denied" in sneaky
 
 
 def test_status_shows_each_input_channels_limits(project, chat, capsys):
-    _chat_input(project, commands=["status"], watches=["w1"], senders=["@alice"], rules="Be brief.\nNo jokes.")
+    _chat_input(project, commands=["status"], roles=["r1"], senders=["@alice"], rules="Be brief.\nNo jokes.")
     cli.main(["status", "-v"])
     out = capsys.readouterr().out
     assert "input channel chat: every 1m, new session after 1h quiet, last read never" in out
-    assert "  limited to status; watches w1; senders @alice; rules: Be brief...." in out
-    _chat_input(project, commands=None, watches=None, senders=None, rules="")
+    assert "  limited to status; roles r1; senders @alice; rules: Be brief...." in out
+    _chat_input(project, commands=None, roles=None, senders=None, rules="")
     cli.main(["status", "-v"])
-    assert "  full power; all watches; any sender; no rules of its own" in capsys.readouterr().out
+    assert "  full power; all roles; any sender; no rules of its own" in capsys.readouterr().out
 
 
 def test_messages_shows_the_channels_last_messages_with_their_replies(project, chat, capsys, monkeypatch):

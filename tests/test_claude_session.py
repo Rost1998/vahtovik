@@ -7,9 +7,9 @@ from vahtovik.claude_session import SessionSpec
 
 
 def _spec(cfg, mode="throwaway", **kw):
-    workdir = cfg.group_dir("w1", "g")
+    workdir = cfg.workers_dir / "r1" / "a3f9c2-g"
     workdir.mkdir(parents=True, exist_ok=True)
-    return SessionSpec(stage="group", workdir=workdir, prompt="do it", settings=cfg.stage(cfg.watch("w1"), "group"),
+    return SessionSpec(stage="worker", workdir=workdir, prompt="do it", settings=cfg.stage("worker", cfg.role("r1")),
                        schema={"type": "object"}, system_prompt="MAIN SKILL", mode=mode, **kw)
 
 
@@ -29,13 +29,13 @@ def test_throwaway_args(project):
     excludes = json.loads(_value(args, "--settings"))["claudeMdExcludes"]
     assert str(Path.home() / ".claude" / "CLAUDE.md") in excludes
     assert str(cfg.root / "CLAUDE.md") in excludes
-    assert str(spec.workdir / "CLAUDE.md") not in excludes  # the group's own CLAUDE.md must load
+    assert str(spec.workdir / "CLAUDE.md") not in excludes  # the worker's own CLAUDE.md must load
 
 
 def test_new_and_resume_args(project):
     cfg, _, claude = project.load()
-    new = claude.print_args(_spec(cfg, "new", session_id="abc", name="vahtovik: w1/g"))
-    assert _value(new, "--session-id") == "abc" and _value(new, "--name") == "vahtovik: w1/g"
+    new = claude.print_args(_spec(cfg, "new", session_id="abc", name="vahtovik: r1/a3f9c2-g"))
+    assert _value(new, "--session-id") == "abc" and _value(new, "--name") == "vahtovik: r1/a3f9c2-g"
     assert "--no-session-persistence" not in new
     resumed = claude.print_args(_spec(cfg, "resume", session_id="abc"))
     assert _value(resumed, "--resume") == "abc"
@@ -69,12 +69,12 @@ def _add_dirs(args) -> list[str]:
 
 def test_add_dirs_in_both_login_modes(project, monkeypatch):
     cfg, _, claude = project.load()
-    watch_dir = cfg.watch("w1").dir
-    spec = _spec(cfg, add_dirs=[watch_dir])
-    assert _add_dirs(claude.print_args(spec)) == [str(watch_dir)]
+    links = cfg.poller_dir("p1") / "sessions/src-a"
+    spec = _spec(cfg, add_dirs=[links])
+    assert _add_dirs(claude.print_args(spec)) == [str(links)]
     for mode in ("new", "resume"):  # an option ends the --add-dir values before the prompt, which comes last
-        args = claude.interactive_args(_spec(cfg, mode, session_id="abc", add_dirs=[watch_dir]))
-        assert _add_dirs(args) == [str(watch_dir)] and args[args.index("--add-dir") + 2].startswith("--")
+        args = claude.interactive_args(_spec(cfg, mode, session_id="abc", add_dirs=[links]))
+        assert _add_dirs(args) == [str(links)] and args[args.index("--add-dir") + 2].startswith("--")
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
     path = project.root / "vahtovik.yaml"
@@ -82,8 +82,8 @@ def test_add_dirs_in_both_login_modes(project, monkeypatch):
     data["claude"]["auth"] = "api-key"
     path.write_text(yaml.safe_dump(data))
     cfg, _, claude = project.load()
-    spec = _spec(cfg, add_dirs=[watch_dir])
-    assert _add_dirs(claude.print_args(spec)) == [str(spec.workdir), str(watch_dir)]
+    spec = _spec(cfg, add_dirs=[links])
+    assert _add_dirs(claude.print_args(spec)) == [str(spec.workdir), str(links)]
 
 
 def test_invalid_answer_is_retried(project):
@@ -98,7 +98,7 @@ def test_invalid_answer_is_retried(project):
     assert abs(result.cost_usd - 0.02) < 1e-9
 
 
-def test_interactive_args_end_with_the_prompt_and_group_sessions_get_the_hooks(project):
+def test_interactive_args_end_with_the_prompt_and_worker_sessions_get_the_hooks(project):
     cfg, _, claude = project.load()
     args = claude.interactive_args(_spec(cfg, "resume", session_id="abc"))
     assert args[0] == cfg.claude.binary and "-p" not in args and args[-1] == "do it"
@@ -114,6 +114,6 @@ def test_trust_is_read_from_the_claude_config(project):
     assert claude.trusts(cfg.data_dir) is None
     config.parent.mkdir(parents=True, exist_ok=True)
     config.write_text(json.dumps({"projects": {str(cfg.root): {"hasTrustDialogAccepted": True}}}))
-    assert claude.trusts(cfg.data_dir / "watches") is True
+    assert claude.trusts(cfg.data_dir / "workers") is True
     config.write_text(json.dumps({"projects": {str(cfg.root): {"hasTrustDialogAccepted": False}}}))
     assert claude.trusts(cfg.data_dir) is False

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-SKILL = Path(__file__).resolve().parents[1] / "skills/channels/telegram"
+SKILL = Path(__file__).resolve().parents[1] / "knowledge/skills/telegram"
 
 
 class Api(BaseHTTPRequestHandler):

@@ -23,6 +23,7 @@ def usage(project, monkeypatch):
     data["channels"]["chat"] = {"skill": "file", "input": {}, "env": {"FILE_CHANNEL_PATH": "data/chat-out.md"}}
     data["channels"]["shared"] = {"skill": "file", "input": {"commands": ["status"]},
                                   "env": {"FILE_CHANNEL_PATH": "data/shared-out.md"}}
+    data.pop("notices")  # the default: every input channel that is not limited
     path.write_text(yaml.safe_dump(data))
     answer = project.tmp / "usage.json"
     monkeypatch.setenv("FAKE_CLAUDE_USAGE", str(answer))
@@ -92,7 +93,7 @@ def test_a_limit_warns_again_once_its_reset_time_has_passed(project, usage):
     assert len(_warnings(_check(project))) == 2
 
 
-def test_warnings_go_to_the_persons_own_input_channels_or_to_those_set(project, usage):
+def test_warnings_go_to_the_persons_own_input_channels_or_to_the_notices_channels(project, usage):
     usage(session=90)
     state = _check(project)
     assert [r["channel"] for r in state.rows("SELECT channel FROM deliveries")] == ["chat"]
@@ -100,7 +101,7 @@ def test_warnings_go_to_the_persons_own_input_channels_or_to_those_set(project, 
     assert "· Claude usage\n_vahtovik_\n\nThe 5-hour limit is at 90% (past 90%)." in out
     path = project.root / "vahtovik.yaml"
     data = yaml.safe_load(path.read_text())
-    data["usage"] = {"channels": ["log", "shared"]}
+    data["notices"] = ["log", "shared"]
     path.write_text(yaml.safe_dump(data))
     usage(session=96)
     state = _check(project)

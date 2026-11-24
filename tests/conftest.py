@@ -11,16 +11,27 @@ from pathlib import Path
 import pytest
 import yaml
 
+from vahtovik import artifacts, knowledge, watchdog, windows, workers
 from vahtovik import config as config_mod
-from vahtovik import skills, watchdog, windows
 from vahtovik.claude_session import Claude
-from vahtovik.group_session import spec_for
-from vahtovik.stages import group_turn
+from vahtovik.stages import worker_turn
 from vahtovik.state import State
 from vahtovik.tmux import Tmux
 
 REPO = Path(__file__).resolve().parents[1]
 FAKE = Path(__file__).with_name("fake_claude.py")
+ROLE = """---
+description: Follows one product.
+skills: [file, rss]
+effort: xhigh
+---
+
+Assess each item.
+Report everything with the file skill.
+"""
+SESSION_VARS = ("VAHTOVIK_WORKER", "VAHTOVIK_WORKER_NAME", "VAHTOVIK_ROLE", "VAHTOVIK_TURN", "VAHTOVIK_RUN",
+                "VAHTOVIK_DRY_RUN", "VAHTOVIK_ROLES", "VAHTOVIK_CHANNEL", "VAHTOVIK_SOURCE", "VAHTOVIK_POLLER",
+                "ANTHROPIC_API_KEY")
 
 
 def _script(path: Path, text: str) -> None:
@@ -57,6 +68,31 @@ class Project:
         cfg = config_mod.load(self.root)
         return cfg, State(cfg.db_path), Claude(cfg)
 
+    def config(self, change) -> None:
+        """Change vahtovik.yaml: `change` gets its data and changes it in place."""
+        path = self.root / "vahtovik.yaml"
+        data = yaml.safe_load(path.read_text())
+        change(data)
+        path.write_text(yaml.safe_dump(data))
+
+    def role(self, name: str = "r1", text: str = ROLE) -> Path:
+        path = self.root / "roles" / name / "ROLE.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+        return path
+
+    def poller(self, name: str = "p1", **data) -> Path:
+        path = self.root / "pollers" / name / "poller.yaml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(yaml.safe_dump(data))
+        (path.parent / "poller.md").write_text("Every item is an artifact. One worker per product.\n")
+        return path
+
+    def credentials(self, name: str, text: str) -> None:
+        path = self.root / "knowledge" / "credentials" / f"{name}.env"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
 
 @pytest.fixture(autouse=True)
 def detach_journal():
@@ -73,16 +109,16 @@ def approving_watchdog(monkeypatch):
     """The watchdog's AI check finds every session right, without an AI call; so a done window closes at the
     next tick, as at the start of a real run. tests/test_watchdog.py uses the real check with fake AI answers."""
     def check(cfg, state, tmux, claude, run_id):
-        meta = skills.watchdog_skill(cfg.skills_dir).meta
+        meta = knowledge.watchdog_skill(cfg).meta
         for session in watchdog.sessions_to_check(cfg, state, tmux, claude):
-            state.group_checked(session.watch.name, session.group["key"])
+            state.worker_checked(session.worker["id"])
             watchdog._act(cfg, state, tmux, claude, session, {"action": "none", "reason": "All is right."}, meta, {})
     monkeypatch.setattr(watchdog, "check", check)
 
 
 @pytest.fixture
 def project(tmp_path, monkeypatch) -> Project:
-    """A vahtovik project with one watch, a fake claude, and a tmux server of its own."""
+    """A vahtovik project with one role, one poller, a fake claude, and a tmux server of its own."""
     socket = f"vahtovik-test-{os.getpid()}-{tmp_path.name}"
     monkeypatch.setattr(Tmux, "use_systemd_run", False)
     monkeypatch.setattr(watchdog, "GRACE", timedelta(0))
@@ -93,17 +129,20 @@ def project(tmp_path, monkeypatch) -> Project:
 def _project(tmp_path, monkeypatch, socket: str) -> Project:
     root = tmp_path / "proj"
     shutil.copytree(REPO / "skills", root / "skills")
-    _script(root / "skills/channels/broken/send", "#!/bin/sh\necho boom >&2\nexit 3\n")
-    (root / "skills/channels/broken/SKILL.md").write_text("---\nname: broken\ndescription: fails\n---\nAny text.\n")
-    _script(root / "skills/channels/slow/send", "#!/bin/sh\nsleep 5\n")
-    (root / "skills/channels/slow/SKILL.md").write_text("---\nname: slow\ndescription: slow\n---\nAny text.\n")
+    shutil.copytree(REPO / "knowledge", root / "knowledge")
+    skills = root / "knowledge/skills"
+    _script(skills / "broken/send", "#!/bin/sh\necho boom >&2\nexit 3\n")
+    (skills / "broken/SKILL.md").write_text("---\nname: broken\ndescription: fails\n---\nAny text.\n")
+    _script(skills / "slow/send", "#!/bin/sh\nsleep 5\n")
+    (skills / "slow/SKILL.md").write_text("---\nname: slow\ndescription: slow\n---\nAny text.\n")
     fake = tmp_path / "fake-claude"
     _script(fake, f'#!/bin/sh\nexec "{sys.executable}" "{FAKE}" "$@"\n')
 
     (root / "vahtovik.yaml").write_text(yaml.safe_dump({
         "claude": {"binary": str(fake), "config_dir": str(tmp_path / "claude-home"),
-                   "stages": {"monitor": {"effort": "low"}, "group": {"effort": "high", "max_budget_usd": 1}}},
+                   "stages": {"monitor": {"effort": "low"}, "worker": {"effort": "high", "max_budget_usd": 1}}},
         "tmux": {"socket": socket},
+        "notices": ["log"],
         "channels": {
             "log": {"skill": "file", "env": {"FILE_CHANNEL_PATH": "data/outbox.md"}},
             "broken": {"skill": "broken"},
@@ -111,31 +150,37 @@ def _project(tmp_path, monkeypatch, socket: str) -> Project:
             "other": {"skill": "file", "env": {"FILE_CHANNEL_PATH": "data/other.md"}},
         },
     }))
-    watch = root / "watches/w1"
-    (watch / "process").mkdir(parents=True)
-    (watch / "watch.yaml").write_text(yaml.safe_dump({
-        "interval": "1h",
-        "sources": [{"id": "src-a", "skill": "rss", "params": {"url": "http://a"}},
-                    {"id": "src-b", "skill": "rss", "params": {"url": "http://b"}}],
-        "channels": ["log", "broken", "slow"],
-        "claude": {"group": {"effort": "xhigh"}},
-    }))
-    (watch / "monitor.md").write_text("Every item is an artifact. Group by product.\n")
-    (watch / "process/01-assess.md").write_text("Assess each item.\n")
-    (watch / "report.md").write_text("Report everything to log.\n")
+    project = Project(root, tmp_path)
+    project.role()
+    project.poller(interval="1h", roles=["r1"],
+                   sources=[{"id": "src-a", "skill": "rss", "params": {"url": "http://a"}},
+                            {"id": "src-b", "skill": "rss", "params": {"url": "http://b"}}])
 
-    for name in ("VAHTOVIK_WATCH", "VAHTOVIK_GROUP", "VAHTOVIK_TURN", "VAHTOVIK_DRY_RUN", "VAHTOVIK_WATCHES",
-                 "VAHTOVIK_CHANNEL", "VAHTOVIK_SOURCE", "ANTHROPIC_API_KEY"):
+    for name in SESSION_VARS:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("VAHTOVIK_HOME", str(root))
     monkeypatch.setenv("FAKE_CLAUDE_QUEUE", str(tmp_path / "queue.json"))
     monkeypatch.setenv("FAKE_CLAUDE_LOG", str(tmp_path / "calls.jsonl"))
-    return Project(root, tmp_path)
+    return project
 
 
-def artifact(item_id: str, group: str, title: str | None = None) -> dict:
+def artifact(item_id: str, worker: str, title: str | None = None, role: str = "r1") -> dict:
+    """An artifact as a monitoring session returns it."""
     return {"id": item_id, "title": title or item_id, "url": f"https://example.com/{item_id}",
-            "summary": f"About {item_id}.", "group_key": group, "group_title": group.title()}
+            "summary": f"About {item_id}.", "role": role, "worker": worker, "worker_title": worker.title()}
+
+
+def give(project, *items: dict, poller: str = "p1", source: str = "src-a"):
+    """Give artifacts to workers as monitoring does. Returns (cfg, state)."""
+    cfg, state, _ = project.load()
+    for item in items:
+        artifacts.from_poller(cfg, state, cfg.poller(poller), item, source)
+    return cfg, state
+
+
+def worker(cfg, state, key: str = "g", role: str = "r1", **options):
+    """The active worker of the role with this key; spawned by the person if there is none."""
+    return state.active_worker(role, key) or workers.create(cfg, state, role, key, key.title(), "person", **options)
 
 
 def monitor_answer(*items: dict) -> dict:
@@ -148,22 +193,23 @@ def work_log(text: str = "Processed.") -> dict:
 
 
 def status_action(status: str = "finished", importance: str | None = "low", summary: str | None = "All good.",
-                  questions: tuple[str, ...] = ()) -> dict:
+                  questions: tuple[str, ...] = (), extra: tuple[str, ...] = ()) -> dict:
     args = ["vahtovik", "turn", status]
     args += ["--importance", importance] if importance else []
     args += ["--summary", summary] if summary else []
     for question in questions:
         args += ["--question", question]
-    return {"run": args}
+    return {"run": args + list(extra)}
 
 
 def turn_answer(actions: list[dict], importance: str = "low", **status) -> dict:
-    """A group turn that ends with `vahtovik turn`."""
+    """A worker turn that ends with `vahtovik turn`."""
     return {"mode": "interactive", "actions": [*actions, status_action(importance=importance, **status)]}
 
 
-def report_action(channel: str = "log", body: str = "Report body.") -> dict:
-    return {"run": ["vahtovik", "report", "--channel", channel, "--subject", "Test report"], "stdin": body}
+def report_action(body: str = "Report body.", subject: str = "Test report") -> dict:
+    """The agent reports with its file skill's send script, as its role says."""
+    return {"run": ["env", f"VAHTOVIK_SUBJECT={subject}", ".claude/skills/file/send"], "stdin": body}
 
 
 def until(condition, timeout: float = 15.0) -> None:
@@ -175,10 +221,10 @@ def until(condition, timeout: float = 15.0) -> None:
     raise AssertionError("timed out")
 
 
-def run_turns(cfg, state, claude, tmux, watch: str = "w1", run_id: str = "run1") -> list[str]:
-    """A run's group stage, then the wait until each turn it started is done or paused, and the watchdog's
+def run_turns(cfg, state, claude, tmux, run_id: str = "run1", roles=None) -> list[str]:
+    """A run's worker stage, then the wait until each turn it started is done or paused, and the watchdog's
     tidying, as at the next run's start: it ends the turns whose window ended, and closes failed windows."""
-    started = group_turn.run(cfg, state, claude, tmux, cfg.watch(watch), run_id)
+    started = worker_turn.run(cfg, state, claude, tmux, run_id, roles)
     for turn_id in started:
         until(lambda: _settled(state, tmux, turn_id))
     watchdog.tidy(cfg, state, tmux)
@@ -187,21 +233,22 @@ def run_turns(cfg, state, claude, tmux, watch: str = "w1", run_id: str = "run1")
 
 def _settled(state, tmux, turn_id: str) -> bool:
     turn = state.turn(turn_id)
-    group = state.group(turn["watch"], turn["group_key"])
-    if turn["finished_at"] and (group["idle"] or not turn["ok"]):
+    row = state.worker(turn["worker"])
+    if turn["finished_at"] and (row["idle"] or not turn["ok"]):
         return True
-    if group["status"] in ("failed", "maintenance") or (group["status"] == "background" and group["idle"]):
+    if row["status"] in ("failed", "maintenance") or (row["status"] == "background" and row["idle"]):
         return True
-    return tmux.window(f"{turn['watch']}/{turn['group_key']}") is None
+    return tmux.window(turn["worker"]) is None
 
 
-def launch_turn(cfg, state, claude, tmux, turn_id: str = "t1") -> str:
-    """Start the window of a turn for group w1/g, without waiting for it."""
-    spec, _ = spec_for(cfg, claude, state, cfg.watch("w1"), "g")
+def launch_turn(cfg, state, claude, tmux, turn_id: str = "t1", key: str = "g") -> str:
+    """Start the window of a turn for worker r1/<key>, without waiting for it."""
+    row = worker(cfg, state, key)
+    spec, _ = workers.spec_for(cfg, claude, state, row)
     spec.prompt = "Process."
     spec.env["VAHTOVIK_TURN"] = turn_id
-    state.start_turn(turn_id, "run1", "w1", "g", ["a1"], 0)
-    state.prompt_submitted("w1", "g")
+    state.start_turn(turn_id, "run1", row["id"], ["a1"], [], 0)
+    state.prompt_submitted(row["id"])
     return windows.launch(cfg, state, tmux, claude, spec, "turn", turn_id)
 
 
