@@ -127,7 +127,7 @@ def test_sessions_get_their_skills_and_the_credentials_of_their_skills(project, 
     run_turns(cfg, state, claude, Tmux(cfg), run_id="r1")
     call = project.calls()[-1]
     assert call["env"]["TRIAGE_TOKEN"] == "from-skill" and _add_dirs(call) == []
-    assert "- `triage` (`" in call["prompt"]
+    assert "- `triage` (`" not in call["prompt"]  # the skills are per-session information: in CLAUDE.md
     claude_md = (workers.folder(cfg, state.active_worker("r1", "g")) / "CLAUDE.md").read_text()
     assert "- `triage` (`" in claude_md and "from-skill" not in claude_md
 

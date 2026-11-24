@@ -70,6 +70,6 @@ A skill is generic. What one role or poller does with it goes into that role's o
 ## 5. Check
 
 1. `uv run vahtovik check`, and fix every problem it reports.
-2. A worker gets a new or changed skill at the start of its next turn: vahtovik links its skills again before every start.
+2. A worker gets a new or changed skill at the start of its next turn: vahtovik links its skills again before every start, and the turn's prompt tells the worker which skill is new, gone or changed (its `SKILL.md`), so it reads the skill again before it uses it.
 
 Never edit `data/`: it is vahtovik's runtime state.

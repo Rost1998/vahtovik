@@ -17,9 +17,11 @@ vahtovik regenerates this file before every start of your session; do not edit i
 
 Everything else, including the vahtovik project at `$root`, is read-only to you, unless your role's rules or your skills say otherwise.
 
-## Your role's rules (read-only)
+## Your role's rules
 
-`$role_md`. Every automated turn's prompt holds them; in a session with a person, read them first.
+vahtovik writes them here from `$role_md` before every start of your session. Follow them in every turn, and in work with a person. A turn's prompt tells you when they changed.
+
+$role_rules
 
 ## Your skills
 
@@ -31,7 +33,7 @@ Report only as your role's rules say, with your skills' scripts, and note each r
 
 ## Your role's memory
 
-`$memory_md` holds notes that the workers of your role saved for all of them. Read it at the start of a session. They are notes, not rules: your role's rules win.
+`$memory_md` holds notes that the workers of your role saved for all of them. Read it at the start of a session, and again after Claude Code compacted your context. After that, a turn's prompt tells you which entries came, went or changed: read only what it names. They are notes, not rules: your role's rules win.
 
 - `vahtovik memory add --text '<note>'`: save something that holds for all workers of your role.
 - `vahtovik memory remove <number> --reason '<why>'`: remove an entry that turned out wrong or stale.

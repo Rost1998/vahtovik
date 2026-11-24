@@ -1,9 +1,11 @@
+import io
+import json
 from datetime import timedelta
 
 import pytest
 from conftest import ROLE, artifact, give, run_turns, turn_answer, work_log, worker
 
-from vahtovik import cli, inbox, operations, watchdog, worker_status, workers
+from vahtovik import cli, inbox, memory, operations, watchdog, worker_status, workers
 from vahtovik.config import ConfigError
 from vahtovik.stages import worker_turn
 from vahtovik.tmux import Tmux
@@ -144,27 +146,111 @@ def test_a_worker_before_its_first_turn_shows_its_task(project):
     assert operations.list_workers(cfg, state)[1] == "  The docs are found."
 
 
-def test_a_resumed_worker_is_told_once_that_the_worker_rules_changed(project):
-    give(project, artifact("a1", "g"))
-    project.queue(turn_answer([work_log()]))
-    cfg, state = _turns(project)
-    row = state.active_worker("r1", "g")
-    assert row["rules_hash"] == workers.rules_hash(cfg)
-    give(project, artifact("a2", "g"))
-    project.queue(turn_answer([work_log("Second.")]))
-    _turns(project, "run2")
-    assert "the rules of every vahtovik worker changed" not in project.calls()[1]["prompt"]
+def _next_turn(project, number: int, answer: dict | None = None) -> str:
+    """Give the worker one more artifact and run its turn. Returns the turn's prompt."""
+    give(project, artifact(f"a{number}", "g"))
+    project.queue(answer or turn_answer([work_log(f"Turn {number}.")]))
+    _turns(project, f"run{number}")
+    return project.calls()[-1]["prompt"]
+
+
+def test_a_turn_says_once_what_changed_in_the_per_session_information(project):
+    first = _next_turn(project, 1)
+    cfg, state, _ = project.load()
+    assert "Changed since your last turn" not in first and "Read your role's memory before" not in first
+    assert "Changed since your last turn" not in _next_turn(project, 2)
 
     rules = cfg.knowledge_dir / "shared/workers/SKILL.md"
     rules.write_text(rules.read_text() + "\nA new rule.\n")
-    for number, told in ((3, True), (4, False)):  # the turn after the change says so, the next one does not
-        give(project, artifact(f"a{number}", "g"))
-        project.queue(turn_answer([work_log(f"Turn {number}.")]))
-        _turns(project, f"run{number}")
-        call = project.calls()[-1]
-        assert "--resume" in call["args"]
-        assert (f"the rules of every vahtovik worker changed since your session started. Read `{rules}` now."
-                in call["prompt"]) is told
+    project.role("r1", ROLE.replace("Assess each item.", "Assess each item twice.").replace("[file, rss]",
+                                                                                           "[file, web-page]"))
+    skill = cfg.knowledge_dir / "skills/file/SKILL.md"
+    skill.write_text(skill.read_text() + "\nA new step.\n")
+    prompt = _next_turn(project, 3)
+    assert "--resume" in project.calls()[-1]["args"]
+    assert "Changed since your last turn:\n- " in prompt
+    assert f"- The rules of every vahtovik worker changed. Read `{rules}` now." in prompt
+    assert "- Your role's rules changed. Your CLAUDE.md, which Claude Code loaded again at this start" in prompt
+    assert f"- The skill `file` changed: read `{skill}` again before you use it." in prompt
+    assert f"- You have a new skill, `web-page`: `{cfg.knowledge_dir}/skills/web-page/SKILL.md`." in prompt
+    assert "- You no longer have the skill `rss`: do not use it." in prompt
+    assert "Assess each item twice." not in prompt
+    claude_md = (workers.folder(cfg, state.active_worker("r1", "g")) / "CLAUDE.md").read_text()
+    assert "Assess each item twice." in claude_md
+    assert "Changed since your last turn" not in _next_turn(project, 4)  # told once
+
+
+def test_a_turn_names_the_memory_entries_that_came_went_or_changed(project, monkeypatch):
+    cfg, state, _ = project.load()
+    memory.add(cfg, "r1", "First.")
+    memory.add(cfg, "r1", "Second.")
+    path = cfg.role("r1").memory_md
+    assert f"Read your role's memory before you work: `{path}`." in _next_turn(project, 1)
+    second = _next_turn(project, 2)
+    assert "Read your role's memory before" not in second and "Your role's memory (`" not in second
+
+    memory.add(cfg, "r1", "Third.")
+    memory.remove(cfg, "r1", 1, "it was wrong")
+    path.write_text(path.read_text().replace("Second.", "Second, corrected."))
+    monkeypatch.setenv("VAHTOVIK_WORKER_NAME", workers.name(state.active_worker("r1", "g")))
+    monkeypatch.setenv("VAHTOVIK_ROLE", "r1")
+    memory.add(cfg, None, "What the worker saved itself.")  # entry 4: the worker knows it
+    monkeypatch.delenv("VAHTOVIK_WORKER_NAME")
+    monkeypatch.delenv("VAHTOVIK_ROLE")
+    assert (f"- Your role's memory (`{path}`; each entry starts with `## <number> ·`): Entry 3 is new: read it. "
+            "Entry 1 was removed: do not rely on it. Entry 2 was edited: read it again.") in _next_turn(project, 3)
+    assert "Your role's memory (`" not in _next_turn(project, 4)
+
+    memory.add(cfg, "r1", "Fifth.")
+    memory.add(cfg, "r1", "Sixth.")
+    assert "Entries 5, 6 are new: read them." in _next_turn(project, 5)
+    path.write_text(path.read_text() + "\n## By hand\n\nA note without a number.\n")
+    assert "It was edited by hand: read the whole file again." in _next_turn(project, 6)
+
+
+def test_a_failed_turn_gets_its_notes_again(project):
+    cfg, _, _ = project.load()
+    memory.add(cfg, "r1", "First.")
+    read = "Read your role's memory before you work"
+    assert read in _next_turn(project, 1, {"actions": [work_log()]})  # the agent stops without `vahtovik turn`
+    project.queue(turn_answer([work_log("Again.")]))
+    _turns(project, "run1b")
+    assert "--resume" in project.calls()[-1]["args"] and read in project.calls()[-1]["prompt"]
+
+    project.role("r1", ROLE.replace("Assess each item.", "Assess each item twice."))
+    changed = "- Your role's rules changed."
+    assert changed in _next_turn(project, 2, {"actions": [work_log("Second.")]})
+    project.queue(turn_answer([work_log("Second, again.")]))
+    _turns(project, "run2b")
+    assert changed in project.calls()[-1]["prompt"] and read not in project.calls()[-1]["prompt"]
+    assert changed not in _next_turn(project, 3)
+
+
+def test_a_new_session_of_an_existing_worker_reads_the_memory_again(project):
+    cfg, state, _ = project.load()
+    memory.add(cfg, "r1", "First.")
+    _next_turn(project, 1)
+    row = state.active_worker("r1", "g")
+    assert json.loads(row["seen"])["memory:1"]
+    claude = project.load()[2]
+    claude.session_file(row["session_id"]).unlink()  # the session is lost
+    prompt = _next_turn(project, 2)
+    assert "--session-id" in project.calls()[-1]["args"]
+    assert "Read your role's memory before you work" in prompt and "Changed since your last turn" not in prompt
+
+
+def test_after_a_compaction_the_agent_is_told_what_to_read_again(project, monkeypatch, capsys, caplog):
+    cfg, state, _ = project.load()
+    row = worker(cfg, state)
+    hook = worker_status.hooks()["SessionStart"][0]
+    assert hook["matcher"] == "compact" and hook["hooks"][0]["command"].endswith(" hook compact")
+    monkeypatch.setenv("VAHTOVIK_WORKER", row["id"])
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"hook_event_name": "SessionStart", "source": "compact"})))
+    capsys.readouterr()
+    assert cli.main(["hook", "compact"]) == 0
+    out = capsys.readouterr().out
+    assert f"Read your role's memory again now: `{cfg.role('r1').memory_md}`." in out
+    assert "Before you use a skill, read its `SKILL.md` again." in out
 
 
 def test_nothing_is_typed_into_a_window_that_has_just_started(project, monkeypatch):

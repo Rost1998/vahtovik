@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS source_state (
 CREATE TABLE IF NOT EXISTS workers (
     id TEXT PRIMARY KEY, role TEXT, key TEXT, title TEXT, skills TEXT DEFAULT '[]',
     spawned_by TEXT, parent TEXT, report_back INTEGER DEFAULT 0, created_at TEXT, updated_at TEXT,
-    session_id TEXT, session_created_at TEXT, rules_hash TEXT,
+    session_id TEXT, session_created_at TEXT, seen TEXT,
     status TEXT DEFAULT 'idle', status_at TEXT, status_reason TEXT, questions TEXT, summary TEXT,
     prompt_at TEXT, idle INTEGER DEFAULT 1, stop_blocks INTEGER DEFAULT 0, notified_at TEXT,
     check_after TEXT, checked_at TEXT,
@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS inbox (
 CREATE TABLE IF NOT EXISTS turns (
     id TEXT PRIMARY KEY, run_id TEXT, worker TEXT, started_at TEXT, finished_at TEXT, ok INTEGER, output TEXT,
     error TEXT, artifact_ids TEXT, message_ids TEXT, work_log_before INTEGER, long_warned_at TEXT,
-    scheduled_for TEXT);
+    scheduled_for TEXT, snapshot TEXT);
 CREATE TABLE IF NOT EXISTS sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT, stage TEXT, scope TEXT, target TEXT,
     claude_session_id TEXT, started_at TEXT, duration_s REAL, cost_usd REAL, ok INTEGER, error TEXT, raw_path TEXT);
@@ -203,10 +203,15 @@ class State:
                      session_id, utc_iso(), worker_id)
         self.execute("INSERT OR IGNORE INTO session_costs (session_id, worker) VALUES (?, ?)", session_id, worker_id)
 
-    def set_rules_hash(self, worker_id: str, rules_hash: str) -> None:
-        """Which worker rules the worker's session knows: Claude Code keeps a session's system prompt as it was
-        when the session was created (see workers.spec_for)."""
-        self.execute("UPDATE workers SET rules_hash = ? WHERE id = ?", rules_hash, worker_id)
+    def set_seen(self, worker_id: str, seen: str | None) -> None:
+        """What the worker's session has of its per-session information: the snapshot (JSON) of its last turn that
+        ended well, or None for a session that has not ended a turn yet (see workers.status_note)."""
+        self.execute("UPDATE workers SET seen = ? WHERE id = ?", seen, worker_id)
+
+    def set_turn_snapshot(self, turn_id: str, snapshot: dict) -> None:
+        """The per-session information as it was when the turn started; it becomes the worker's `seen` when the
+        turn ends well."""
+        self.execute("UPDATE turns SET snapshot = ? WHERE id = ?", json.dumps(snapshot), turn_id)
 
     def archive_worker(self, worker_id: str, reason: str, merged_into: str | None = None) -> None:
         self.execute("UPDATE workers SET archived_at = ?, archive_reason = ?, merged_into = ?, scheduled_at = NULL, "

@@ -39,11 +39,26 @@ class StatusError(Exception):
     pass
 
 
+COMPACTED = ("Claude Code compacted your context, so what you read from files earlier may be gone from it. Your "
+             "CLAUDE.md is loaded again. Read your role's memory again now: `{memory}`. Before you use a skill, read "
+             "its `SKILL.md` again. Then go on with what you were doing.")
+
+
 def hooks() -> dict:
-    """Claude Code hooks for worker sessions, for the `--settings` of every worker session."""
-    def command(event: str) -> list[dict]:
-        return [{"hooks": [{"type": "command", "command": shlex.join([sys.executable, "-m", "vahtovik", "hook", event])}]}]
-    return {"UserPromptSubmit": command("prompt"), "Stop": command("stop")}
+    """Claude Code hooks for worker sessions, for the `--settings` of every worker session. `SessionStart` with
+    the matcher `compact` runs right after a compaction, and what its command prints goes into the context."""
+    def command(event: str, matcher: str | None = None) -> list[dict]:
+        hook = {"type": "command", "command": shlex.join([sys.executable, "-m", "vahtovik", "hook", event])}
+        return [{**({"matcher": matcher} if matcher else {}), "hooks": [hook]}]
+    return {"UserPromptSubmit": command("prompt"), "Stop": command("stop"),
+            "SessionStart": command("compact", "compact")}
+
+
+def on_compact(cfg: Config, row) -> str:
+    """The context of the worker's session was compacted. Returns what to tell the agent: Claude Code puts
+    CLAUDE.md back by itself, but not what the agent read from files."""
+    log.info("%s: Claude Code compacted the session's context", workers.label(row))
+    return COMPACTED.format(memory=workers.role_of(cfg, row).memory_md)
 
 
 def background_work(hook_data: dict) -> list[str] | None:
@@ -97,6 +112,7 @@ def declare(cfg: Config, state: State, row, status: str, importance: str | None 
         if ends_turn:
             output = {"status": status, "importance": importance, "summary": summary, "questions": questions}
             state.finish_turn(turn_id, True, output, None)
+            state.set_seen(row["id"], turn["snapshot"])  # the agent got this turn's notes (workers.status_note)
             state.mark_processed(row["id"], json.loads(turn["artifact_ids"] or "[]"))
             state.touch_worker(row["id"])
     what = status + (f" ({plural(len(questions), 'question')})" if questions else "")

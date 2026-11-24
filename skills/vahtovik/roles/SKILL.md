@@ -39,7 +39,7 @@ Then the working rules, as plain instructions to the worker:
 - **Ending turns**: when the work is really done (`finished`), and when the worker should come back later by itself (`scheduled --after` or `--at`), for example to see whether something announced has happened. `finished` cancels any scheduled turn, and the worker then gets a turn only for new artifacts or messages. Nothing repeats by itself: for a check that must come again and again, the rules say to end every such turn with `scheduled` again, and when to stop.
 - **Spawning**, if the role should: when to spawn workers of which role, and whether to wait for their report-back.
 
-**Keep the rules short.** vahtovik pastes them into every turn's prompt, so each line is paid for on every turn. Each rule says in a few lines what to do and when. Put the long parts in skills: detailed steps, checklists, examples and scripts. In the rule, refer to the skill by name and say when to use it, for example: "To rate an item's urgency, use the skill `triage`."
+**Keep the rules short.** vahtovik writes them into each worker's `CLAUDE.md`, so they stay in the session's context all the time. Each rule says in a few lines what to do and when. Put the long parts in skills: detailed steps, checklists, examples and scripts. In the rule, refer to the skill by name and say when to use it, for example: "To rate an item's urgency, use the skill `triage`."
 
 Workers write only inside their folder. If the role needs them to act outside it, for example to change a file elsewhere or run a command, say so plainly in the rules. Do not repeat what vahtovik already tells them: sessions, `context.md`, `vahtovik turn`, spawning.
 
@@ -54,7 +54,7 @@ A Claude account is a Claude Code profile folder with its own login, so that rol
 
 Read its `ROLE.md`, its `MEMORY.md` and `uv run vahtovik worker list --role <role>` first, and tell the person what you will change.
 
-- New rules and skills apply from each worker's next turn: vahtovik pastes the rules into every turn's prompt, and links the skills again before every start. A worker in an open window gets them at its next turn.
+- New rules and skills apply from each worker's next turn: vahtovik writes the rules into the worker's `CLAUDE.md` and links the skills again before every start, and the turn's prompt tells the worker what changed. A worker in an open window gets them at its next turn.
 - `account:` moves the role's workers to another Claude account. Claude Code keeps conversations per account, so each worker then starts a new session and rebuilds its picture from `context.md`. Tell the person so before the change.
 - A role cannot be renamed or removed while it has workers: its name is in their records and folders, and workers without their role get no turns (`vahtovik check` reports them). Make a new role, and merge or spawn workers into it; archive the workers of a role before you remove it.
-- `MEMORY.md` holds notes, not rules. Change it with `vahtovik memory add|remove --role <role>`, or let the person edit it by hand.
+- `MEMORY.md` holds notes, not rules. Change it with `vahtovik memory add|remove --role <role>`, or let the person edit it by hand. Each worker's next turn names the entries that came, went or were edited, and the worker reads those.

@@ -283,10 +283,12 @@ def cmd_hook(args) -> int:
         except Exception as exc:  # noqa: BLE001 - exit code 2 makes Claude Code deny the tool call
             print(f"vahtovik's guard failed: {type(exc).__name__}: {exc}", file=sys.stderr)
             return 2
-    _cfg, state = _load()
+    cfg, state = _load()
     row = _session_worker(state)
     data = json.loads(sys.stdin.read() or "{}")
-    if args.event == "prompt":
+    if args.event == "compact":
+        print(worker_status.on_compact(cfg, row))
+    elif args.event == "prompt":
         worker_status.on_prompt(state, row["id"], data.get("session_id"))
     else:
         answer = worker_status.on_stop(state, row["id"], data, os.environ.get("VAHTOVIK_TURN"))
@@ -847,7 +849,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_window)
 
     p = sub.add_parser("hook", help=argparse.SUPPRESS)
-    p.add_argument("event", choices=["prompt", "stop", "guard"])
+    p.add_argument("event", choices=["prompt", "stop", "compact", "guard"])
     p.add_argument("channel", nargs="?", help="guard: the limited input channel")
     p.set_defaults(func=cmd_hook)
 

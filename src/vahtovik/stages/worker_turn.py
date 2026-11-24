@@ -108,22 +108,22 @@ def turn(cfg: Config, state: State, claude: Claude, tmux: Tmux, row, run_id: str
     row = state.worker(row["id"])
     try:
         spec, note = workers.spec_for(cfg, claude, state, row)
-        role = workers.role_of(cfg, row)
         found, _ = workers.skills_of(cfg, row)
+        changes, snapshot = workers.status_note(cfg, state, row, spec, found)
     except (ConfigError, knowledge.SkillError) as exc:
         fail(cfg, state, state.turn(turn_id), str(exc), 0)
         return None
-    notes = [note, workers.rules_note(cfg, state, row, spec),
-             SCHEDULED_NOTE.format(reason=scheduled) if scheduled else None]
+    state.set_turn_snapshot(turn_id, snapshot)
+    notes = [note, SCHEDULED_NOTE.format(reason=scheduled) if scheduled else None, changes]
+    # Only what belongs to this turn: the worker's CLAUDE.md holds what stays (see workers.status_note).
     spec.prompt = render(
         "worker_turn.md",
-        name=workers.name(row), run_id=run_id, turn_id=turn_id, now=now,
-        session_note="\n\n".join(filter(None, notes)), artifacts=_artifacts_text(pending) or "- none",
-        messages=inbox.prompt_text(state, row, messages), role=role.name,
-        role_rules=role.body or "(the role has no rules)", skills=knowledge.listing(found),
-        memory=workers.memory_text(cfg, row), schedule=workers.schedule_text(row),
+        run_id=run_id, turn_id=turn_id, now=now,
+        notes="\n\n".join(filter(None, notes)) or "No notes for this turn.",
+        artifacts=_artifacts_text(pending) or "- none",
+        messages=inbox.prompt_text(state, row, messages), schedule=workers.schedule_text(row),
     )
-    if len(spec.prompt.encode()) > PROMPT_LIMIT:  # a large memory, or long messages
+    if len(spec.prompt.encode()) > PROMPT_LIMIT:  # long messages
         (spec.workdir / PROMPT_FILE).write_text(spec.prompt)
         spec.prompt = LONG_PROMPT.format(path=spec.workdir / PROMPT_FILE)
     spec.env.update(VAHTOVIK_TURN=turn_id, VAHTOVIK_RUN=run_id)

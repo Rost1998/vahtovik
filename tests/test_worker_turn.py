@@ -28,7 +28,11 @@ def test_first_turn_creates_the_session_and_the_agent_reports_with_its_skill(pro
     assert call["args"][call["args"].index("--session-id") + 1] == row["session_id"]
     assert call["env"]["VAHTOVIK_WORKER"] == row["id"] and call["env"]["VAHTOVIK_ROLE"] == "r1"
     assert call["env"]["VAHTOVIK_TURN"]
-    assert "Assess each item." in call["prompt"] and "Report everything with the file skill." in call["prompt"]
+    # the role's rules are per-session information: in CLAUDE.md, which Claude Code loads at every start
+    claude_md = (cfg.workers_dir / "r1" / f"{row['id']}-g" / "CLAUDE.md").read_text()
+    assert "Assess each item." in claude_md and "Report everything with the file skill." in claude_md
+    assert "Assess each item." not in call["prompt"] and "## Your skills" not in call["prompt"]
+    assert "## New artifacts" in call["prompt"] and "## Your task" in call["prompt"]
     assert "--effort" in call["args"] and call["args"][call["args"].index("--effort") + 1] == "xhigh"
     assert state.row("SELECT status FROM artifacts WHERE id = 'a1'")["status"] == "processed"
     outbox = (cfg.root / "data/outbox.md").read_text()

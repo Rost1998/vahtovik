@@ -75,7 +75,7 @@ def test_the_command_reads_the_text_from_stdin(project, monkeypatch, capsys):
     assert "has no entry 7; entries: 1" in capsys.readouterr().err
 
 
-def test_workers_and_monitoring_sessions_see_the_memory(project):
+def test_monitoring_sessions_get_the_memory_and_workers_read_its_file(project):
     cfg, state, claude = project.load()
     assert memory.prompt_text(cfg.role("r1")) == "(no entries yet)"
     memory.add(cfg, "r1", "One worker per product name, not per version.")
@@ -89,6 +89,20 @@ def test_workers_and_monitoring_sessions_see_the_memory(project):
     project.queue(turn_answer([work_log()]))
     run_turns(cfg, state, claude, Tmux(cfg))
     prompt = project.calls()[-1]["prompt"]
-    assert "One worker per product name, not per version." in prompt and "vahtovik memory add" in prompt
+    path = cfg.role("r1").memory_md
+    assert f"Read your role's memory before you work: `{path}`." in prompt and "not per version." not in prompt
     claude_md = (workers.folder(cfg, worker(cfg, state)) / "CLAUDE.md").read_text()
-    assert f"`{cfg.role('r1').memory_md}` holds notes" in claude_md and "vahtovik memory remove" in claude_md
+    assert f"`{path}` holds notes" in claude_md and "not per version." not in claude_md
+    assert "vahtovik memory add" in claude_md and "vahtovik memory remove" in claude_md
+
+
+def test_entries_are_read_by_their_numbers(project):
+    cfg, _, _ = project.load()
+    role = cfg.role("r1")
+    assert memory.entries(role) == {}
+    memory.add(cfg, "r1", "First.")
+    memory.add(cfg, "r1", "Second.\n# Why\nBecause.")
+    role.memory_md.write_text(role.memory_md.read_text() + "\n## By hand\n\nA note without a number.\n")
+    found = memory.entries(role)
+    assert sorted(found) == [1, 2] and found[1].endswith("First.") and found[2].endswith("#### Why\nBecause.")
+    assert "By hand" not in found[2] and memory.saved_by(found[1]) == "the person"

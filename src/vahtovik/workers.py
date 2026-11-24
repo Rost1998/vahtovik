@@ -28,7 +28,7 @@ from .claude_session import Claude, SessionSpec
 from .config import NAME, Config, ConfigError, Role
 from .state import State
 from .tmux import Tmux
-from .util import LockBusy, file_lock, human, render, schema_path
+from .util import LockBusy, file_lock, headings_down, human, render, schema_path
 
 log = logging.getLogger(__name__)
 
@@ -40,9 +40,15 @@ NEW_FOR_EXISTING = (
     "Read CLAUDE.md, context.md and the files in artifacts/ to rebuild your picture before you start."
 )
 RULES_CHANGED = (
-    "Note: the rules of every vahtovik worker changed since your session started. Read `{path}` now. Where it "
-    "differs from the rules in your system prompt, the file is right."
+    "The rules of every vahtovik worker changed. Read `{path}` now. Where it differs from the rules in your system "
+    "prompt, the file is right."
 )
+ROLE_CHANGED = (
+    "Your role's rules changed. Your CLAUDE.md, which Claude Code loaded again at this start, holds the new ones "
+    "under \"Your role's rules\": go through them again before you work, and follow them where they differ from "
+    "what you did before."
+)
+READ_MEMORY = "Read your role's memory before you work: `{path}`."
 OPEN_NEW_PROMPT = (
     "A person opened this worker's session. Read CLAUDE.md and context.md, then tell them in a few lines "
     "what you work on and what has been done so far."
@@ -228,6 +234,7 @@ def write_claude_md(cfg: Config, state: State, row, found: list[knowledge.Skill]
         "worker_claude_md.md",
         title=row["title"], name=name(row), id=row["id"], key=row["key"], role=role.name,
         role_description=role.description or "(no description)", role_md=role.role_md,
+        role_rules=headings_down(role.body.strip()) or "(the role has no rules)",
         spawned_by=describe_spawner(state, row["spawned_by"]),
         parent=f"`{name(parent)}`" if parent else "none",
         report_back=("yes: when you end a turn as finished or waiting, vahtovik tells your parent"
@@ -239,21 +246,82 @@ def write_claude_md(cfg: Config, state: State, row, found: list[knowledge.Skill]
     (folder(cfg, row) / "CLAUDE.md").write_text(text)
 
 
-def rules_hash(cfg: Config) -> str:
-    return hashlib.sha256(knowledge.worker_rules(cfg).body.encode()).hexdigest()[:16]
+def _hash(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()[:16]
 
 
-def rules_note(cfg: Config, state: State, row, spec: SessionSpec) -> str | None:
-    """For a turn's prompt: a note that the worker rules changed since the worker's session was created.
+def snapshot(cfg: Config, row, found: list[knowledge.Skill]) -> dict[str, str]:
+    """The worker's per-session information as hashes: the general worker rules, its role's rules, each of its
+    skills, and its role's memory, as a whole and entry by entry."""
+    role = role_of(cfg, row)
+    rules = knowledge.worker_rules(cfg)
+    snap = {"rules": _hash(rules.body), "role": _hash(role.body),
+            "memory": _hash(role.memory_md.read_text() if role.memory_md.is_file() else "")}
+    snap.update({f"skill:{s.name}": _hash(s.skill_md.read_text()) for s in found if s.dir != rules.dir})
+    snap.update({f"memory:{number}": _hash(text) for number, text in memory.entries(role).items()})
+    return snap
 
-    Claude Code keeps a session's system prompt as it was at its creation, and ignores a new one on resume. So a
-    resumed session never sees a later change of knowledge/shared/workers in its system prompt: the turn that
-    follows the change tells the agent to read the file, once."""
-    current = rules_hash(cfg)
-    if spec.mode != "resume" or row["rules_hash"] == current:
+
+def _numbers(numbers: list[int], one: str, many: str) -> str:
+    """"Entry 3 was removed", "Entries 7, 8 are new"."""
+    which = ", ".join(str(n) for n in sorted(numbers))
+    return f"Entry {which} {one}" if len(numbers) == 1 else f"Entries {which} {many}"
+
+
+def _memory_changes(cfg: Config, row, seen: dict, snap: dict) -> str | None:
+    role = role_of(cfg, row)
+    old = {int(k.partition(":")[2]): v for k, v in seen.items() if k.startswith("memory:")}
+    now = {int(k.partition(":")[2]): v for k, v in snap.items() if k.startswith("memory:")}
+    entries = memory.entries(role)
+    own = f"worker {name(row)}"  # what the worker saved itself, it knows
+    new = [n for n in now if n not in old and memory.saved_by(entries.get(n, "")) != own]
+    removed = [n for n in old if n not in now]
+    edited = [n for n in now if n in old and now[n] != old[n]]
+    parts = [_numbers(new, "is new: read it.", "are new: read them.")] if new else []
+    parts += [_numbers(removed, "was removed: do not rely on it.", "were removed: do not rely on them.")] if removed else []
+    parts += [_numbers(edited, "was edited: read it again.", "were edited: read them again.")] if edited else []
+    if not parts and old == now and seen.get("memory") != snap["memory"]:
+        parts = ["It was edited by hand: read the whole file again."]
+    if not parts:
         return None
-    state.set_rules_hash(row["id"], current)
-    return RULES_CHANGED.format(path=knowledge.worker_rules(cfg).skill_md) if row["rules_hash"] else None
+    return (f"Your role's memory (`{role.memory_md}`; each entry starts with `## <number> ·`): " + " ".join(parts))
+
+
+def status_note(cfg: Config, state: State, row, spec: SessionSpec, found: list[knowledge.Skill]) -> tuple[str | None, dict]:
+    """For a turn's prompt: what changed in the worker's per-session information since its last turn that ended
+    well, and the snapshot to store with the turn (state.set_turn_snapshot).
+
+    The per-session information is in the worker's CLAUDE.md, as text or as the path of a file, and Claude Code
+    loads that file at every start of the session. So a turn's prompt only says what changed: the role's rules,
+    a skill, entries of the role's memory, or the general worker rules. Claude Code keeps a session's system
+    prompt as it was at its creation, and ignores a new one on resume, so for a change of those rules the agent
+    is told to read their file. The first turn of a session tells the agent to read the memory.
+
+    worker_status.declare makes the snapshot the worker's `seen` when the turn ends well, so a failed turn's retry
+    says the same again."""
+    snap = snapshot(cfg, row, found)
+    seen = json.loads(row["seen"]) if row["seen"] and spec.mode == "resume" else None
+    memory_md = role_of(cfg, row).memory_md
+    if seen is None:
+        return (READ_MEMORY.format(path=memory_md) if memory.entries(role_of(cfg, row)) else None), snap
+    lines = []
+    if seen.get("rules") != snap["rules"]:
+        lines.append(RULES_CHANGED.format(path=knowledge.worker_rules(cfg).skill_md))
+    if seen.get("role") != snap["role"]:
+        lines.append(ROLE_CHANGED)
+    paths = {f"skill:{s.name}": s.skill_md for s in found}
+    for key in sorted(k for k in {*seen, *snap} if k.startswith("skill:")):
+        skill = key.partition(":")[2]
+        if key not in seen:
+            lines.append(f"You have a new skill, `{skill}`: `{paths[key]}`.")
+        elif key not in snap:
+            lines.append(f"You no longer have the skill `{skill}`: do not use it.")
+        elif seen[key] != snap[key]:
+            lines.append(f"The skill `{skill}` changed: read `{paths[key]}` again before you use it.")
+    lines += filter(None, [_memory_changes(cfg, row, seen, snap)])
+    if not lines:
+        return None, snap
+    return "Changed since your last turn:\n" + "\n".join(f"- {line}" for line in lines), snap
 
 
 def spec_for(cfg: Config, claude: Claude, state: State, row, force_new: bool = False) -> tuple[SessionSpec, str | None]:
@@ -278,7 +346,7 @@ def spec_for(cfg: Config, claude: Claude, state: State, row, force_new: bool = F
     spec.mode, spec.session_id = "new", str(uuid.uuid4())
     spec.name = f"vahtovik: {label(row)}"
     spec.system_prompt = knowledge.worker_rules(cfg).body
-    state.set_rules_hash(row["id"], rules_hash(cfg))  # the new session gets these rules, for all its life
+    state.set_seen(row["id"], None)  # the new session has read nothing yet (see status_note)
     return spec, NEW_FOR_EXISTING if stored else None
 
 
@@ -317,7 +385,3 @@ def open_session(cfg: Config, state: State, ref: str, new_session: bool = False)
         print(f"Detached. The session keeps running in tmux window {window_id}; vahtovik closes the window when "
               f"the agent is done. `vahtovik open {name(row)}` brings you back.")
     return 0
-
-
-def memory_text(cfg: Config, row) -> str:
-    return memory.prompt_text(role_of(cfg, row))

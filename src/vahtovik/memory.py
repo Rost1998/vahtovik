@@ -1,5 +1,6 @@
 """A role's memory, `roles/<role>/MEMORY.md`: notes that agents save for all workers of the role with
-`vahtovik memory add`, and that its workers and the monitoring sessions of its pollers get in their prompts.
+`vahtovik memory add`. Its workers read the file, and their turn prompts say which entries came, went or changed;
+the monitoring sessions of its pollers get it in their prompts.
 
 The file sits next to the role's rules, so it goes to git with them; the person commits it, never vahtovik.
 Each entry is headed `## <number> · <time> · <who>`. The next entry gets the highest number plus one, so the
@@ -30,6 +31,21 @@ def prompt_text(role: Role) -> str:
     """The memory for a session's prompt."""
     text = role.memory_md.read_text().strip() if role.memory_md.is_file() else ""
     return text if HEADING.search(text) else NO_ENTRIES
+
+
+def entries(role: Role) -> dict[int, str]:
+    """The numbered entries of the role's memory: each entry's number and its text, heading included."""
+    text = role.memory_md.read_text() if role.memory_md.is_file() else ""
+    found = {}
+    for match in ENTRY.finditer(text):
+        later = HEADING.search(text, match.end())
+        found[int(match.group(1))] = text[match.start():later.start() if later else len(text)].strip()
+    return found
+
+
+def saved_by(entry: str) -> str:
+    """Who saved an entry, from its heading `## <number> · <time> · <who>`."""
+    return entry.split("\n", 1)[0].rpartition(" · ")[2].strip()
 
 
 def _role(cfg: Config, name: str | None) -> Role:
