@@ -1,5 +1,5 @@
 {
-  "title": "vahtovik artifact file written by an agent into its artifacts/ folder",
+  "title": "vahtovik artifact, as `vahtovik artifact add` takes it",
   "type": "object",
   "required": ["id", "title", "summary"],
   "properties": {
@@ -8,8 +8,6 @@
     "url": {"type": "string"},
     "summary": {"type": "string"},
     "details": {"type": "string"},
-    "group_key": {"type": "string", "description": "Defaults to the group whose folder the file is in"},
-    "group_title": {"type": "string", "description": "Title for a new group, if group_key names one"},
-    "source_id": {"type": "string", "description": "Source the artifact came from, if any"}
+    "source_id": {"type": "string", "description": "Where the artifact came from, if anywhere"}
   }
 }
