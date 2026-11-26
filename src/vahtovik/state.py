@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS source_state (
     PRIMARY KEY (poller, source_id));
 CREATE TABLE IF NOT EXISTS workers (
     id TEXT PRIMARY KEY, role TEXT, key TEXT, title TEXT, skills TEXT DEFAULT '[]',
-    spawned_by TEXT, parent TEXT, report_back INTEGER DEFAULT 0, created_at TEXT, updated_at TEXT,
+    spawned_by TEXT, parent TEXT, created_at TEXT, updated_at TEXT,
     session_id TEXT, session_created_at TEXT, seen TEXT,
     status TEXT DEFAULT 'idle', status_at TEXT, status_reason TEXT, questions TEXT, summary TEXT,
     prompt_at TEXT, idle INTEGER DEFAULT 1, stop_blocks INTEGER DEFAULT 0, notified_at TEXT,
@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS workers (
     scheduled_at TEXT, scheduled_reason TEXT, scheduled_attempts INTEGER DEFAULT 0,
     archived_at TEXT, archive_reason TEXT, merged_into TEXT);
 CREATE UNIQUE INDEX IF NOT EXISTS workers_active_key ON workers (role, key) WHERE archived_at IS NULL;
+CREATE TABLE IF NOT EXISTS watches (
+    watcher TEXT, watched TEXT, created_at TEXT, PRIMARY KEY (watcher, watched));
 CREATE TABLE IF NOT EXISTS artifacts (
     worker TEXT, id TEXT, poller TEXT, source_id TEXT, title TEXT, url TEXT, origin TEXT, status TEXT,
     attempts INTEGER DEFAULT 0, file TEXT, first_seen_at TEXT, processed_at TEXT,
@@ -79,10 +81,27 @@ class State:
             raise ConfigError(f"{path} is a database of vahtovik 1. vahtovik 2 starts fresh: move the data folder "
                               f"{path.parent} away, or set another one with `paths: {{data: ...}}` in vahtovik.yaml")
         self.db.executescript(SCHEMA)
+        if self._has_report_back():
+            self._report_back_to_watches()
         self.execute("INSERT OR IGNORE INTO meta (key, value) VALUES ('schema', ?)", SCHEMA_VERSION)
 
     def close(self) -> None:
         self.db.close()
+
+    def _has_report_back(self) -> bool:
+        return any(c["name"] == "report_back" for c in self.rows("PRAGMA table_info(workers)"))
+
+    def _report_back_to_watches(self) -> None:
+        """A database from before `vahtovik worker watch`: a child spawned with --report-back is watched by its
+        parent now."""
+        with self.transaction():
+            if not self._has_report_back():  # another process did it meanwhile
+                return
+            self.execute(
+                "INSERT OR IGNORE INTO watches (watcher, watched, created_at) SELECT c.parent, c.id, c.created_at "
+                "FROM workers c JOIN workers p ON p.id = c.parent "
+                "WHERE c.report_back = 1 AND c.archived_at IS NULL AND p.archived_at IS NULL")
+            self.execute("ALTER TABLE workers DROP COLUMN report_back")
 
     def rows(self, sql: str, *args) -> list[sqlite3.Row]:
         return self.db.execute(sql, args).fetchall()
@@ -188,12 +207,12 @@ class State:
         return self.rows("SELECT * FROM workers WHERE parent = ? ORDER BY created_at, id", worker_id)
 
     def add_worker(self, worker_id: str, role: str, key: str, title: str, skills: list[str], spawned_by: str,
-                   parent: str | None, report_back: bool) -> None:
+                   parent: str | None) -> None:
         now = utc_iso()
         self.execute(
-            "INSERT INTO workers (id, role, key, title, skills, spawned_by, parent, report_back, created_at, "
-            "updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            worker_id, role, key, title, json.dumps(list(skills)), spawned_by, parent, int(report_back), now, now)
+            "INSERT INTO workers (id, role, key, title, skills, spawned_by, parent, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            worker_id, role, key, title, json.dumps(list(skills)), spawned_by, parent, now, now)
 
     def touch_worker(self, worker_id: str) -> None:
         self.execute("UPDATE workers SET updated_at = ? WHERE id = ?", utc_iso(), worker_id)
@@ -214,20 +233,63 @@ class State:
         self.execute("UPDATE turns SET snapshot = ? WHERE id = ?", json.dumps(snapshot), turn_id)
 
     def archive_worker(self, worker_id: str, reason: str, merged_into: str | None = None) -> None:
+        """The worker gets no more turns, so its watches end: it watches nobody, and nobody watches it."""
         self.execute("UPDATE workers SET archived_at = ?, archive_reason = ?, merged_into = ?, scheduled_at = NULL, "
                      "scheduled_reason = NULL WHERE id = ?", utc_iso(), reason, merged_into, worker_id)
+        self.execute("DELETE FROM watches WHERE watcher = ? OR watched = ?", worker_id, worker_id)
 
     def merge_worker(self, worker_id: str, target: str, reason: str) -> None:
         """Move what the database keeps about a worker to the target: its artifacts (those the target has
-        already are dropped), its turns, its costs and its undelivered messages. The worker is archived, and its
-        key leads to the target from now on. The caller moves the files first."""
+        already are dropped), its turns, its costs, its undelivered messages and its watches (those that would
+        make the target watch itself, or close a loop, are dropped). The worker is archived, and its key leads to
+        the target from now on. The caller moves the files first."""
         self.execute("DELETE FROM artifacts WHERE worker = ? AND id IN (SELECT id FROM artifacts WHERE worker = ?)",
                      worker_id, target)
         for table in ("artifacts", "turns", "session_costs"):
             self.execute(f"UPDATE {table} SET worker = ? WHERE worker = ?", target, worker_id)
         self.execute("UPDATE inbox SET worker = ? WHERE worker = ? AND status = 'new'", target, worker_id)
         self.execute("DELETE FROM windows WHERE worker = ?", worker_id)
+        watches = self.rows("SELECT watcher, watched FROM watches WHERE watcher = ? OR watched = ? ORDER BY rowid",
+                            worker_id, worker_id)
         self.archive_worker(worker_id, reason, target)
+        for watch in watches:
+            watcher, watched = (target if watch[side] == worker_id else watch[side] for side in ("watcher", "watched"))
+            if watcher != watched and self.watch_path(watched, watcher) is None:
+                self.add_watch(watcher, watched)
+
+    # watches: a worker that watches another one hears each time that one stops working (worker_status.py)
+
+    def add_watch(self, watcher: str, watched: str) -> None:
+        self.execute("INSERT OR IGNORE INTO watches (watcher, watched, created_at) VALUES (?, ?, ?)",
+                     watcher, watched, utc_iso())
+
+    def remove_watch(self, watcher: str, watched: str) -> bool:
+        """Returns whether there was such a watch."""
+        return self.execute("DELETE FROM watches WHERE watcher = ? AND watched = ?", watcher, watched).rowcount > 0
+
+    def watchers(self, worker_id: str) -> list[sqlite3.Row]:
+        """The workers that watch this one, in the order they began to."""
+        return self.rows("SELECT w.* FROM watches x JOIN workers w ON w.id = x.watcher WHERE x.watched = ? "
+                         "ORDER BY x.rowid", worker_id)
+
+    def watched(self, worker_id: str) -> list[sqlite3.Row]:
+        """The workers that this one watches."""
+        return self.rows("SELECT w.* FROM watches x JOIN workers w ON w.id = x.watched WHERE x.watcher = ? "
+                         "ORDER BY x.rowid", worker_id)
+
+    def watch_path(self, start: str, goal: str) -> list[str] | None:
+        """The chain of watches that leads from `start` to `goal`, as worker ids: each one watches the next. None
+        if there is none. A new watch of `start` by `goal` would close such a chain into a loop."""
+        paths, seen = [[start]], {start}
+        while paths:
+            path = paths.pop()
+            if path[-1] == goal:
+                return path
+            for row in self.rows("SELECT watched FROM watches WHERE watcher = ? ORDER BY rowid", path[-1]):
+                if row["watched"] not in seen:
+                    seen.add(row["watched"])
+                    paths.append([*path, row["watched"]])
+        return None
 
     # worker status (see worker_status.py)
 

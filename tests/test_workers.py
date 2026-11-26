@@ -70,51 +70,118 @@ def test_the_folder_has_the_skill_links_and_the_session_the_credentials(project)
     assert sorted(p.name for p in links.iterdir()) == ["file", "rss", "web-page", "workers"]
 
 
-def test_a_worker_spawns_a_child_that_reports_back(project):
+def test_a_worker_spawns_a_child_and_watches_it(project):
     cfg, state = give(project, artifact("a1", "g"))
     parent = state.active_worker("r1", "g")
     spawn = ["vahtovik", "worker", "spawn", "r1/research", "--title", "Research", "--message", "Find the docs.",
-             "--report-back"]
+             "--watch"]
     project.queue(turn_answer([work_log(), {"run": spawn}]))
     cfg, state = _turns(project)
     child = state.active_worker("r1", "research")
-    assert (child["spawned_by"], child["parent"], child["report_back"]) == (f"worker:{parent['id']}", parent["id"], 1)
+    assert (child["spawned_by"], child["parent"]) == (f"worker:{parent['id']}", parent["id"])
+    assert [w["id"] for w in state.watchers(child["id"])] == [parent["id"]]
     assert state.pending_messages(child["id"], 3)[0]["sender"] == f"worker:{parent['id']}"
 
     project.queue(turn_answer([work_log("Found them.")], summary="The docs are at example.com."))
     cfg, state = _turns(project, "run2")
     prompt = project.calls()[1]["prompt"]
-    assert f"Message from worker {parent['id']}-g (your parent), sent through vahtovik:" in prompt
+    assert f"Message from worker {parent['id']}-g (your parent, it watches you), sent through vahtovik:" in prompt
     message, = state.pending_messages(parent["id"], 3)
     assert message["sender"] == f"worker:{child['id']}"
-    assert f"Your child worker {child['id']}-research" in message["text"] and "is finished now" in message["text"]
+    assert f"Worker {child['id']}-research (role r1, \"Research\"), which you watch, is finished now." in message["text"]
     assert "Summary: The docs are at example.com." in message["text"]
+    assert f"See it: vahtovik worker show {child['id']}-research" in message["text"]
 
-    project.queue(turn_answer([work_log("Read the report.")]))
+    project.queue(turn_answer([work_log("Read the notice.")]))
     _turns(project, "run3")
-    assert f"Message from worker {child['id']}-research (your child)" in project.calls()[2]["prompt"]
+    assert f"Message from worker {child['id']}-research (your child, you watch it)" in project.calls()[2]["prompt"]
+    claude_md = (workers.folder(cfg, parent) / "CLAUDE.md").read_text()
+    assert f"- You watch: `{child['id']}-research` · Watched by: nobody" in claude_md
 
 
-def test_report_back_tells_the_parent_of_a_waiting_child_and_of_one_that_failed_for_good(project):
+def test_every_watcher_hears_each_time_the_watched_worker_stops_working(project):
+    cfg, state, _ = project.load()
+    a, b, c, lonely = (worker(cfg, state, key) for key in ("a", "b", "c", "l"))
+    lines = operations.watch(cfg, state, ["r1/c"], env={"VAHTOVIK_WORKER": a["id"]})
+    assert lines[0].startswith(f"{a['id']}-a watches {c['id']}-c now: vahtovik tells you each time")
+    assert lines[1] == "  it is idle now: (no turn has ended yet)"
+    operations.watch(cfg, state, [c["id"], lonely["id"]], watcher="r1/b")
+    operations.watch(cfg, state, [c["id"]], watcher="r1/b")  # again: still one watch
+    assert [w["id"] for w in state.watchers(c["id"])] == [a["id"], b["id"]]
+    assert [w["id"] for w in state.watched(b["id"])] == [c["id"], lonely["id"]]
+    shown = "\n".join(operations.show(cfg, state, "r1/c") + operations.show(cfg, state, "r1/b"))
+    assert f"  watches: nobody; watched by: {a['id']}-a, {b['id']}-b" in shown
+    assert f"  watches: {c['id']}-c (idle), {lonely['id']}-l (idle); watched by: nobody" in shown
+
+    def heard(row) -> list[str]:
+        return [m["text"] for m in state.pending_messages(row["id"], 3)]
+
+    worker_status.declare(cfg, state, c, "waiting", questions=["Which version?"])
+    assert "is waiting now" in heard(a)[0] and "Its questions: Which version?" in heard(a)[0]
+    assert heard(b) == heard(a)
+    worker_status.declare(cfg, state, state.worker(c["id"]), "scheduled", after=timedelta(hours=1), reason="look again")
+    assert "is scheduled now" in heard(a)[1] and ": look again" in heard(a)[1] and "Its next turn: 20" in heard(a)[1]
+    worker_status.declare(cfg, state, state.worker(c["id"]), "background", reason="a download")
+    assert len(heard(a)) == 2  # it still works: no message
+
+    assert operations.unwatch(cfg, state, ["r1/c"], watcher="r1/b") == [f"{b['id']}-b does not watch {c['id']}-c any more"]
+    assert operations.unwatch(cfg, state, ["r1/c"], watcher="r1/b") == [f"{b['id']}-b did not watch {c['id']}-c"]
+    state.execute("UPDATE workers SET scheduled_at = NULL WHERE id = ?", c["id"])
+    task = inbox.send(state, c, "person", "Do it.")
+    for attempt in range(worker_turn.MAX_ATTEMPTS):
+        assert len(heard(a)) == 2  # a failed turn that is tried again is no end
+        state.start_turn(f"t{attempt}", "run1", c["id"], [], [task], 0)
+        worker_turn.fail(cfg, state, state.turn(f"t{attempt}"), "it broke", 0)
+    assert "is failed now" in heard(a)[2] and "Why: it broke" in heard(a)[2]
+    assert len(heard(b)) == 2 and not heard(lonely)
+
+    state.prompt_submitted(c["id"])
+    state.set_status(c["id"], "background", "a download")
+    for _ in range(worker_status.MAX_STOP_BLOCKS + 1):  # it reported background work, and none runs
+        worker_status.on_stop(state, c["id"], {"background_tasks": []})
+    assert state.worker(c["id"])["status"] == "maintenance" and "is maintenance now" in heard(a)[3]
+
+
+def test_a_watch_needs_a_watcher_and_never_closes_a_loop(project):
+    cfg, state, _ = project.load()
+    a, b, c = (worker(cfg, state, key) for key in ("a", "b", "c"))
+    with pytest.raises(ConfigError, match="name the worker that watches with --watcher"):
+        operations.watch(cfg, state, ["r1/b"], env={})
+    with pytest.raises(ConfigError, match=f"{a['id']}-a cannot watch itself"):
+        operations.watch(cfg, state, ["r1/a"], watcher="r1/a")
+    operations.watch(cfg, state, ["r1/b"], watcher="r1/a")
+    operations.watch(cfg, state, ["r1/c"], watcher="r1/b")
+    chain = f"{a['id']}-a watches {b['id']}-b watches {c['id']}-c already"
+    with pytest.raises(ConfigError, match=f"{c['id']}-c cannot watch {a['id']}-a: {chain}"):
+        operations.watch(cfg, state, ["r1/a"], watcher="r1/c")
+    operations.watch(cfg, state, ["r1/c"], watcher="r1/a")  # two ways to c are no loop
+    assert not state.watched(c["id"])
+
+
+def test_watches_end_with_an_archived_worker_and_move_with_a_merged_one(project):
+    cfg, state, _ = project.load()
+    a, b, c, d = (worker(cfg, state, key) for key in ("a", "b", "c", "d"))
+    for watcher, watched in (("a", "b"), ("b", "c"), ("d", "b"), ("b", "a")):
+        state.add_watch(locals()[watcher]["id"], locals()[watched]["id"])  # b and a: a loop of an older version
+    operations.merge(cfg, state, Tmux(cfg), ["r1/b"], "r1/d")  # d takes b's place; d watching itself is dropped
+    assert [w["id"] for w in state.watched(d["id"])] == [c["id"]]
+    assert [w["id"] for w in state.watchers(d["id"])] == [a["id"]]  # and not d watches a: that closes a loop
+    assert not state.watchers(b["id"]) and not state.watched(b["id"])
+    operations.archive(cfg, state, Tmux(cfg), "r1/d", "done")
+    assert not state.watched(a["id"]) and not state.watchers(c["id"])
+
+
+def test_a_database_with_report_back_gets_watches(project):
     cfg, state, _ = project.load()
     parent = worker(cfg, state, "p")
-    child = workers.create(cfg, state, "r1", "c", "C", f"worker:{parent['id']}", parent["id"], report_back=True)
-    worker_status.declare(cfg, state, child, "waiting", questions=["Which version?"])
-    message, = state.pending_messages(parent["id"], 3)
-    assert "is waiting now" in message["text"] and "Its questions: Which version?" in message["text"]
-    worker_status.declare(cfg, state, state.worker(child["id"]), "scheduled", after=timedelta(hours=1))
-    assert len(state.pending_messages(parent["id"], 3)) == 1  # scheduled is no end: no message
-
-    lonely = workers.create(cfg, state, "r1", "l", "L", f"worker:{parent['id']}", parent["id"])
-    worker_status.declare(cfg, state, lonely, "finished")
-    assert len(state.pending_messages(parent["id"], 3)) == 1  # no --report-back: no message
-
-    state.execute("UPDATE workers SET scheduled_at = NULL WHERE id = ?", child["id"])
-    for attempt in range(worker_turn.MAX_ATTEMPTS):
-        state.start_turn(f"t{attempt}", "run1", child["id"], [], [], 0)
-        worker_turn.fail(cfg, state, state.turn(f"t{attempt}"), "it broke", 0)
-    last = state.pending_messages(parent["id"], 3)[-1]
-    assert "is failed now" in last["text"] and "Why: it broke" in last["text"]
+    child = workers.create(cfg, state, "r1", "c", "C", f"worker:{parent['id']}", parent["id"])
+    quiet = workers.create(cfg, state, "r1", "q", "Q", f"worker:{parent['id']}", parent["id"])
+    state.execute("ALTER TABLE workers ADD COLUMN report_back INTEGER DEFAULT 0")
+    state.execute("UPDATE workers SET report_back = 1 WHERE id = ?", child["id"])
+    state.close()
+    cfg, state, _ = project.load()
+    assert [w["id"] for w in state.watchers(child["id"])] == [parent["id"]] and not state.watchers(quiet["id"])
+    assert "report_back" not in state.worker(child["id"]).keys()
 
 
 def test_workers_see_each_other_from_inside(project, monkeypatch, capsys):
@@ -134,6 +201,11 @@ def test_workers_see_each_other_from_inside(project, monkeypatch, capsys):
     assert str(workers.context_md(cfg, child)) in shown
     assert cli.main(["worker", "show", parent["id"]]) == 0
     assert f"children: {child['id']}-c (idle)" in capsys.readouterr().out
+    assert cli.main(["worker", "watch", "r1/c"]) == 0  # the worker the command runs in watches
+    assert f"{parent['id']}-p watches {child['id']}-c now" in capsys.readouterr().out
+    assert cli.main(["worker", "watch", "r1/p", "--watcher", "r1/c"]) == 2  # a loop
+    assert f"{child['id']}-c cannot watch {parent['id']}-p" in capsys.readouterr().err
+    assert cli.main(["worker", "unwatch", "r1/c"]) == 0 and not state.watchers(child["id"])
 
 
 def test_a_worker_before_its_first_turn_shows_its_task(project):

@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import delivery, knowledge, windows, workers
+from . import delivery, knowledge, windows, worker_status, workers
 from .claude_session import Claude, SessionSpec
 from .config import Config
 from .stages import worker_turn
@@ -316,6 +316,7 @@ def _act(cfg: Config, state: State, tmux: Tmux, claude: Claude, session: Session
     if action == "maintenance":
         state.set_status(worker_id, "maintenance", reason)
         log.warning("%s: Needs a person: %s", label, reason)
+        worker_status.notify_watchers(state, state.worker(worker_id), "maintenance", reason=reason)
         return _send_notice(cfg, state, state.worker(worker_id))  # now, not at the next tick
     if action == "failed":
         state.set_status(worker_id, "failed", reason)

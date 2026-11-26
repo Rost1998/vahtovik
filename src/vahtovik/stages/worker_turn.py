@@ -148,7 +148,7 @@ def retries_left(state: State, row) -> bool:
 
 def fail(cfg: Config, state: State, turn, error: str | None, seconds: float) -> None:
     """Close an unfinished turn as failed. Its artifacts, messages and scheduled turn are tried again, up to
-    MAX_ATTEMPTS turns. When nothing is left to try, the worker's parent hears of it (report-back)."""
+    MAX_ATTEMPTS turns. When nothing is left to try, the workers that watch this one hear of it."""
     if turn["finished_at"]:
         return
     row = state.worker(turn["worker"])
@@ -172,4 +172,4 @@ def fail(cfg: Config, state: State, turn, error: str | None, seconds: float) -> 
               MAX_ATTEMPTS, ", giving up" if attempt >= MAX_ATTEMPTS else "", error)
     row = state.worker(row["id"])
     if not retries_left(state, row):
-        worker_status.report_back(state, row, "failed", reason=error)
+        worker_status.notify_watchers(state, row, "failed", reason=error)

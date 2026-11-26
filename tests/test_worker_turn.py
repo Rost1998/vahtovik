@@ -1,6 +1,7 @@
 import json
 import logging
 import shutil
+from datetime import timedelta
 
 from conftest import artifact, give, report_action, run_turns, turn_answer, until, work_log, worker
 
@@ -160,6 +161,31 @@ def test_a_message_is_typed_into_an_open_idle_window(project):
     until(lambda: any("One more thing." in t.get("line", "") for t in project._lines(project.log_file.with_name(
         "calls.jsonl.typed"))))
     assert state.row("SELECT how FROM inbox")["how"] == "typed"
+
+
+def test_messages_to_a_busy_worker_wait_and_arrive_together_in_order(project, monkeypatch):
+    monkeypatch.setattr(inbox, "STARTING", timedelta(0))
+    cfg, state = give(project, artifact("a1", "g"))
+    a, b = worker(cfg, state, "a"), worker(cfg, state, "b")
+    project.queue({"mode": "interactive", "hang": True})
+    _cfg, _state, claude = project.load()
+    tmux = Tmux(cfg)
+    worker_turn.run(cfg, state, claude, tmux, "run1")
+    until(lambda: project.hook_answers("UserPromptSubmit"))  # the agent works on its turn
+    row = state.active_worker("r1", "g")
+    for sender, text in ((a, "First."), (b, "Second.")):
+        assert operations.tell(cfg, state, tmux, ["r1/g"], text, env={"VAHTOVIK_WORKER": sender["id"]}) == [
+            f"{row['id']}-g: queued: its window is busy or just started; vahtovik types the message in at a later run"]
+    assert worker_turn.run(cfg, state, claude, tmux, "run2") == []
+    assert len(state.pending_messages(row["id"], 3)) == 2 and not worker_turn.can_start(cfg, state, tmux)
+
+    state.agent_stopped(row["id"])  # the agent stopped working: the worker is available
+    _messages, typed = inbox.typed_text(cfg, state, row, tmux.window(row["id"]))
+    places = [typed.index(part) for part in (f"Message from worker {a['id']}-a, sent", "First.",
+                                             f"Message from worker {b['id']}-b, sent", "Second.")]
+    assert places == sorted(places)
+    worker_turn.run(cfg, state, claude, tmux, "run3")
+    assert [m["how"] for m in state.rows("SELECT how FROM inbox ORDER BY id")] == ["typed", "typed"]
 
 
 def test_a_failed_turn_gives_its_messages_back(project):

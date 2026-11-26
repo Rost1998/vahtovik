@@ -33,22 +33,78 @@ def _sender(env: Mapping[str, str]) -> str:
 # spawning and seeing workers
 
 def spawn(cfg: Config, state: State, ref: str, skills: list[str] = (), title: str | None = None,
-          message: str | None = None, report_back: bool = False, env: Mapping[str, str] = os.environ) -> list[str]:
-    """Spawn a worker, <role>/<key>. Inside a worker, that worker is its parent. With a message, the new worker
-    starts with it at the next run; without one, it waits for artifacts or messages."""
+          message: str | None = None, watch: bool = False, env: Mapping[str, str] = os.environ) -> list[str]:
+    """Spawn a worker, <role>/<key>. Inside a worker, that worker is its parent, and with `watch` it watches the
+    new worker. With a message, the new worker starts with it at the next run; without one, it waits for artifacts
+    or messages."""
     role, key = workers.parse_new(ref)
     spawned_by, parent = workers.spawned_by_env(env)
-    if report_back and parent is None:
-        raise ConfigError("--report-back tells the parent, and only a worker can be a parent: spawn from inside one")
-    row = workers.create(cfg, state, role, key, title or "", spawned_by, parent, list(skills), report_back)
+    if watch and parent is None:
+        raise ConfigError("--watch makes the spawner watch the new worker, and only a worker can watch: spawn from "
+                          "inside one, or run `vahtovik worker watch <worker> --watcher <worker>` afterwards")
+    row = workers.create(cfg, state, role, key, title or "", spawned_by, parent, list(skills))
+    if watch:
+        state.add_watch(parent, row["id"])
     lines = [f"spawned worker {workers.name(row)} ({role}/{key})"]
     if message and message.strip():
         inbox.send(state, row, _sender(env), message)
         lines.append("it starts with the message at the next run")
     else:
         lines.append("it waits for artifacts or a message")
-    if report_back:
-        lines.append("it tells you when it ends a turn as finished or waiting, or fails")
+    if watch:
+        lines.append(f"you watch it: {WATCH}")
+    return lines
+
+
+# watching: a watcher hears each time the worker it watches stops working (worker_status.notify_watchers)
+
+WATCH = "vahtovik tells you each time it ends a turn, needs a person, or fails for good"
+
+
+def _watcher(cfg: Config, state: State, watcher: str | None, env: Mapping[str, str]):
+    """The worker that watches: the one named, or the one the command runs in."""
+    if watcher:
+        return workers.resolve(cfg, state, watcher)
+    row = state.worker(env["VAHTOVIK_WORKER"]) if env.get("VAHTOVIK_WORKER") else None
+    if row is None or row["archived_at"]:
+        raise ConfigError("name the worker that watches with --watcher <worker>")
+    return row
+
+
+def watch(cfg: Config, state: State, refs: list[str], watcher: str | None = None,
+          env: Mapping[str, str] = os.environ) -> list[str]:
+    """Make a worker watch other workers: the worker the command runs in, or the one named by `watcher`. Refuses a
+    watch that would close a loop, in which each end of a turn would give the next worker a turn, forever."""
+    who = _watcher(cfg, state, watcher, env)
+    lines = []
+    for ref in refs:
+        row = workers.resolve(cfg, state, ref)
+        if row["id"] == who["id"]:
+            raise ConfigError(f"{workers.name(who)} cannot watch itself")
+        path = state.watch_path(row["id"], who["id"])
+        if path:
+            chain = " watches ".join(workers.name(state.worker(i)) for i in path)
+            raise ConfigError(f"{workers.name(who)} cannot watch {workers.name(row)}: {chain} already, so they would "
+                              "wake each other without end")
+        state.add_watch(who["id"], row["id"])
+        log.info("%s: Watches %s now", workers.label(who), workers.name(row))
+        lines.append(f"{workers.name(who)} watches {workers.name(row)} now: {WATCH}")
+        lines.append(f"  it is {status_text(row)} now: {doing(state, row)[:300]}")
+    return lines
+
+
+def unwatch(cfg: Config, state: State, refs: list[str], watcher: str | None = None,
+            env: Mapping[str, str] = os.environ) -> list[str]:
+    """End watches of a worker: the worker the command runs in, or the one named by `watcher`."""
+    who = _watcher(cfg, state, watcher, env)
+    lines = []
+    for ref in refs:
+        row = workers.resolve(cfg, state, ref)
+        if state.remove_watch(who["id"], row["id"]):
+            log.info("%s: Stopped watching %s", workers.label(who), workers.name(row))
+            lines.append(f"{workers.name(who)} does not watch {workers.name(row)} any more")
+        else:
+            lines.append(f"{workers.name(who)} did not watch {workers.name(row)}")
     return lines
 
 
@@ -133,9 +189,11 @@ def show(cfg: Config, state: State, ref: str) -> list[str]:
         lines.append(f"  scheduled turn: {_ago(row['scheduled_at'])}: {row['scheduled_reason']}")
     lines.append(f"  what it does: {doing(state, row)}")
     lines.append(f"  spawned by {workers.describe_spawner(state, row['spawned_by'])} on {_ago(row['created_at'])}; "
-                 f"parent: {workers.name(parent) if parent else 'none'}"
-                 + ("; reports back to its parent" if row["report_back"] and parent else ""))
+                 f"parent: {workers.name(parent) if parent else 'none'}")
     lines.append("  children: " + (", ".join(f"{workers.name(c)} ({c['status']})" for c in children) or "none"))
+    lines.append("  watches: " + (", ".join(f"{workers.name(w)} ({w['status']})" for w in state.watched(row["id"]))
+                                  or "nobody")
+                 + "; watched by: " + (", ".join(workers.name(w) for w in state.watchers(row["id"])) or "nobody"))
     lines.append("  artifacts: " + (", ".join(f"{n} {s}" for s, n in sorted(counts.items())) or "none")
                  + "; messages: " + (", ".join(f"{n} {s}" for s, n in sorted(messages.items())) or "none"))
     if turn:
@@ -257,9 +315,9 @@ def _merged_entry(row, context) -> str:
 
 
 def merge(cfg: Config, state: State, tmux: Tmux, refs: list[str], into: str) -> list[str]:
-    """Merge workers into the worker `into`, which keeps its role. Each merged worker's artifacts, turns, costs and
-    waiting messages move there, its record goes into the target's Work log, it is archived, and its key leads to
-    the target from now on, so monitoring never brings it back."""
+    """Merge workers into the worker `into`, which keeps its role. Each merged worker's artifacts, turns, costs,
+    waiting messages and watches move there, its record goes into the target's Work log, it is archived, and its
+    key leads to the target from now on, so monitoring never brings it back."""
     target = workers.resolve(cfg, state, into)
     rows = []
     for ref in refs:

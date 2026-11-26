@@ -169,7 +169,7 @@ def test_a_channel_gets_its_own_credentials(project):
 
 def test_check_reports_workers_whose_role_is_gone(project, capsys):
     cfg, state, _ = project.load()
-    state.add_worker("aaaaaa", "old-role", "g", "G", [], "person", None, False)
+    state.add_worker("aaaaaa", "old-role", "g", "G", [], "person", None)
     assert _problems(capsys) == [
         f"problem: role old-role: it has workers, but {cfg.roles_dir}/old-role/ROLE.md is gone; they get no turns "
         "until the role is back, or you archive them"]

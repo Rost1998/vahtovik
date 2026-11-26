@@ -29,7 +29,7 @@ def _conversation(claude, session_id: str, *totals: float | tuple[str, float], o
 
 
 def _worker(state, worker_id: str, key: str, parent: str | None = None) -> None:
-    state.add_worker(worker_id, "r1", key, key.upper(), [], "person", parent, False)
+    state.add_worker(worker_id, "r1", key, key.upper(), [], "person", parent)
 
 
 def test_status_shows_the_cost_of_each_worker_its_role_and_all(project, capsys):

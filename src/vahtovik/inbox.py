@@ -1,8 +1,9 @@
 """The inbox of each worker: messages from the person and from other workers.
 
-`vahtovik tell`, `vahtovik worker spawn --message` and report-back put messages here. A run delivers them: it types
-them into the worker's window when the window is open, its agent is idle and nobody is looking at it; otherwise
-they go into the worker's next turn. A message whose turn fails waits for the next turn, up to MAX_ATTEMPTS turns.
+`vahtovik tell`, `vahtovik worker spawn --message` and the notices to a worker's watchers put messages here. They
+wait in this queue while the worker is busy. A run delivers all that wait, in the order they came: it types them
+into the worker's window when the window is open, its agent is idle and nobody is looking at it; otherwise they
+go into the worker's next turn. A message whose turn fails waits for the next turn, up to MAX_ATTEMPTS turns.
 """
 
 from __future__ import annotations
@@ -24,17 +25,18 @@ TYPED_LIMIT = 4000  # characters: longer messages are not typed into a window, t
 
 
 def sender_text(state: State, sender: str, row=None) -> str:
-    """Who sent a message, for the agent: "the person", "worker a3f9c2-uv-0-13 (your parent)"."""
+    """Who sent a message, for the agent: "the person", "worker a3f9c2-uv-0-13 (your parent, it watches you)"."""
     kind, _, who = (sender or "person").partition(":")
     if kind != "worker":
         return "the person"
     other = state.worker(who)
     text = f"worker {workers.name(other) if other else who}"
     if row is not None and other is not None:
-        if row["parent"] == other["id"]:
-            text += " (your parent)"
-        elif other["parent"] == row["id"]:
-            text += " (your child)"
+        notes = ["your parent"] if row["parent"] == other["id"] else []
+        notes += ["your child"] if other["parent"] == row["id"] else []
+        notes += ["you watch it"] if any(w["id"] == other["id"] for w in state.watched(row["id"])) else []
+        notes += ["it watches you"] if any(w["id"] == other["id"] for w in state.watchers(row["id"])) else []
+        text += f" ({', '.join(notes)})" if notes else ""
     return text
 
 

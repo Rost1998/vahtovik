@@ -42,8 +42,8 @@ def test_spawn_a_worker(project):
         operations.spawn(cfg, state, "r1/Kernel Fixes")
     with pytest.raises(ConfigError, match="unknown skill"):
         operations.spawn(cfg, state, "r1/x", ["no-such-skill"])
-    with pytest.raises(ConfigError, match="only a worker can be a parent"):
-        operations.spawn(cfg, state, "r1/y", report_back=True)
+    with pytest.raises(ConfigError, match="only a worker can watch"):
+        operations.spawn(cfg, state, "r1/y", watch=True, env={})
 
 
 def test_merge_moves_everything_and_forwards_the_key(project):

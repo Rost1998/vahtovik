@@ -150,7 +150,7 @@ def spawned_by_env(env: dict[str, str]) -> tuple[str, str | None]:
 
 
 def create(cfg: Config, state: State, role_name: str, key: str, title: str, spawned_by: str,
-           parent: str | None = None, skills: list[str] = (), report_back: bool = False):
+           parent: str | None = None, skills: list[str] = ()):
     """A new worker, with its folder. Raises ConfigError if the role has an active worker with this key."""
     role = cfg.role(role_name)
     key = check_key(key)
@@ -164,7 +164,7 @@ def create(cfg: Config, state: State, role_name: str, key: str, title: str, spaw
         raise ConfigError(f"unknown parent worker {parent}")
     worker_id = new_id(state)
     title = title.strip() or key
-    state.add_worker(worker_id, role.name, key, title, list(dict.fromkeys(skills)), spawned_by, parent, report_back)
+    state.add_worker(worker_id, role.name, key, title, list(dict.fromkeys(skills)), spawned_by, parent)
     row = state.worker(worker_id)
     path = folder(cfg, row)
     (path / "artifacts").mkdir(parents=True, exist_ok=True)
@@ -226,6 +226,10 @@ def roles_text(cfg: Config) -> str:
     return "\n".join(f"- `{r.name}`: {r.description or '(no description)'}" for r in cfg.roles.values()) or "- none"
 
 
+def _names(rows) -> str:
+    return ", ".join(f"`{name(r)}`" for r in rows) or "nobody"
+
+
 def write_claude_md(cfg: Config, state: State, row, found: list[knowledge.Skill]) -> None:
     """Regenerated before every start, so the agent always sees current paths and facts."""
     role = role_of(cfg, row)
@@ -237,8 +241,7 @@ def write_claude_md(cfg: Config, state: State, row, found: list[knowledge.Skill]
         role_rules=headings_down(role.body.strip()) or "(the role has no rules)",
         spawned_by=describe_spawner(state, row["spawned_by"]),
         parent=f"`{name(parent)}`" if parent else "none",
-        report_back=("yes: when you end a turn as finished or waiting, vahtovik tells your parent"
-                     if row["report_back"] and parent else "no"),
+        watches=_names(state.watched(row["id"])), watched_by=_names(state.watchers(row["id"])),
         folder=folder(cfg, row), root=cfg.root, worker_rules=knowledge.worker_rules(cfg).skill_md,
         memory_md=role.memory_md, skills=knowledge.listing(found), roles=roles_text(cfg),
         schedule=schedule_text(row), artifact_schema=schema_path("artifact"), journal=journal.path(cfg),

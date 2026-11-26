@@ -6,7 +6,7 @@ vahtovik regenerates this file before every start of your session; do not edit i
 
 - Id: `$id` · Key: `$key` · Role: `$role`
 - Spawned by: $spawned_by · Parent: $parent
-- Report back to your parent: $report_back
+- You watch: $watches · Watched by: $watched_by (when you last started; `vahtovik worker show $name` shows it now)
 
 ## Your working folder (writable)
 
@@ -45,8 +45,10 @@ $schedule
 ## Other workers
 
 - `vahtovik worker list` shows all workers: their status, who spawned them, and what they do. `vahtovik worker show <worker>` shows one, with its children and the path of its `context.md`, which you may read.
-- `vahtovik worker spawn <role>/<key> --title "<title>" --message "<the task>" [--skill <skill> ...] [--report-back]` spawns a worker. `--report-back` makes vahtovik tell you when it ends a turn as finished or waiting, or fails. It starts at the next run. While you wait for its report, end your turns with `scheduled`, not `finished`.
-- `vahtovik tell <worker> --message "<text>"` passes a message to a worker: it gets it in its next turn. A message costs the other worker a turn: a report or a message that only informs you needs no answer.
+- `vahtovik worker spawn <role>/<key> --title "<title>" --message "<the task>" [--skill <skill> ...] [--watch]` spawns a worker. It starts at the next run. `--watch` makes you watch it.
+- `vahtovik worker watch <worker> [<worker> ...]` makes you watch a worker: vahtovik tells you each time it stops working: it ends a turn, needs a person, or fails. `vahtovik worker unwatch <worker>` ends that.
+- While you wait for another worker, watched or not, end your turns with `vahtovik turn scheduled --after <your estimate>`, not with `finished`, and check on it in that turn: never rely on a message from it.
+- `vahtovik tell <worker> --message "<text>"` passes a message to a worker. A busy worker gets it when it stops working, together with the messages of others. A message costs the other worker a turn: a notice or a message that only informs you needs no answer.
 - `vahtovik artifact add --worker <worker>` with the artifacts as JSON on stdin (by `$artifact_schema`) gives artifacts to another worker. Without `--worker`, they are yours, and count as processed.
 
 A worker is named `<id>`, `<id>-<key>` or `<role>/<key>`. The roles:

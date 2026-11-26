@@ -119,8 +119,7 @@ def declare(cfg: Config, state: State, row, status: str, importance: str | None 
     what += f" for {human(datetime.fromisoformat(schedule[0]))}" if schedule else ""
     what += f", importance {importance}" if importance else ""
     log.info("%s: Status %s%s", workers.label(row), what, f": {summary[:150]}" if summary else "")
-    if status in ("finished", "waiting"):
-        report_back(state, state.worker(row["id"]), status, summary, questions)
+    notify_watchers(state, state.worker(row["id"]), status, summary, questions)
     return f"recorded: status {what}"
 
 
@@ -154,24 +153,24 @@ def _declare_background(state: State, row, reason: str | None, check_after: time
             f"Then finish the work and end with {COMMAND}.")
 
 
-def report_back(state: State, row, status: str, summary: str | None = None, questions: list[str] = (),
-                reason: str | None = None) -> None:
-    """Tell the parent of a worker spawned with --report-back how the worker ended its turn: finished, waiting,
-    or failed for good. The message goes into the parent's inbox, so the parent gets a turn for it."""
-    if not row["report_back"] or not row["parent"]:
+def notify_watchers(state: State, row, status: str, summary: str | None = None, questions: list[str] = (),
+                    reason: str | None = None) -> None:
+    """Tell the workers that watch this one (`vahtovik worker watch`) that it stopped working: it ended a turn as
+    finished, scheduled or waiting, it needs a person (maintenance), or it failed for good. The message goes into
+    each watcher's inbox, so each watcher gets a turn for it."""
+    watchers = state.watchers(row["id"])
+    if not watchers:
         return
-    parent = state.worker(row["parent"])
-    if parent is not None and parent["archived_at"]:
-        parent = state.merge_target(parent)
-    if parent is None:
-        log.warning("%s: Skipped reporting back: its parent %s is archived", workers.label(row), row["parent"])
-        return
-    lines = [f"Your child worker {workers.name(row)} (role {row['role']}, \"{row['title']}\") is {status} now."]
+    lines = [f"Worker {workers.name(row)} (role {row['role']}, \"{row['title']}\"), which you watch, is {status} now."]
     lines += [f"Summary: {summary.strip()}"] if summary else []
     lines += [f"Its questions: {' / '.join(questions)}"] if questions else []
+    if status == "scheduled" and row["scheduled_at"]:
+        lines.append(f"Its next turn: {human(datetime.fromisoformat(row['scheduled_at']))}: "
+                     f"{row['scheduled_reason'] or 'a scheduled check'}")
     lines += [f"Why: {reason.strip()}"] if reason else []
     lines.append(f"See it: vahtovik worker show {workers.name(row)}")
-    inbox.send(state, parent, f"worker:{row['id']}", "\n".join(lines))
+    for watcher in watchers:
+        inbox.send(state, watcher, f"worker:{row['id']}", "\n".join(lines))
 
 
 def on_prompt(state: State, worker_id: str, session_id: str | None) -> None:
@@ -214,5 +213,6 @@ def on_stop(state: State, worker_id: str, hook_data: dict | None = None, turn_id
         reason = "the agent reported `background`, but no background work runs that would wake it"
         state.set_status(worker_id, "maintenance", reason)
         log.warning("%s: Needs a person: %s", name, reason)
+        notify_watchers(state, state.worker(worker_id), "maintenance", reason=reason)
     state.agent_stopped(worker_id)
     return None

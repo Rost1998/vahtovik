@@ -216,7 +216,17 @@ def _stdin_text(what: str) -> str:
 
 def cmd_worker_spawn(args) -> int:
     cfg, state = _load()
-    return _print(operations.spawn(cfg, state, args.ref, args.skill, args.title, args.message, args.report_back))
+    return _print(operations.spawn(cfg, state, args.ref, args.skill, args.title, args.message, args.watch))
+
+
+def cmd_worker_watch(args) -> int:
+    cfg, state = _load()
+    return _print(operations.watch(cfg, state, args.refs, args.watcher))
+
+
+def cmd_worker_unwatch(args) -> int:
+    cfg, state = _load()
+    return _print(operations.unwatch(cfg, state, args.refs, args.watcher))
 
 
 def cmd_worker_list(args) -> int:
@@ -777,16 +787,25 @@ def build_parser() -> argparse.ArgumentParser:
                                          "waiting, for example 30m")
     p.set_defaults(func=cmd_turn)
 
-    p = sub.add_parser("worker", help="spawn, see, merge, split, schedule and archive workers")
+    p = sub.add_parser("worker", help="spawn, see, watch, merge, split, schedule and archive workers")
     worker_sub = p.add_subparsers(dest="worker_command", required=True)
     w = worker_sub.add_parser("spawn", help="spawn a worker; inside a worker, it becomes the new one's parent")
     w.add_argument("ref", help="the new worker: <role>/<key>")
     w.add_argument("--title", help="its title (default: its key)")
     w.add_argument("--skill", action="append", default=[], help="an extra skill of knowledge/skills; repeat for each")
     w.add_argument("--message", help="its task: it starts with this message at the next run")
-    w.add_argument("--report-back", action="store_true",
-                   help="tell the parent when the new worker ends a turn as finished or waiting, or fails")
+    w.add_argument("--watch", action="store_true",
+                   help="inside a worker: watch the new worker, as `vahtovik worker watch` does")
     w.set_defaults(func=cmd_worker_spawn)
+    w = worker_sub.add_parser("watch", help="make a worker watch other workers: vahtovik tells it each time one of "
+                                            "them ends a turn, needs a person, or fails for good")
+    w.add_argument("refs", nargs="+", metavar="worker", help="a worker to watch")
+    w.add_argument("--watcher", help="the worker that watches (default: the worker this command runs in)")
+    w.set_defaults(func=cmd_worker_watch)
+    w = worker_sub.add_parser("unwatch", help="end a worker's watches of other workers")
+    w.add_argument("refs", nargs="+", metavar="worker", help="a worker to watch no more")
+    w.add_argument("--watcher", help="the worker that watches (default: the worker this command runs in)")
+    w.set_defaults(func=cmd_worker_unwatch)
     w = worker_sub.add_parser("list", help="the workers: their status, what they do, and their parent")
     w.add_argument("--role", help="only workers of this role")
     w.add_argument("--status", help="only workers with this status")
