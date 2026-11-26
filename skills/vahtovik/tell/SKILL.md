@@ -18,7 +18,7 @@ EOF
 - The worker follows its role's rules, as in any session with a person. It can explain, research, scan sources again, add artifacts, update `context.md`, spawn workers, and report when the message asks for it. It ends with `vahtovik turn`, as always.
 - When it arrives depends on the worker's window; the command says which:
   - **typed**: the window is open, its agent is idle, and nobody is looking: vahtovik types the message in at once, as one line;
-  - **queued, the agent is busy**: vahtovik types it in when the agent is idle;
+  - **queued, the agent is busy**: vahtovik types it in when the agent is idle, together with the messages that other workers sent meanwhile, in the order they came;
   - **queued, a person is looking**: vahtovik types it in once they leave and the agent is idle;
   - **queued**: no window: the next run starts a turn with it, within the timer's period (1 minute by default). Through a channel, that is the run you are in.
 

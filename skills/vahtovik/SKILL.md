@@ -22,11 +22,12 @@ Run vahtovik as `uv run vahtovik ...` in the project folder.
   - `context.md`: Summary, Open questions, Artifacts, Work log;
   - `artifacts/*.json`: one file per artifact.
 
-  Its record says who spawned it (`poller:<name>`, `worker:<id>`, `person`, `channel:<name>`), its parent worker, and whether it reports back to its parent. Workers see each other with `vahtovik worker list|show`, spawn workers, and tell them things.
+  Its record says who spawned it (`poller:<name>`, `worker:<id>`, `person`, `channel:<name>`), its parent worker, which workers it watches, and which watch it. Workers see each other with `vahtovik worker list|show`, spawn workers, watch them, and tell them things.
 - **Worker status**: `idle`, `running`, `finished` (its work is really done), `scheduled` (it gets a turn at a set time), `waiting` (it needs a person's answer), `background`, `maintenance` (it needs a person to fix something) and `failed`.
 - **Poller**, `pollers/<poller>/`: what is monitored. `poller.yaml` gives enabled, interval or times of the day (`at`, the default for its sources), the `roles` of the workers it spawns, its sources (a skill, params, `scan: ai|script`, their own interval or `at`, credentials), and the model, effort and account of its sessions. `poller.md` says what counts as an artifact, how to make its id, title and summary, and which worker (role and key) gets it.
 - **Artifact**: one item that a poller, a person or a worker brought, with a stable id. One artifact can be in several workers; each processes it on its own.
-- **Inbox**: messages to a worker from the person (`vahtovik tell`, `worker spawn --message`) or from other workers. A run types them into the worker's open window when its agent is idle and nobody looks, or gives them to the worker's next turn.
+- **Inbox**: messages to a worker from the person (`vahtovik tell`, `worker spawn --message`) or from other workers, and vahtovik's notices about the workers it watches. They wait there while the worker is busy. A run types them into the worker's open window when its agent is idle and nobody looks, or gives them to the worker's next turn.
+- **Watch**: a worker that watches another one (`vahtovik worker watch`, `worker spawn --watch`) gets a notice, and so a turn, each time that one stops working: it ends a turn, needs a person, or fails for good.
 - **Runs**: a timer starts `vahtovik run` every minute. A run:
   1. lets the watchdog look after the worker sessions, every 5 minutes (`watchdog.every`), and checks the Claude plan's usage limits, every 10 minutes (`usage.every`): it warns the `notices` channels when a limit passes 80, 90, 95 and 99% (`usage.warn_at`);
   2. reads the channels with `input`, and lets you answer their new messages;
@@ -66,7 +67,7 @@ If the person asks you to change vahtovik's own code, work on it as a developer.
 | add or change knowledge: a skill, shared or specialized, or credentials | `skills/vahtovik/knowledge/SKILL.md` | edit `knowledge/`; `vahtovik check` |
 | set up or change a role: what its workers do, their skills, model, effort, Claude account | `skills/vahtovik/roles/SKILL.md` | edit `roles/<role>/`; `vahtovik check` |
 | set up or change a poller: sources, interval or times of the day, enabled, which workers get what | `skills/vahtovik/pollers/SKILL.md` | edit `pollers/<poller>/`; `vahtovik check` |
-| spawn, merge, split, schedule or archive workers | `skills/vahtovik/workers/SKILL.md` | `vahtovik worker spawn`, `merge`, `split`, `schedule`, `archive` |
+| spawn, merge, split, schedule or archive workers, or make one watch others | `skills/vahtovik/workers/SKILL.md` | `vahtovik worker spawn`, `watch`, `unwatch`, `merge`, `split`, `schedule`, `archive` |
 | add artifacts to one worker, to several, or to the workers they belong to | `skills/vahtovik/artifacts/SKILL.md` | `vahtovik artifact add` |
 | pass an instruction or a question to workers | `skills/vahtovik/tell/SKILL.md` | `vahtovik tell` |
 | save a note for all workers of a role, or remove one | | `vahtovik memory add --role R --text '...'`, `vahtovik memory remove <number> --role R --reason '...'`; agree first, as for other changes |
