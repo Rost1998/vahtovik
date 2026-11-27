@@ -45,7 +45,8 @@ $schedule
 ## Other workers
 
 - `vahtovik worker list` shows all workers: their status, who spawned them, and what they do. `vahtovik worker show <worker>` shows one, with its children and the path of its `context.md`, which you may read.
-- `vahtovik worker spawn <role>/<key> --title "<title>" --message "<the task>" [--skill <skill> ...] [--watch]` spawns a worker. It starts at the next run. `--watch` makes you watch it.
+- `vahtovik worker spawn <role>/<key> --title "<title>" --message "<the task>" [--skill <skill> ...] [--model <model>] [--effort <effort>] [--watch]` spawns a worker. It starts at the next run. `--watch` makes you watch it. `--model` and `--effort` give it its own, over its role's.
+- `vahtovik worker set <worker> [--model <model>] [--effort <effort>]` gives a worker, also you, its own model or effort from the next start of its session; the value `role` gives its role's again.
 - `vahtovik worker watch <worker> [<worker> ...]` makes you watch a worker: vahtovik tells you each time it stops working: it ends a turn, needs a person, or fails. `vahtovik worker unwatch <worker>` ends that.
 - While you wait for another worker, watched or not, end your turns with `vahtovik turn scheduled --after <your estimate>`, not with `finished`, and check on it in that turn: never rely on a message from it.
 - `vahtovik tell <worker> --message "<text>"` passes a message to a worker. A busy worker gets it when it stops working, together with the messages of others. A message costs the other worker a turn: a notice or a message that only informs you needs no answer.

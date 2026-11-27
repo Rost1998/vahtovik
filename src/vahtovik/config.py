@@ -180,15 +180,17 @@ class Config:
     notices: list[str] | None = None  # where notices and usage warnings go; None: every full input channel
     scope: list[str] | None = None  # set: the command runs for a limited channel that sees only these roles
 
-    def stage(self, stage: str, owner: Role | Poller | None = None) -> StageSettings:
+    def stage(self, stage: str, owner: Role | Poller | None = None, model: str | None = None,
+              effort: str | None = None) -> StageSettings:
         """A stage's settings. Later ones win: vahtovik.yaml's model and effort, the stage's own defaults
-        (STAGE_DEFAULTS), vahtovik.yaml's settings for the stage, and the model and effort of the role (for its
-        workers) or the poller (for its monitoring sessions)."""
+        (STAGE_DEFAULTS), vahtovik.yaml's settings for the stage, the model and effort of the role (for its
+        workers) or the poller (for its monitoring sessions), and the given ones: a worker's own."""
         merged: dict = {"model": self.claude.model, "effort": self.claude.effort}
         merged.update(STAGE_DEFAULTS.get(stage, {}))
         merged.update(self.claude.stages.get(stage, {}))
         if owner is not None:
             merged.update({k: v for k, v in (("model", owner.model), ("effort", owner.effort)) if v})
+        merged.update({k: v for k, v in (("model", model), ("effort", effort)) if v})
         budget = merged.get("max_budget_usd")
         return StageSettings(
             model=str(merged["model"]),
@@ -349,7 +351,7 @@ def _read_yaml(path: Path) -> dict:
     return data
 
 
-def _effort(value: object, where: str) -> str | None:
+def check_effort(value: object, where: str) -> str | None:
     if value is None:
         return None
     if str(value) not in EFFORTS:
@@ -365,7 +367,7 @@ def _stage_overrides(raw: object, where: str) -> dict[str, dict]:
     if unknown:
         raise ConfigError(f"{where}: unknown stage {', '.join(sorted(unknown))}; stages: {', '.join(STAGES)}")
     for stage, settings in raw.items():
-        _effort(settings.get("effort"), f"{where}.{stage}")
+        check_effort(settings.get("effort"), f"{where}.{stage}")
     return raw
 
 
@@ -381,7 +383,7 @@ def _load_claude(raw: dict, root: Path) -> ClaudeSettings:
     if settings.accounts and settings.auth != "subscription":
         raise ConfigError("claude.accounts work only with auth: subscription")
     settings.model = str(raw.get("model", settings.model))
-    settings.effort = _effort(raw.get("effort", settings.effort), "claude") or settings.effort
+    settings.effort = check_effort(raw.get("effort", settings.effort), "claude") or settings.effort
     settings.stages = _stage_overrides(raw.get("stages"), "claude.stages")
     parallel = raw.get("parallel_turns", settings.parallel_turns)
     if isinstance(parallel, bool) or not isinstance(parallel, int) or parallel < 1:
@@ -545,7 +547,7 @@ def _load_role(path: Path, accounts: dict[str, Path]) -> Role:
         credentials=_names(meta, "credentials", where) or [],
         body=body.strip(),
         model=str(meta["model"]) if meta.get("model") else None,
-        effort=_effort(meta.get("effort"), where),
+        effort=check_effort(meta.get("effort"), where),
         account=_account(meta.get("account"), where, accounts),
     )
 
@@ -593,7 +595,7 @@ def _load_poller(path: Path, roles: dict[str, Role], accounts: dict[str, Path]) 
         sources=sources,
         at=at,
         model=str(claude["model"]) if claude.get("model") else None,
-        effort=_effort(claude.get("effort"), f"{where} claude"),
+        effort=check_effort(claude.get("effort"), f"{where} claude"),
         account=_account(claude.get("account"), f"{where} claude", accounts),
     )
 

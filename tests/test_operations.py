@@ -24,6 +24,47 @@ def _files(cfg, row) -> list[str]:
     return sorted(json.loads(p.read_text())["id"] for p in (workers.folder(cfg, row) / "artifacts").glob("*.json"))
 
 
+def test_spawn_a_worker_with_its_own_model_and_effort(project):
+    cfg, state, _ = _setup(project)
+    lines = operations.spawn(cfg, state, "r1/hard", model="fable", effort="max")
+    row = state.active_worker("r1", "hard")
+    assert lines[0] == f"spawned worker {row['id']}-hard (r1/hard), with its own model fable and effort max"
+    assert (row["model"], row["effort"]) == ("fable", "max")
+    assert "  model fable (its own); effort max (its own)" in operations.show(cfg, state, "r1/hard")
+    assert operations.spawn(cfg, state, "r1/quick", effort="low")[0].endswith("(r1/quick), with its own effort low")
+    assert "  model opus; effort low (its own)" in operations.show(cfg, state, "r1/quick")
+    operations.spawn(cfg, state, "r1/plain")
+    assert "  model opus; effort xhigh" in operations.show(cfg, state, "r1/plain")  # its role's
+    with pytest.raises(ConfigError, match="unknown effort 'hihg'"):
+        operations.spawn(cfg, state, "r1/x", effort="hihg")
+    assert state.active_worker("r1", "x") is None
+
+
+def test_set_the_model_and_effort_of_a_worker(project, caplog):
+    caplog.set_level("INFO")
+    cfg, state, _ = _setup(project)
+    row, other = worker(cfg, state, "g"), worker(cfg, state, "h")
+    lines = operations.set_settings(cfg, state, "r1/g", model="sonnet")
+    assert lines[0] == f"{row['id']}-g: model sonnet (its own); effort xhigh"
+    assert "it counts from the next start of its session" in lines[1]
+    assert "Model and effort set by the person: model sonnet (its own); effort xhigh" in caplog.text
+    inside = {"VAHTOVIK_WORKER": row["id"]}  # a worker sets them for itself, and for another worker
+    operations.set_settings(cfg, state, row["id"], effort="low", env=inside)
+    operations.set_settings(cfg, state, "r1/h", "fable", "max", env=inside)
+    row, other = state.worker(row["id"]), state.worker(other["id"])
+    assert (row["model"], row["effort"]) == ("sonnet", "low") and (other["model"], other["effort"]) == ("fable", "max")
+    assert f"Model and effort set by worker {row['id']}-g: model fable (its own); effort max (its own)" in caplog.text
+    assert operations.set_settings(cfg, state, "r1/g", "role", "role")[0] == f"{row['id']}-g: model opus; effort xhigh"
+    row = state.worker(row["id"])
+    assert (row["model"], row["effort"]) == (None, None)
+    with pytest.raises(ConfigError, match="give --model, --effort or both"):
+        operations.set_settings(cfg, state, "r1/g")
+    with pytest.raises(ConfigError, match="unknown effort 'hihg'"):
+        operations.set_settings(cfg, state, "r1/g", effort="hihg")
+    with pytest.raises(ConfigError, match="give a model"):
+        operations.set_settings(cfg, state, "r1/g", model=" ")
+
+
 def test_spawn_a_worker(project):
     cfg, state, _ = _setup(project)
     lines = operations.spawn(cfg, state, "r1/kernel-fixes", ["web-page"], "Kernel fixes", "Find the fixes.")

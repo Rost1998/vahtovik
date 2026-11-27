@@ -25,7 +25,7 @@ from pathlib import Path
 
 from . import context_file, journal, knowledge, memory
 from .claude_session import Claude, SessionSpec
-from .config import NAME, Config, ConfigError, Role
+from .config import NAME, Config, ConfigError, Role, StageSettings, check_effort
 from .state import State
 from .tmux import Tmux
 from .util import LockBusy, file_lock, headings_down, human, render, schema_path
@@ -48,6 +48,7 @@ ROLE_CHANGED = (
     "under \"Your role's rules\": go through them again before you work, and follow them where they differ from "
     "what you did before."
 )
+SETTINGS_CHANGED = "You work with {settings} now."
 READ_MEMORY = "Read your role's memory before you work: `{path}`."
 OPEN_NEW_PROMPT = (
     "A person opened this worker's session. Read CLAUDE.md and context.md, then tell them in a few lines "
@@ -150,8 +151,9 @@ def spawned_by_env(env: dict[str, str]) -> tuple[str, str | None]:
 
 
 def create(cfg: Config, state: State, role_name: str, key: str, title: str, spawned_by: str,
-           parent: str | None = None, skills: list[str] = ()):
-    """A new worker, with its folder. Raises ConfigError if the role has an active worker with this key."""
+           parent: str | None = None, skills: list[str] = (), model: str | None = None, effort: str | None = None):
+    """A new worker, with its folder; with a model or an effort, it has that one over its role's. Raises
+    ConfigError if the role has an active worker with this key."""
     role = cfg.role(role_name)
     key = check_key(key)
     existing = state.active_worker(role.name, key)
@@ -162,9 +164,10 @@ def create(cfg: Config, state: State, role_name: str, key: str, title: str, spaw
         raise ConfigError(f"unknown skill {', '.join(missing)}; skills: {', '.join(knowledge.available(cfg)) or 'none'}")
     if parent is not None and state.worker(parent) is None:
         raise ConfigError(f"unknown parent worker {parent}")
+    model, effort = (model or "").strip() or None, check_effort(effort or None, "--effort")
     worker_id = new_id(state)
     title = title.strip() or key
-    state.add_worker(worker_id, role.name, key, title, list(dict.fromkeys(skills)), spawned_by, parent)
+    state.add_worker(worker_id, role.name, key, title, list(dict.fromkeys(skills)), spawned_by, parent, model, effort)
     row = state.worker(worker_id)
     path = folder(cfg, row)
     (path / "artifacts").mkdir(parents=True, exist_ok=True)
@@ -188,6 +191,15 @@ def role_of(cfg: Config, row) -> Role:
     if row["role"] not in cfg.roles:
         raise ConfigError(f"worker {name(row)} has the role {row['role']}, which is not in {cfg.roles_dir} any more")
     return cfg.roles[row["role"]]
+
+
+def settings_of(cfg: Config, row) -> StageSettings:
+    """The model and effort of the worker's session: its own, over its role's, over vahtovik.yaml's."""
+    return cfg.stage("worker", role_of(cfg, row), row["model"], row["effort"])
+
+
+def settings_text(settings: StageSettings) -> str:
+    return f"the model `{settings.model}`" + (f" and the effort `{settings.effort}`" if settings.effort else "")
 
 
 def skills_of(cfg: Config, row) -> tuple[list[knowledge.Skill], list[str]]:
@@ -255,10 +267,12 @@ def _hash(text: str) -> str:
 
 def snapshot(cfg: Config, row, found: list[knowledge.Skill]) -> dict[str, str]:
     """The worker's per-session information as hashes: the general worker rules, its role's rules, each of its
-    skills, and its role's memory, as a whole and entry by entry."""
+    skills, and its role's memory, as a whole and entry by entry. And the model and effort of its session, as
+    they are."""
     role = role_of(cfg, row)
     rules = knowledge.worker_rules(cfg)
-    snap = {"rules": _hash(rules.body), "role": _hash(role.body),
+    settings = settings_of(cfg, row)
+    snap = {"rules": _hash(rules.body), "role": _hash(role.body), "settings": f"{settings.model}/{settings.effort}",
             "memory": _hash(role.memory_md.read_text() if role.memory_md.is_file() else "")}
     snap.update({f"skill:{s.name}": _hash(s.skill_md.read_text()) for s in found if s.dir != rules.dir})
     snap.update({f"memory:{number}": _hash(text) for number, text in memory.entries(role).items()})
@@ -329,12 +343,15 @@ def _changes(cfg: Config, row, seen: dict, snap: dict, found: list[knowledge.Ski
         elif seen[key] != snap[key]:
             lines.append(f"The skill `{skill}` changed: read `{paths[key]}` again before you use it.")
     lines += filter(None, [_memory_changes(cfg, row, seen, snap)])
+    if seen.get("settings", snap["settings"]) != snap["settings"]:  # a `seen` of an earlier vahtovik has none
+        lines.append(SETTINGS_CHANGED.format(settings=settings_text(settings_of(cfg, row))))
     return lines
 
 
 def has_changes(cfg: Config, row) -> bool:
     """Whether the worker's next turn will tell it of changes (status_note). The open window of such a worker
-    still holds the CLAUDE.md of its start, so nothing is typed into it: its messages wait for that turn."""
+    still holds the CLAUDE.md, the model and the effort of its start, so nothing is typed into it: its messages
+    wait for that turn."""
     if not row["seen"]:
         return False
     try:
@@ -353,7 +370,7 @@ def spec_for(cfg: Config, claude: Claude, state: State, row, force_new: bool = F
         stage="worker",
         workdir=folder(cfg, row),
         prompt="",
-        settings=cfg.stage("worker", role),
+        settings=settings_of(cfg, row),
         env=env(cfg, row, found),
         scope=label(row),
         account=role.account,

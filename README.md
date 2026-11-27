@@ -113,7 +113,18 @@ Its name is `<id>-<key>`. Every command takes a worker as `a3f9c2`, `a3f9c2-uv-0
 - `context.md`: Summary and Work log (written by the agent), Open questions and Artifacts (written by vahtovik);
 - `artifacts/*.json`: one file per artifact.
 
-Its record in the database says who spawned it (`poller:<name>`, `worker:<id>`, `person` or `channel:<name>`), its parent (the worker that spawned it), which workers it watches, and which workers watch it.
+Its record in the database says who spawned it (`poller:<name>`, `worker:<id>`, `person` or `channel:<name>`), its parent (the worker that spawned it), which workers it watches, and which workers watch it. It also holds the worker's own model and effort, if it has them.
+
+### A worker's own model and effort
+
+A worker works with its role's model and effort, unless it has its own:
+
+- `vahtovik worker spawn <role>/<key> --model fable --effort max` spawns a worker with its own;
+- `vahtovik worker set <worker> --model sonnet --effort low` changes them for a worker that exists. The value `role` gives the worker its role's again, for example `--effort role`.
+
+The two are separate: a worker with only its own effort has its role's model. You, the vahtovik agent and every worker can run both commands, so a worker can change its own model and effort, and those of other workers. `vahtovik worker show <worker>` shows what a worker works with, and which of the two are its own.
+
+Claude Code takes the model and effort when a session starts, so a change counts from the next start of the worker's session. A turn that works now keeps the earlier ones. So does a window that is still open: vahtovik types no messages into it, and they come with the worker's next turn, whose prompt names the new model and effort. The same holds when a role or `vahtovik.yaml` changes the model or effort. vahtovik does not check a model's name: a wrong one fails the session at its start.
 
 ### What a worker session is told, and where
 
@@ -121,8 +132,8 @@ A worker session lives long, and it keeps every prompt it ever got. So vahtovik 
 
 - **Per-session information**, which does not change from turn to turn, is in the worker's `CLAUDE.md`, as text or as the path of a file: who the worker is, its role's rules (text), its skills (a list with paths), its role's memory (the path), and the commands. Claude Code loads `CLAUDE.md` at every start of the session, holds it once, and puts it back after it compacts the context.
 - **Per-turn information** is in the turn's prompt: the run and the time, notes about the turn, the new artifacts, the messages, the scheduled turn, and the task.
-- **When per-session information changes**, the next turn's prompt says so, and tells the worker what to read again: the role's rules, a skill that changed, came or went, the memory entries that came, went or were edited, or the general worker rules. The first turn of a session tells the worker to read the memory. vahtovik counts a change as told when the turn ends well, so the retry of a failed turn says it again.
-- **A message is not typed into an open window** while such a change waits to be told: that session still holds the `CLAUDE.md` of its start. The message comes with the worker's next turn.
+- **When per-session information changes**, the next turn's prompt says so, and tells the worker what to read again: the role's rules, a skill that changed, came or went, the memory entries that came, went or were edited, or the general worker rules. It also names the session's model and effort when they changed. The first turn of a session tells the worker to read the memory. vahtovik counts a change as told when the turn ends well, so the retry of a failed turn says it again.
+- **A message is not typed into an open window** while such a change waits to be told: that session still holds the `CLAUDE.md`, the model and the effort of its start. The message comes with the worker's next turn.
 - **When Claude Code compacts the context**, what the worker read from files can be gone. A Claude Code hook (`SessionStart`, for `compact`) then tells the worker to read its role's memory again, and a skill's `SKILL.md` before it uses the skill.
 
 Worker sessions run as interactive Claude Code, each in its own window of the tmux session `vahtovik-agents`, named `<role>/<key>`. The session is on a tmux server of its own, `tmux -L vahtovik`, apart from your own tmux sessions; both names are set in `vahtovik.yaml`, and `socket: null` uses your default tmux server instead. The first window shows the journal. To look around yourself: `tmux -L vahtovik attach -t vahtovik-agents`.
@@ -176,7 +187,7 @@ A worker adds artifacts with `vahtovik artifact add`: to itself, where they coun
 
 ### Changing workers by hand
 
-You, or the vahtovik agent (below), can change workers with `vahtovik worker spawn`, `merge`, `split`, `schedule` and `archive`, `artifact add` and `tell` (see Commands). `merge`, `split` and `archive` refuse a worker whose window is open, that is busy, or whose turn is unfinished. A merged worker is archived, and its role and key lead to the worker it went into, so monitoring never brings it back. An archived worker gets no more turns, and its folder goes to `data/archive/<role>/`; its key is free for a new worker.
+You, or the vahtovik agent (below), can change workers with `vahtovik worker spawn`, `set`, `merge`, `split`, `schedule` and `archive`, `artifact add` and `tell` (see Commands). `merge`, `split` and `archive` refuse a worker whose window is open, that is busy, or whose turn is unfinished. A merged worker is archived, and its role and key lead to the worker it went into, so monitoring never brings it back. An archived worker gets no more turns, and its folder goes to `data/archive/<role>/`; its key is free for a new worker.
 
 ### Sessions and costs
 
@@ -354,7 +365,7 @@ The second column says who wrote the line: a timer run, an `interactive` session
 
 ## Configuration
 
-- `vahtovik.yaml`: Claude login mode (`subscription` or `api-key`), the Claude accounts that roles and pollers can use (`claude.accounts`, see Claude accounts), the default model and effort (`opus`, the newest Opus, and `high`), model, effort and dollar cap per stage (`monitor`, `worker`, `watchdog`, `input`), how many worker turns work at once (`claude.parallel_turns`), the watchdog's pace and notices, the warnings about the Claude plan's usage limits (`usage`), where notices go (`notices`), and vahtovik's channels. A role sets the model and effort of its workers, and a poller those of its monitoring sessions; they win over `vahtovik.yaml`'s. The watchdog and input channels belong to neither, so only `vahtovik.yaml` sets them.
+- `vahtovik.yaml`: Claude login mode (`subscription` or `api-key`), the Claude accounts that roles and pollers can use (`claude.accounts`, see Claude accounts), the default model and effort (`opus`, the newest Opus, and `high`), model, effort and dollar cap per stage (`monitor`, `worker`, `watchdog`, `input`), how many worker turns work at once (`claude.parallel_turns`), the watchdog's pace and notices, the warnings about the Claude plan's usage limits (`usage`), where notices go (`notices`), and vahtovik's channels. A role sets the model and effort of its workers, and a poller those of its monitoring sessions; they win over `vahtovik.yaml`'s. A worker's own model and effort win over its role's (see A worker's own model and effort). The watchdog and input channels belong to neither, so only `vahtovik.yaml` sets them.
 - `knowledge/`, `roles/`, `pollers/`: see above. `paths: {data, knowledge, skills, roles, pollers}` in `vahtovik.yaml` can move these folders.
 - `knowledge/credentials/*.env`: all secrets; see The knowledge layer.
 
@@ -392,7 +403,8 @@ A worker is `<id>`, `<id>-<key>` or `<role>/<key>`.
 | `run [--poller P] [--stage input\|monitor\|workers\|deliver] [--force] [--dry-run]` | one cycle; `--force` reads every input channel and monitors every source, whatever their schedules; `--poller` monitors only that poller, starts only the turns of its roles' workers, and leaves the input channels out; `--dry-run` makes vahtovik's channels, and the `send` scripts that the run's workers report with, print instead of send |
 | `open WORKER [--new-session]` | show a worker's session window, starting the session if it is not running |
 | `turn finished\|scheduled\|waiting\|background [--importance I] [--summary S] [--question Q ...] [--reason R] [--after 6h] [--at 08:00] [--check-after 30m]` | for agents: end a turn with the worker's status |
-| `worker spawn ROLE/KEY [--title T] [--skill S ...] [--message M] [--watch]` | spawn a worker; inside a worker, that worker is its parent, and watches it with `--watch`; with a message, it starts with it at the next run |
+| `worker spawn ROLE/KEY [--title T] [--skill S ...] [--model M] [--effort E] [--message M] [--watch]` | spawn a worker; inside a worker, that worker is its parent, and watches it with `--watch`; with a message, it starts with it at the next run; `--model` and `--effort` give it its own, over its role's |
+| `worker set WORKER [--model M] [--effort E]` | give a worker its own model or effort, over its role's, from the next start of its session; the value `role` gives it its role's again |
 | `worker watch WORKER [WORKER ...] [--watcher W]` | make a worker watch others: vahtovik tells it each time one of them ends a turn, needs a person, or fails for good; inside a worker, that worker watches |
 | `worker unwatch WORKER [WORKER ...] [--watcher W]` | end such watches |
 | `worker list [--role R] [--status S] [--tree] [--all]` | the workers: status, who spawned them, and what they do |

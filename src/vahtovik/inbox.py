@@ -61,8 +61,9 @@ def typed_text(cfg: Config, state: State, row, window: Window) -> tuple[list, st
     """The worker's waiting messages and the one line to type them as, or None when they cannot be typed into its
     open window now. They can when its agent is idle and nobody is looking at the window. Not into a window that
     has just started: Claude Code may still be starting in it, and would lose the keys. Not a long text either.
-    And not when the worker's rules, skills or memory changed since its last turn: the session in the window still
-    holds the CLAUDE.md of its start, and only a turn's prompt tells the agent what changed.
+    And not when the worker's rules, skills, memory, model or effort changed since its last turn: the session in
+    the window still holds the CLAUDE.md, the model and the effort of its start, and only a turn's prompt tells the
+    agent what changed.
     Messages that cannot be typed wait for a later run, or for the worker's next turn."""
     messages = state.pending_messages(row["id"], MAX_ATTEMPTS)
     row = state.worker(row["id"])

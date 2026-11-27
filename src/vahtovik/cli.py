@@ -17,7 +17,7 @@ from . import config as config_mod
 from . import (channel_guard, costs, delivery, journal, knowledge, memory, operations, timer, usage_limits,
                watchdog, windows, worker_status, workers)
 from .claude_session import Claude
-from .config import Config, ConfigError
+from .config import EFFORTS, Config, ConfigError
 from .stages import channel_input, monitor, worker_turn
 from .state import State
 from .tmux import Tmux, TmuxError
@@ -216,7 +216,13 @@ def _stdin_text(what: str) -> str:
 
 def cmd_worker_spawn(args) -> int:
     cfg, state = _load()
-    return _print(operations.spawn(cfg, state, args.ref, args.skill, args.title, args.message, args.watch))
+    return _print(operations.spawn(cfg, state, args.ref, args.skill, args.title, args.message, args.watch,
+                                   model=args.model, effort=args.effort))
+
+
+def cmd_worker_set(args) -> int:
+    cfg, state = _load()
+    return _print(operations.set_settings(cfg, state, args.ref, args.model, args.effort))
 
 
 def cmd_worker_watch(args) -> int:
@@ -793,10 +799,18 @@ def build_parser() -> argparse.ArgumentParser:
     w.add_argument("ref", help="the new worker: <role>/<key>")
     w.add_argument("--title", help="its title (default: its key)")
     w.add_argument("--skill", action="append", default=[], help="an extra skill of knowledge/skills; repeat for each")
+    w.add_argument("--model", help="its own model, over its role's, for example sonnet, opus or fable")
+    w.add_argument("--effort", help=f"its own effort, over its role's: {', '.join(EFFORTS)}")
     w.add_argument("--message", help="its task: it starts with this message at the next run")
     w.add_argument("--watch", action="store_true",
                    help="inside a worker: watch the new worker, as `vahtovik worker watch` does")
     w.set_defaults(func=cmd_worker_spawn)
+    w = worker_sub.add_parser("set", help="give a worker its own model or effort, over its role's; it counts from "
+                                          "the next start of its session")
+    w.add_argument("ref", metavar="worker")
+    w.add_argument("--model", help="a model, for example sonnet, opus or fable; `role`: its role's again")
+    w.add_argument("--effort", help=f"{', '.join(EFFORTS)}; `role`: its role's again")
+    w.set_defaults(func=cmd_worker_set)
     w = worker_sub.add_parser("watch", help="make a worker watch other workers: vahtovik tells it each time one of "
                                             "them ends a turn, needs a person, or fails for good")
     w.add_argument("refs", nargs="+", metavar="worker", help="a worker to watch")

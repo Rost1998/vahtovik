@@ -1,6 +1,6 @@
 ---
 name: workers
-description: Spawn, watch, merge, split, schedule and archive workers. Use when asked to start a worker on a task, to make a worker hear of other workers, to join or separate workers' work, to give a worker a turn at a set time, or to retire a worker.
+description: Spawn, watch, merge, split, schedule and archive workers, and set a worker's own model and effort. Use when asked to start a worker on a task, to give a worker another model or effort, to make a worker hear of other workers, to join or separate workers' work, to give a worker a turn at a set time, or to retire a worker.
 ---
 
 # Workers
@@ -16,13 +16,26 @@ A worker is one persistent agent of a role, working on one thing for a long time
 ## Spawn
 
 ```bash
-uv run vahtovik worker spawn <role>/<key> --title "<title>" --message "<the task>" [--skill <skill> ...]
+uv run vahtovik worker spawn <role>/<key> --title "<title>" --message "<the task>" [--skill <skill> ...] [--model <model>] [--effort <effort>]
 ```
 
 - Choose the role whose description fits the task, and a key that names it: lowercase words joined by hyphens. If a poller feeds the role, use its key rule, so monitoring puts later artifacts of that kind there.
 - `--message` is the worker's task: write it so it stands on its own: what to do, why, what is known, and where to report if the role's rules do not say. The worker starts with it at the next run. Without `--message`, the worker waits for artifacts or a message.
 - `--skill` gives this worker an extra skill of `knowledge/skills`, besides its role's.
+- `--model` and `--effort` give this worker its own model or effort, over its role's (see Model and effort).
 - The command prints the new worker's name. Its record says that the person spawned it, or the channel when you answer through one. `--watch` is only for workers that spawn workers: to make a worker watch the new one, use `worker watch` afterwards.
+
+## Model and effort
+
+```bash
+uv run vahtovik worker set <worker> [--model <model>] [--effort <effort>]
+```
+
+- A worker works with its role's model and effort (`ROLE.md`, else `vahtovik.yaml`), unless it has its own from its spawn or from this command. `uv run vahtovik worker show <worker>` shows what it works with, and which of the two are its own.
+- A model is an alias, such as `sonnet`, `opus` or `fable`, or a full model id; vahtovik does not check it, and a wrong one fails the worker's session at its start. An effort is `low`, `medium`, `high`, `xhigh` or `max`. The value `role` gives the worker its role's again.
+- To change all workers of a role, change the role (`skills/vahtovik/roles/SKILL.md`), not each worker.
+- The change counts from the next start of the worker's session. A turn that works now keeps the earlier ones, and so does a window that is still open: messages to the worker wait for its next turn, whose prompt names the new model and effort.
+- A stronger model or a higher effort costs more, and uses more of the Claude plan's usage limits: say so before you set one. Workers can run this command too, for themselves and for other workers.
 
 ## Watch
 

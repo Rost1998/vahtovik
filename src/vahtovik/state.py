@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS source_state (
     PRIMARY KEY (poller, source_id));
 CREATE TABLE IF NOT EXISTS workers (
     id TEXT PRIMARY KEY, role TEXT, key TEXT, title TEXT, skills TEXT DEFAULT '[]',
+    model TEXT, effort TEXT,
     spawned_by TEXT, parent TEXT, created_at TEXT, updated_at TEXT,
     session_id TEXT, session_created_at TEXT, seen TEXT,
     status TEXT DEFAULT 'idle', status_at TEXT, status_reason TEXT, questions TEXT, summary TEXT,
@@ -83,6 +84,7 @@ class State:
         self.db.executescript(SCHEMA)
         if self._has_report_back():
             self._report_back_to_watches()
+        self._add_worker_settings()
         self.execute("INSERT OR IGNORE INTO meta (key, value) VALUES ('schema', ?)", SCHEMA_VERSION)
 
     def close(self) -> None:
@@ -102,6 +104,15 @@ class State:
                 "FROM workers c JOIN workers p ON p.id = c.parent "
                 "WHERE c.report_back = 1 AND c.archived_at IS NULL AND p.archived_at IS NULL")
             self.execute("ALTER TABLE workers DROP COLUMN report_back")
+
+    def _add_worker_settings(self) -> None:
+        """A database from before a worker could have its own model and effort."""
+        for column in ("model", "effort"):
+            if not any(c["name"] == column for c in self.rows("PRAGMA table_info(workers)")):
+                try:
+                    self.execute(f"ALTER TABLE workers ADD COLUMN {column} TEXT")
+                except sqlite3.OperationalError:  # another process added it meanwhile
+                    pass
 
     def rows(self, sql: str, *args) -> list[sqlite3.Row]:
         return self.db.execute(sql, args).fetchall()
@@ -207,12 +218,17 @@ class State:
         return self.rows("SELECT * FROM workers WHERE parent = ? ORDER BY created_at, id", worker_id)
 
     def add_worker(self, worker_id: str, role: str, key: str, title: str, skills: list[str], spawned_by: str,
-                   parent: str | None) -> None:
+                   parent: str | None, model: str | None = None, effort: str | None = None) -> None:
         now = utc_iso()
         self.execute(
-            "INSERT INTO workers (id, role, key, title, skills, spawned_by, parent, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            worker_id, role, key, title, json.dumps(list(skills)), spawned_by, parent, now, now)
+            "INSERT INTO workers (id, role, key, title, skills, model, effort, spawned_by, parent, created_at, "
+            "updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            worker_id, role, key, title, json.dumps(list(skills)), model, effort, spawned_by, parent, now, now)
+
+    def set_worker_settings(self, worker_id: str, model: str | None, effort: str | None) -> None:
+        """The worker's own model and effort; None: its role's."""
+        self.execute("UPDATE workers SET model = ?, effort = ?, updated_at = ? WHERE id = ?",
+                     model, effort, utc_iso(), worker_id)
 
     def touch_worker(self, worker_id: str) -> None:
         self.execute("UPDATE workers SET updated_at = ? WHERE id = ?", utc_iso(), worker_id)

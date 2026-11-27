@@ -323,14 +323,61 @@ def test_nothing_is_typed_into_a_window_whose_worker_has_changes_to_hear_of(proj
     cfg, state, claude = project.load()
     assert workers.has_changes(cfg, row)
     assert operations.tell(cfg, state, tmux, [row["id"]], "One more thing.") == [
-        f"{row['id']}-g: queued: its rules, skills or memory changed, so it gets the message in its next turn, "
-        "which tells it what changed"]
+        f"{row['id']}-g: queued: its rules, skills, memory, model or effort changed, so it gets the message in its "
+        "next turn, which tells it what changed"]
     assert not worker_turn.can_start(cfg, state, tmux) and state.pending_messages(row["id"], 3)
     tmux.close(tmux.window(row["id"]).id)  # as the watchdog does after its check
     project.queue(turn_answer([work_log("Second.")]))
     run_turns(cfg, state, claude, tmux, run_id="run2")
     prompt = project.calls()[-1]["prompt"]
     assert "- Your role's rules changed." in prompt and "One more thing." in prompt
+
+
+def _after(args: list[str], option: str) -> str:
+    return args[args.index(option) + 1]
+
+
+def test_a_worker_has_its_own_model_and_effort_and_a_change_counts_from_the_next_start(project, capsys):
+    cfg, state, claude = project.load()
+    row = worker(cfg, state, "g", model="sonnet", effort="low")
+    give(project, artifact("a1", "g"))
+    project.queue(turn_answer([work_log()]))
+    tmux = Tmux(cfg)
+    run_turns(cfg, state, claude, tmux)  # the window stays open, with the model and effort of its start
+    args = project.calls()[-1]["args"]
+    assert (_after(args, "--model"), _after(args, "--effort")) == ("sonnet", "low")
+    assert not workers.has_changes(cfg, state.worker(row["id"]))
+    assert cli.main(["worker", "set", "r1/g", "--model", "opus", "--effort", "role"]) == 0
+    assert f"{row['id']}-g: model opus (its own); effort xhigh" in capsys.readouterr().out
+    assert workers.has_changes(cfg, state.worker(row["id"]))
+    assert "its rules, skills, memory, model or effort changed" in operations.tell(
+        cfg, state, tmux, [row["id"]], "One more thing.")[0]
+    tmux.close(tmux.window(row["id"]).id)  # as the watchdog does after its check
+    project.queue(turn_answer([work_log("Second.")]))
+    run_turns(cfg, state, claude, tmux, run_id="run2")
+    call = project.calls()[-1]
+    assert "--resume" in call["args"]
+    assert (_after(call["args"], "--model"), _after(call["args"], "--effort")) == ("opus", "xhigh")
+    assert "- You work with the model `opus` and the effort `xhigh` now." in call["prompt"]
+    assert "One more thing." in call["prompt"]
+    row = state.worker(row["id"])
+    assert not workers.has_changes(cfg, row)  # told once
+    seen = json.loads(row["seen"])
+    del seen["settings"]  # as an earlier vahtovik left it
+    state.set_seen(row["id"], json.dumps(seen))
+    assert not workers.has_changes(cfg, state.worker(row["id"]))
+
+
+def test_a_database_without_the_model_and_effort_of_workers_gets_them(project):
+    cfg, state, _ = project.load()
+    row = worker(cfg, state, "g")
+    state.execute("ALTER TABLE workers DROP COLUMN model")
+    state.execute("ALTER TABLE workers DROP COLUMN effort")
+    state.close()
+    cfg, state, _ = project.load()
+    assert (state.worker(row["id"])["model"], state.worker(row["id"])["effort"]) == (None, None)
+    operations.set_settings(cfg, state, "r1/g", effort="max")
+    assert workers.settings_of(cfg, state.worker(row["id"])).effort == "max"
 
 
 def test_after_a_compaction_the_agent_is_told_what_to_read_again(project, monkeypatch, capsys, caplog):

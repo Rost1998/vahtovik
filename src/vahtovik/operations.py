@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 import jsonschema
 
 from . import artifacts, context_file, inbox, workers
-from .config import Config, ConfigError, parse_interval, parse_moment
+from .config import Config, ConfigError, check_effort, parse_interval, parse_moment
 from .stages.worker_turn import MAX_ATTEMPTS
 from .state import State
 from .tmux import Tmux
@@ -33,19 +33,21 @@ def _sender(env: Mapping[str, str]) -> str:
 # spawning and seeing workers
 
 def spawn(cfg: Config, state: State, ref: str, skills: list[str] = (), title: str | None = None,
-          message: str | None = None, watch: bool = False, env: Mapping[str, str] = os.environ) -> list[str]:
+          message: str | None = None, watch: bool = False, env: Mapping[str, str] = os.environ,
+          model: str | None = None, effort: str | None = None) -> list[str]:
     """Spawn a worker, <role>/<key>. Inside a worker, that worker is its parent, and with `watch` it watches the
-    new worker. With a message, the new worker starts with it at the next run; without one, it waits for artifacts
-    or messages."""
+    new worker. With a model or an effort, the new worker has that one over its role's. With a message, the new
+    worker starts with it at the next run; without one, it waits for artifacts or messages."""
     role, key = workers.parse_new(ref)
     spawned_by, parent = workers.spawned_by_env(env)
     if watch and parent is None:
         raise ConfigError("--watch makes the spawner watch the new worker, and only a worker can watch: spawn from "
                           "inside one, or run `vahtovik worker watch <worker> --watcher <worker>` afterwards")
-    row = workers.create(cfg, state, role, key, title or "", spawned_by, parent, list(skills))
+    row = workers.create(cfg, state, role, key, title or "", spawned_by, parent, list(skills), model, effort)
     if watch:
         state.add_watch(parent, row["id"])
-    lines = [f"spawned worker {workers.name(row)} ({role}/{key})"]
+    own = " and ".join(f"{k} {row[k]}" for k in ("model", "effort") if row[k])
+    lines = [f"spawned worker {workers.name(row)} ({role}/{key})" + (f", with its own {own}" if own else "")]
     if message and message.strip():
         inbox.send(state, row, _sender(env), message)
         lines.append("it starts with the message at the next run")
@@ -56,8 +58,44 @@ def spawn(cfg: Config, state: State, ref: str, skills: list[str] = (), title: st
     return lines
 
 
+# a worker's own model and effort
+
+def _settings_text(cfg: Config, row) -> str:
+    """The model and effort of the worker's session, and which of them are its own."""
+    settings = workers.settings_of(cfg, row)
+    return (f"model {settings.model}" + (" (its own)" if row["model"] else "")
+            + f"; effort {settings.effort or 'not set'}" + (" (its own)" if row["effort"] else ""))
+
+
+def set_settings(cfg: Config, state: State, ref: str, model: str | None = None, effort: str | None = None,
+                 env: Mapping[str, str] = os.environ) -> list[str]:
+    """Give a worker its own model or effort, over its role's; the value `role` gives it its role's again. Claude
+    Code takes both when a session starts, so the change counts from the next start of the worker's session; until
+    then no messages are typed into its open window (workers.has_changes)."""
+    if model is None and effort is None:
+        raise ConfigError(f"give --model, --effort or both; the value `{ROLE_SETTING}` gives the worker its role's "
+                          "again")
+    row = workers.resolve(cfg, state, ref)
+    new = {"model": row["model"], "effort": row["effort"]}
+    if model is not None:
+        if not model.strip():
+            raise ConfigError(f"--model: give a model, or `{ROLE_SETTING}` for the role's")
+        new["model"] = None if model.strip() == ROLE_SETTING else model.strip()
+    if effort is not None:
+        new["effort"] = None if effort.strip() == ROLE_SETTING else check_effort(effort.strip(), "--effort")
+    state.set_worker_settings(row["id"], new["model"], new["effort"])
+    row = state.worker(row["id"])
+    text = _settings_text(cfg, row)
+    who = workers.describe_spawner(state, workers.spawned_by_env(env)[0])
+    log.info("%s: Model and effort set by %s: %s", workers.label(row), who, text)
+    return [f"{workers.name(row)}: {text}",
+            "it counts from the next start of its session: a turn that works now keeps the earlier ones, and so "
+            "does an open window, whose messages wait for the worker's next turn"]
+
+
 # watching: a watcher hears each time the worker it watches stops working (worker_status.notify_watchers)
 
+ROLE_SETTING = "role"  # as a model or an effort of `worker set`: the worker's role's again
 WATCH = "vahtovik tells you each time it ends a turn, needs a person, or fails for good"
 
 
@@ -187,6 +225,10 @@ def show(cfg: Config, state: State, ref: str) -> list[str]:
     lines += [f"  open question: {q}" for q in questions]
     if row["scheduled_at"]:
         lines.append(f"  scheduled turn: {_ago(row['scheduled_at'])}: {row['scheduled_reason']}")
+    try:
+        lines.append(f"  {_settings_text(cfg, row)}")
+    except ConfigError:  # its role is not in the config any more
+        pass
     lines.append(f"  what it does: {doing(state, row)}")
     lines.append(f"  spawned by {workers.describe_spawner(state, row['spawned_by'])} on {_ago(row['created_at'])}; "
                  f"parent: {workers.name(parent) if parent else 'none'}")
@@ -476,8 +518,8 @@ def tell(cfg: Config, state: State, tmux: Tmux, refs: list[str], message: str,
             lines.append(f"{workers.name(row)}: queued: a person is looking at its window; vahtovik types the "
                          "message in once they leave")
         elif window and workers.has_changes(cfg, row):
-            lines.append(f"{workers.name(row)}: queued: its rules, skills or memory changed, so it gets the message "
-                         "in its next turn, which tells it what changed")
+            lines.append(f"{workers.name(row)}: queued: its rules, skills, memory, model or effort changed, so it "
+                         "gets the message in its next turn, which tells it what changed")
         elif window:
             lines.append(f"{workers.name(row)}: queued: its window is busy or just started; vahtovik types the "
                          "message in at a later run")

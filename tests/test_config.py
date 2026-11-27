@@ -54,6 +54,15 @@ def test_a_role_and_a_poller_set_the_model_and_effort_of_their_sessions(project)
     assert (watchdog.model, watchdog.effort) == ("sonnet", "medium")  # belongs to no role
 
 
+def test_a_workers_own_model_and_effort_win_over_its_roles(project):
+    project.role("r1", ROLE.replace("effort: xhigh", "model: opus\neffort: medium"))
+    cfg = config_mod.load(project.root)
+    both = cfg.stage("worker", cfg.role("r1"), "fable", "max")
+    one = cfg.stage("worker", cfg.role("r1"), effort="low")
+    assert (both.model, both.effort, both.max_budget_usd) == ("fable", "max", 1.0)
+    assert (one.model, one.effort) == ("opus", "low")  # the role's model stays
+
+
 @pytest.mark.parametrize("where, change", [
     ("vahtovik", lambda d: d["claude"].update(effort="hihg")),
     ("vahtovik", lambda d: d["claude"]["stages"]["monitor"].update(effort="hihg")),
